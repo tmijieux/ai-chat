@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+pydantic
+aiosqlite
+python-dotenv # For environment variables
+requests # For calling Ollama

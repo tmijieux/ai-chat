@@ -1,0 +1,164 @@
+/* Global app styles - Zoneless change detection */
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  box-sizing: border-box;
+}
+
+body,
+html {
+  height: 100%;
+  padding: 0;
+  margin: 0;
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  margin-top: 0;
+}
+
+p {
+  line-height: 1.5;
+}
+
+a {
+  color: #64748b;
+  text-decoration: none;
+}
+
+button {
+  font-family: inherit;
+}
+
+/* ===================================================================================
+   GLOBAL SYSTEM UTILITIES DEFINITIONS (Pure Utility CSS)
+   =================================================================================== */
+
+/* --- 1. LAYOUT & FLEXBOX UTILITIES --- */
+.flex,
+.flex.row {
+  display: flex;
+}
+.flex-col,
+.flex.col {
+  flex-direction: column;
+}
+.flex-grow,
+.grow {
+  flex-grow: 1;
+}
+.items-center {
+  align-items: center;
+}
+.justify-between {
+  justify-content: space-between;
+}
+.flex-shrink-0 {
+  flex-shrink: 0;
+}
+
+/* --- 2. DIMENSIONS & SPACING UTILITIES --- */
+.h-full {
+  height: 100%;
+}
+.h-screen {
+  height: 100vh;
+}
+.w-full {
+  width: 100%;
+}
+.w-64 {
+  width: 256px;
+}
+.w-3-4 {
+  width: 75%;
+}
+
+/* Spacing (Padding/Margin) */
+.px-1 {
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+.p-2 {
+  padding: 0.5rem;
+}
+.p-4 {
+  padding: 1rem;
+}
+.p-6 {
+  padding: 1.5rem;
+}
+.p-2.border-b {
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+/* --- 3. COLOR & BACKGROUND UTILITIES --- */
+.bg-main {
+  --var-bg-main: white;
+  background-color: var(--var-bg-main);
+}
+.bg-sidebar {
+  --var-bg-sidebar: #1e293b;
+  background-color: var(--var-bg-sidebar);
+}
+.bg-header {
+  background-color: var(--var-bg-header);
+}
+.bg-grey {
+  background: grey;
+}
+.text-primary {
+  color: var(--var-text-primary);
+}
+.bg-user-bubble {
+  background-color: var(--var-color-user);
+}
+.bg-assistant-bubble {
+  background-color: var(--var-color-assistant);
+  border: 1px solid var(--var-color-border);
+  color: var(--var-text-primary);
+}
+.text-secondary {
+  color: var(--var-text-secondary);
+}
+
+/* --- 4. INTERACTION UTILITIES --- */
+.cursor-pointer:hover {
+  cursor: pointer;
+}
+.shadow-xl {
+  box-shadow:
+    0 25px 50px -12px rgba(0, 0, 0, 0.25),
+    0 10px 15px -3px rgba(0, 0, 0, 0.1);
+}
+/* State: Disabled Button */
+.disabled {
+  cursor: not-allowed;
+  background-color: #d1d5db; /* gray-300 */
+}
+
+/* --- 5. ELEMENT UTILITIES --- */
+.max-w-3xl {
+  max-width: 768px;
+}
+.rounded-xl {
+  border-radius: 0.75rem;
+}
+.border-l {
+  border-left: 1px solid var(--var-color-border);
+}
+.slate-200 {
+  color: #e2e8f0;
+}
+
+.p-relative {
+  position: relative;
+}
+.p-absolute {
+  position: absolute;
+}
