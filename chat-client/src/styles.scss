@@ -2,6 +2,7 @@
 :root {
   font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
   box-sizing: border-box;
+  color: white;
 }
 
 body,
@@ -57,6 +58,12 @@ button {
 .justify-between {
   justify-content: space-between;
 }
+.justify-start {
+  justify-content: start;
+}
+.justify-end {
+  justify-content: end;
+}
 .flex-shrink-0 {
   flex-shrink: 0;
 }
@@ -99,7 +106,7 @@ button {
 
 /* --- 3. COLOR & BACKGROUND UTILITIES --- */
 .bg-main {
-  --var-bg-main: white;
+  --var-bg-main: #212121;
   background-color: var(--var-bg-main);
 }
 .bg-sidebar {
@@ -116,7 +123,10 @@ button {
   color: var(--var-text-primary);
 }
 .bg-user-bubble {
+  --var-color-user: #303030;
   background-color: var(--var-color-user);
+  padding: 1rem;
+  border-radius: 500px;
 }
 .bg-assistant-bubble {
   background-color: var(--var-color-assistant);
@@ -161,4 +171,24 @@ button {
 }
 .p-absolute {
   position: absolute;
+}
+.v-scroll,
+.overflow-y-auto {
+  overflow-y: auto;
+}
+
+.gap-3 {
+  gap: 1rem;
+}
+
+.w-800px {
+  width: 800px;
+}
+
+.mx-auto {
+  margin: auto;
+}
+
+.mb-1 {
+  margin-bottom: 0.5rem;
 }

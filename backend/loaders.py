@@ -1,3 +1,4 @@
+from typing import NotRequired
 from pydantic import BaseModel
 
 # Chat response model
@@ -10,6 +11,7 @@ class ChatResponse(BaseModel):
 class Message(BaseModel):
     role: str
     content: str
+    thinking: str|None=None
 
 class Conversation(BaseModel):
     messages: list[Message]

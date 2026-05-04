@@ -32,8 +32,6 @@ function myShared<T>(observableFactory: () => Observable<T>) {
 export class ChatService {
   private http = inject(HttpClient)
 
-  private apiUrl = 'http://localhost:8000/api/chat'
-
   // --- State Management using BehaviorSubject ---
   private historySubject = new BehaviorSubject<ConversationHistory>([])
   public history$: Observable<ConversationHistory> = this.historySubject.asObservable()
@@ -52,7 +50,6 @@ export class ChatService {
   public currentConversationTitle$: Observable<string> = this.currentTitleSubject.asObservable()
 
   conversations = myShared(() => {
-    console.log('loading  conv!!!')
     return this.http.get<Conversation[]>('http://localhost:8000/api/conversations')
   })
   // ------------------
@@ -69,7 +66,6 @@ export class ChatService {
     this.isLoadingSubject.next(false)
     this.contextTokensSubject.next(0)
     this.historySubject.next([])
-    console.log(`[State] New Chat Started: ${title}`)
   }
 
   public async createConversation(message: Message) {
@@ -79,7 +75,6 @@ export class ChatService {
       }),
     )
     this.conversation = conversation
-    console.log('refreshing conv!!!')
     this.conversations.refresh()
     await this.addMessageToConversation(conversation, message)
   }
@@ -93,14 +88,20 @@ export class ChatService {
   }
 
   private conversation: Conversation | undefined = undefined
-  public selectConversation(conversation: Conversation) {
-    this.http
-      .get<Message[]>(`http://localhost:8000/api/conversations/${conversation.id}/messages`)
-      .subscribe((messages) => {
-        this.historySubject.next(messages)
-        this.currentTitleSubject.next(conversation.title)
-        this.conversation = conversation
-      })
+  public selectConversation(conversation: Conversation | undefined) {
+    if (conversation === undefined) {
+      this.historySubject.next([])
+      this.currentTitleSubject.next('New chat')
+      this.conversation = undefined
+    } else {
+      this.http
+        .get<Message[]>(`http://localhost:8000/api/conversations/${conversation.id}/messages`)
+        .subscribe((messages) => {
+          this.historySubject.next(messages)
+          this.currentTitleSubject.next(conversation.title)
+          this.conversation = conversation
+        })
+    }
   }
 
   /**
@@ -114,6 +115,7 @@ export class ChatService {
     const messagesArray: { role: string; content: string }[] = history.map((m) => ({
       role: m.role,
       content: m.content,
+      thinking: m.thinking,
     }))
     const lastMessage = history[history.length - 1]
     if (history.length === 1) {
@@ -134,7 +136,7 @@ export class ChatService {
     // Call backend API and stream response
     return this.http
       .post(
-        this.apiUrl,
+        'http://localhost:8000/api/chat',
         { messages: messagesArray },
         {
           observe: 'events',
@@ -144,14 +146,11 @@ export class ChatService {
       )
       .pipe(
         tap((response) => {
-          //console.log('event=', response);
           if (response.type === 3) {
             const lines = (response.partialText ?? '').split('\n')
-            //console.log('lines=', lines);
             const objs: ApiResponse[] = lines
               .filter((t) => t.endsWith('}'))
               .map((t) => JSON.parse(t))
-            //console.log('objs=', objs);
             const thinking = objs.map((o) => o.message.thinking ?? '').join('')
             const content = objs.map((o) => o.message.content).join('')
             const back = svcHistory[svcHistory.length - 1]
@@ -177,5 +176,16 @@ export class ChatService {
           return throwError(() => error)
         }),
       )
+  }
+
+  async deleteConversation(conv: Conversation) {
+    await firstValueFrom(this.http.delete(`http://localhost:8000/api/conversations/${conv.id}`))
+    this.conversations.refresh()
+    if (conv.id === this.conversation?.id) {
+      console.log('was selected conversation !!!!!')
+      this.selectConversation(undefined)
+    } else {
+      console.log('was NOT selected conversation ?!?!?!')
+    }
   }
 }

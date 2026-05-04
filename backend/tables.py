@@ -17,10 +17,12 @@ class Conversation(Base):
 class Message(Base):
     __tablename__ = "messages"
     id = column(String, primary_key=True, index=True)
-    conversation_id = column(String, ForeignKey("conversations.id"))
+    conversation_id = column(String, ForeignKey("conversations.id"), index=True)
     role = column(String, index=True)  # 'user', 'assistant', 'system'
-    content = column(Text, index=True)
-    created_at = column(String)
+    content = column(Text)
+    thinking = column(Text)
+    created_at = column(String, index=True)
+    token_count = column(Integer)
     
     # Relationship back to the parent conversation
     conversation = relationship(Conversation, back_populates="messages")

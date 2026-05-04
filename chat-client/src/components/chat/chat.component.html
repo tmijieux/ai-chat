@@ -25,8 +25,8 @@
                  (clickOutside)="conv.menuOpened=false">
                     ⋮
                     @if (conv.menuOpened) {
-                        <div class="p-absolute top-100 left-0 bg-grey p-2">
-                            coucou
+                        <div class="p-absolute top-100 right-0 bg-grey p-2" (click)="deleteConversation(conv)">
+                            Supprimer
                         </div>
                     }
                     
@@ -46,7 +46,7 @@
 <!-- =================================================================
    MAIN CHAT ZONE (The remaining flexible space)
    ================================================================= -->
-<div class="flex flex-col flex-grow bg-main">
+<div class="flex flex-col flex-grow bg-main h-full">
 
     <!-- Token Status Bar -->
     <div class="p-2 border-b bg-gray-100 flex justify-between items-center">
@@ -56,20 +56,27 @@
     </div>
 
     <!-- Message History Container (Must be scrollable) -->
-    <div class="flex-grow overflow-y-auto p-6 space-y-6">
+    <div class="flex-grow v-scroll p-6 space-y-6">
 
         <!-- Message Wrapper -->
         <!-- Note: The 'flex' class here controls the layout of the message block -->
          @for (msg of history$ | async; track $index) {
-            <div class="flex">
-                <!-- Message Bubble Container (The element taking up space) -->
-                <div class="max-w-3xl p-3 rounded-xl shadow-md"
-                     [ngClass]="{
-                         'bg-user-bubble': msg.role === 'user',
-                         'bg-assistant-bubble': msg.role === 'assistant',
-                         'bg-system-bubble': msg.role === 'system'
+            <div class="flex" [class]="{
+                         'justify-end': msg.role === 'user',
+                         'justify-start': msg.role === 'assistant',
+                         'w-800px':true,
+                         'mx-auto': true,
                      }">
-                    <p class="font-semibold text-xs opacity-70 mb-1">{{ msg.role === 'assistant' ? 'Assistant' : 'You' }}</p>
+                <!-- Message Bubble Container (The element taking up space) -->
+                <div class="max-w-3xl p-3 shadow-md mb-1"
+                     [class]="{
+                        'bg-system-bubble': msg.role === 'system',
+                         'bg-user-bubble': msg.role === 'user',
+                         'align-self-end': msg.role === 'user',
+                         'bg-assistant-bubble': msg.role === 'assistant',
+                         'align-self-start': msg.role === 'assistant',
+                     }">
+                    <!-- <p class="font-semibold text-xs opacity-70 mb-1">{{ msg.role === 'assistant' ? 'Assistant' : 'You' }}</p> -->
                     {{ msg.content }}
                 </div>
             </div>

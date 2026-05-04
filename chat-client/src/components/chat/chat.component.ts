@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common'
 import { FormsModule } from '@angular/forms'
 import { ChatService } from '../../services/chat.service'
 import { map, Observable } from 'rxjs'
-import { ConversationHistory, Message } from '../../message-types'
+import { Conversation, ConversationHistory, Message } from '../../message-types'
 
 @Component({
   selector: 'app-chat',
@@ -33,7 +33,6 @@ export class ChatComponent implements OnInit, OnDestroy {
   currentInput: string = ''
 
   historySub = this.history$.subscribe((h) => {
-    console.log('ht=', h)
     this.currentHistory = [...h]
   })
   conversations$ = this.chatSvc.conversations.obs$.pipe(
@@ -69,11 +68,13 @@ export class ChatComponent implements OnInit, OnDestroy {
    * @param event The submit event object.
    */
   sendMessage(event: any): void {
-    if (!this.currentInput.trim()) {
+    const input = this.currentInput
+    if (!input.trim()) {
       return
     }
+    this.currentInput = ''
 
-    const userMessage: Message = { role: 'user', content: this.currentInput }
+    const userMessage: Message = { role: 'user', content: input }
 
     // 1. Immediately update the component's local history cache (for the user message)
     this.currentHistory.push(userMessage)
@@ -81,12 +82,12 @@ export class ChatComponent implements OnInit, OnDestroy {
     // 2. Get the history that the backend needs (the current state array)
     const historyToSend: ConversationHistory = [...this.currentHistory]
 
-    console.log('historyToSend=', historyToSend)
-
     // 3. Call the service and subscribe to the stream Observable
     this.chatSvc.sendMessage(historyToSend).subscribe()
   }
-  openConversationMenu() {
-    console.log('coucou')
+  openConversationMenu() {}
+
+  deleteConversation(conv: Conversation) {
+    this.chatSvc.deleteConversation(conv)
   }
 }

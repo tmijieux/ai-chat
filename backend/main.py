@@ -5,11 +5,16 @@ import json
 from fastapi import FastAPI, Depends, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+import sqlalchemy as sa
+from sqlalchemy import select, delete
 from database import init_db, get_db_session, AsyncSession, engine
 import loaders as ld
 import tables as db
 import aiohttp
+from ollama_model_resolver import OllamaModelResolver
+from ollama_token_tracker import OllamaTokenTracker
+
+MODEL_NAME = "qwen3.5:9b"
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +64,14 @@ async def list_conversations(id: str, sess: AsyncSession = Depends(get_db_sessio
     result = await sess.scalars(req2)
     return result.all()
 
+@app.delete("/api/conversations/{id}")
+async def delete_conversation(id: str, sess: AsyncSession = Depends(get_db_session)):
+    """Creates and returns a new empty conversation object."""
+    await sess.execute(delete(db.Message).where(db.Message.conversation_id == id))
+    await sess.execute(delete(db.Conversation).where(db.Conversation.id == id))
+    return ""
+
+
 @app.post("/api/messages")
 async def add_new_message(message: ld.Message, conversationId: str, sess: AsyncSession = Depends(get_db_session)):
     """add a new message to a conversation."""
@@ -68,6 +81,7 @@ async def add_new_message(message: ld.Message, conversationId: str, sess: AsyncS
         id=id,
         conversation_id=conversationId, 
         content=message.content, 
+        thinking=message.thinking,
         created_at=datetime.datetime.now(datetime.UTC).isoformat(),
         role=message.role
     ))
@@ -89,6 +103,9 @@ async def create_new_conversation(input: ld.NewConversation, sess: AsyncSession 
     return new_conv
 
 
+
+
+
 async def get_http_session():
     async with aiohttp.ClientSession(conn_timeout=10) as httpsess:
         yield httpsess
@@ -99,7 +116,7 @@ async def chat_endpoint_generator(http_sess: aiohttp.ClientSession, conversation
     try:
         # Call Ollama with streaming
         query_body = {
-            "model": "qwen3.5:9b",
+            "model": MODEL_NAME,
             "messages": [m.model_dump() for m in conversation.messages],
             "stream": True
         }
@@ -166,6 +183,17 @@ async def chat_endpoint(
     ollama_stream = []
     print("conversation=",conversation)
 
+    resolver = OllamaModelResolver()
+    result = resolver.resolve_model(MODEL_NAME)
+    gguf_path = result["blobs"][0]
+
+    tracker = OllamaTokenTracker(model_path=gguf_path, max_context=65535)
+
+    tracker.add_message("user", "Explain quantum physics simply")
+    tracker.add_message("assistant", "Quantum physics describes...")
+
+    print(tracker.summary())
+
     if conversation_id:
         # Fetch conversation messages from DB
         result = await sess.execute(
@@ -188,48 +216,48 @@ async def chat_endpoint(
 
     
 
-@app.get("/{full_path:path}")
-async def catch_all_get(full_path: str,response:Response, http_sess: aiohttp.ClientSession = Depends(get_http_session)):
+# @app.get("/{full_path:path}")
+# async def catch_all_get(full_path: str,response:Response, http_sess: aiohttp.ClientSession = Depends(get_http_session)):
 
-    async with http_sess.get("http://localhost:11434/"+full_path) as r:
-        data = await r.content.read()
+#     async with http_sess.get("http://localhost:11434/"+full_path) as r:
+#         data = await r.content.read()
 
-        print_content(data)
+#         print_content(data)
 
-        response.status_code = r.status
-        return data
-
-
-@app.post("/{full_path:path}")
-async def catch_all_post(full_path: str, request:Request,response:Response, http_sess: aiohttp.ClientSession = Depends(get_http_session)):
+#         response.status_code = r.status
+#         return data
 
 
+# @app.post("/{full_path:path}")
+# async def catch_all_post(full_path: str, request:Request,response:Response, http_sess: aiohttp.ClientSession = Depends(get_http_session)):
 
-    body = await request.body()
-    print_content(body)
-    async with http_sess.post("http://localhost:11434/"+full_path, data=body) as r:
-        data = await r.content.read()
 
-        print_content(data)
-        response.status_code = r.status
-        return data
 
-def print_content(data:bytes):
-    try:
-        print("data=",json.dumps(json.loads(data.decode()), indent=2))
-    except Exception:
-        data_s = [ d.strip() for d in data.decode().split("\n") if d.strip() != ""]
-        for d in data_s:
-            print(d)
+#     body = await request.body()
+#     print_content(body)
+#     async with http_sess.post("http://localhost:11434/"+full_path, data=body) as r:
+#         data = await r.content.read()
 
-@app.put("/{full_path:path}")
-async def catch_all_put(full_path: str, request:Request,response:Response, http_sess: aiohttp.ClientSession = Depends(get_http_session)):
-    body = await request.body()
-    print_content(body)
+#         print_content(data)
+#         response.status_code = r.status
+#         return data
 
-    async with http_sess.put("http://localhost:11434/"+full_path, data=body) as r:
-        data = await r.content.read()
-        response.status_code = r.status
-        print_content(data)
+# def print_content(data:bytes):
+#     try:
+#         print("data=",json.dumps(json.loads(data.decode()), indent=2))
+#     except Exception:
+#         data_s = [ d.strip() for d in data.decode().split("\n") if d.strip() != ""]
+#         for d in data_s:
+#             print(d)
 
-        return data
+# @app.put("/{full_path:path}")
+# async def catch_all_put(full_path: str, request:Request,response:Response, http_sess: aiohttp.ClientSession = Depends(get_http_session)):
+#     body = await request.body()
+#     print_content(body)
+
+#     async with http_sess.put("http://localhost:11434/"+full_path, data=body) as r:
+#         data = await r.content.read()
+#         response.status_code = r.status
+#         print_content(data)
+
+#         return data
