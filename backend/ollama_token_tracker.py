@@ -37,7 +37,7 @@ class OllamaTokenTracker:
     """
 
     def __init__(self, model_path: str, max_context: int = 4096):
-        self.llm = Llama(model_path=model_path, verbose=False)
+        self.llm = Llama(model_path=model_path, verbose=False, logits_all=False, n_ctx=1, vocab_only=True)
         self.ctx = ContextStats(max_context=max_context)
 
     # -------------------------

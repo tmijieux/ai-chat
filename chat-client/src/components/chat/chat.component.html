@@ -11,7 +11,7 @@
 
     <!-- Conversation List -->
     <div class="flex-grow overflow-y-auto p-4 space-y-2">
-        <div class="cursor-pointer p-2 hover:bg-gray-700 rounded transition-all" (click)="handleMenuClick('new-chat')">
+        <div class="cursor-pointer p-2 hover:bg-gray-700 rounded transition-all" (click)="chatSvc.startNewChat('')">
             + New Chat
         </div>
         @for (conv of conversations$ | async; track conv.id) {
@@ -60,7 +60,7 @@
 
         <!-- Message Wrapper -->
         <!-- Note: The 'flex' class here controls the layout of the message block -->
-         @for (msg of history$ | async; track $index) {
+         @for (msg of history$ | async; track msg.id) {
             <div class="flex" [class]="{
                          'justify-end': msg.role === 'user',
                          'justify-start': msg.role === 'assistant',
@@ -77,7 +77,19 @@
                          'align-self-start': msg.role === 'assistant',
                      }">
                     <!-- <p class="font-semibold text-xs opacity-70 mb-1">{{ msg.role === 'assistant' ? 'Assistant' : 'You' }}</p> -->
-                    {{ msg.content }}
+                    
+                    @if (msg.loading) {
+                        <span>...</span>
+                    }
+                    @else {
+                        @if (msg.thinking_visible){
+                            <div>
+                                {{ msg.thinking }}
+                            </div>
+                        }
+                        {{ msg.content }}
+                        
+                    }
                 </div>
             </div>
         }
@@ -95,7 +107,7 @@
                 [disabled]="(isLoading$ | async) ?? false"></textarea>
             <button
                 (click)="sendMessage(null)"
-                [disabled]="(!currentInput.trim() || (isLoading$ | async)) ?? false"
+                [disabled]="(!currentInput().trim() || (isLoading$ | async)) ?? false"
                 class="send-button bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-lg disabled:bg-gray-300 transition-all">
                 {{ (isLoading$ | async) ? '...' : 'Send' }}
             </button>

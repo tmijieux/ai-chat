@@ -1,9 +1,17 @@
 import { Injectable, inject } from '@angular/core'
 import { Observable, BehaviorSubject, defer, firstValueFrom } from 'rxjs'
-import { catchError, tap, map, last, shareReplay, switchMap } from 'rxjs/operators'
+import {
+  catchError,
+  tap,
+  map,
+  last,
+  shareReplay,
+  switchMap,
+  distinctUntilChanged,
+} from 'rxjs/operators'
 import { HttpClient, HttpEvent } from '@angular/common/http'
 import { throwError } from 'rxjs'
-import { ApiResponse, Conversation, ConversationHistory, Message } from '../message-types'
+import { ApiResponse, Conversation, ConversationHistory, Message } from '../types/message-types'
 
 class MyShare<T> {
   private _obs$: Observable<T>
@@ -44,11 +52,6 @@ export class ChatService {
   private contextTokensSubject = new BehaviorSubject<number>(0)
   public contextTokens$: Observable<number> = this.contextTokensSubject.asObservable()
 
-  // --- TITLE FIX ---
-  // Single source of truth for the current conversation title
-  private currentTitleSubject = new BehaviorSubject<string>('New Chat')
-  public currentConversationTitle$: Observable<string> = this.currentTitleSubject.asObservable()
-
   conversations = myShared(() => {
     return this.http.get<Conversation[]>('http://localhost:8000/api/conversations')
   })
@@ -62,7 +65,6 @@ export class ChatService {
    */
   public startNewChat(title: string): void {
     // State mutation sequence:
-    this.currentTitleSubject.next(title)
     this.isLoadingSubject.next(false)
     this.contextTokensSubject.next(0)
     this.historySubject.next([])
@@ -91,14 +93,12 @@ export class ChatService {
   public selectConversation(conversation: Conversation | undefined) {
     if (conversation === undefined) {
       this.historySubject.next([])
-      this.currentTitleSubject.next('New chat')
       this.conversation = undefined
     } else {
       this.http
         .get<Message[]>(`http://localhost:8000/api/conversations/${conversation.id}/messages`)
         .subscribe((messages) => {
           this.historySubject.next(messages)
-          this.currentTitleSubject.next(conversation.title)
           this.conversation = conversation
         })
     }
@@ -127,9 +127,11 @@ export class ChatService {
     const svcHistory = this.historySubject.getValue()
     svcHistory.push(history[history.length - 1])
     svcHistory.push({
+      id: 'next-loading',
       role: 'assistant',
       content: '',
       thinking: '',
+      loading: true,
     })
     this.historySubject.next(svcHistory)
 
@@ -156,7 +158,18 @@ export class ChatService {
             const back = svcHistory[svcHistory.length - 1]
             back.content = content
             back.thinking = thinking
-            this.historySubject.next(svcHistory)
+            // console.log('thinking=', thinking)
+            // console.log('content=', content)
+            if (back.thinking && !back.content) {
+              console.log('started thinking')
+              back.loading = false
+              back.thinking_visible = true
+            } else if (back.content) {
+              console.log('finished thinking')
+              back.loading = false
+              back.thinking_visible = false
+            }
+            this.historySubject.next([...svcHistory])
 
             const lastResponse = objs[objs.length - 1]
             if (lastResponse.done) {

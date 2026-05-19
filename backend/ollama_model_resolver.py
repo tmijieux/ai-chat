@@ -1,5 +1,8 @@
 import json
 from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class OllamaModelResolver:
@@ -27,9 +30,20 @@ class OllamaModelResolver:
 
         # Ollama stores manifests under registry path
         registry_path = self.manifests_dir
+        print("registry_path=",registry_path)
+        print("model_name=",model_name)
+
+        if ":" in model_name:
+            split = model_name.rsplit(":",maxsplit=1)
+
+            model_name = ":".join(split[:-1])
+            tag = split[-1]
+        else: 
+            tag = None
 
         for path in registry_path.rglob("*"):
             if path.is_file() and model_name in str(path):
+                logger.critical("found manifest for %s at %s", model_name, path)
                 return path
 
         raise FileNotFoundError(f"Manifest not found for model: {model_name}")
@@ -50,11 +64,12 @@ class OllamaModelResolver:
         sha256:abcd1234...
         """
         blobs = []
-
         for layer in manifest_json.get("layers", []):
+            if layer["mediaType"] != "application/vnd.ollama.image.model":
+                continue
             digest = layer.get("digest")
             if digest and digest.startswith("sha256:"):
-                blobs.append(digest.replace("sha256:", ""))
+                blobs.append(digest.replace("sha256:", "sha256-"))
 
         return blobs
 

@@ -17,6 +17,12 @@ from ollama_token_tracker import OllamaTokenTracker
 MODEL_NAME = "qwen3.5:9b"
 
 logger = logging.getLogger(__name__)
+def disable_sqlalchemy_logging():
+    for l in ["sqlalchemy", "sqlalchemy.engine", "sqlalchemy.engine.Engine"]:
+        sqlalchemy_logger = logging.getLogger(l)
+        sqlalchemy_logger.disabled = True
+        sqlalchemy_logger.propagate = False
+disable_sqlalchemy_logging()
 
 logging.basicConfig()
 app = FastAPI(title="LLM Chat Backend")
@@ -90,9 +96,6 @@ async def add_new_message(message: ld.Message, conversationId: str, sess: AsyncS
     return {"id": id}
 
 
-
-
-
 @app.post("/api/conversations")
 async def create_new_conversation(input: ld.NewConversation, sess: AsyncSession = Depends(get_db_session)):
     """Creates and returns a new empty conversation object."""
@@ -124,7 +127,7 @@ async def chat_endpoint_generator(http_sess: aiohttp.ClientSession, conversation
         async with http_sess.post(
             OLLAMA_URL,
             json=query_body,
-        ) as response: 
+        ) as response:
 
             # Process streaming response
             if response.status != 200:
@@ -138,6 +141,8 @@ async def chat_endpoint_generator(http_sess: aiohttp.ClientSession, conversation
                     data = json.loads(chunk_line)
                     print(".", end="", flush=True)
                     message = data["message"]
+                    if "done" in data and data["done"]:
+                        print(json.dumps(data, indent=2))
                     response_chunk =  data
                     yield json.dumps(response_chunk)+"\n"
 
@@ -188,11 +193,14 @@ async def chat_endpoint(
     gguf_path = result["blobs"][0]
 
     tracker = OllamaTokenTracker(model_path=gguf_path, max_context=65535)
+    for msg in conversation.messages:
+        if msg.role == 'assistant' and isinstance(msg.thinking , str) and len(msg.thinking) > 0:
+            tracker.add_message(msg.role, msg.thinking)
+        tracker.add_message(msg.role, msg.content)
 
-    tracker.add_message("user", "Explain quantum physics simply")
-    tracker.add_message("assistant", "Quantum physics describes...")
-
+    print("\n"*10)
     print(tracker.summary())
+    print("\n"*10)
 
     if conversation_id:
         # Fetch conversation messages from DB
@@ -214,50 +222,51 @@ async def chat_endpoint(
 
 
 
+
+def print_content(data:bytes, point_in_code: str):
+    try:
+        print(f"{point_in_code=} data=",json.dumps(json.loads(data.decode()), indent=2))
+    except Exception:
+        data_s = [ d.strip() for d in data.decode().split("\n") if d.strip() != ""]
+        for d in data_s:
+            print(d)
+
     
 
-# @app.get("/{full_path:path}")
-# async def catch_all_get(full_path: str,response:Response, http_sess: aiohttp.ClientSession = Depends(get_http_session)):
+@app.get("/{full_path:path}")
+async def catch_all_get(full_path: str,response:Response, http_sess: aiohttp.ClientSession = Depends(get_http_session)):
 
-#     async with http_sess.get("http://localhost:11434/"+full_path) as r:
-#         data = await r.content.read()
+    async with http_sess.get("http://localhost:11434/"+full_path) as r:
+        data = await r.content.read()
 
-#         print_content(data)
+        print_content(data, "RESPONSE catch_all_get")
 
-#         response.status_code = r.status
-#         return data
-
-
-# @app.post("/{full_path:path}")
-# async def catch_all_post(full_path: str, request:Request,response:Response, http_sess: aiohttp.ClientSession = Depends(get_http_session)):
+        response.status_code = r.status
+        return data
 
 
+@app.post("/{full_path:path}")
+async def catch_all_post(full_path: str, request:Request,response:Response, http_sess: aiohttp.ClientSession = Depends(get_http_session)):
 
-#     body = await request.body()
-#     print_content(body)
-#     async with http_sess.post("http://localhost:11434/"+full_path, data=body) as r:
-#         data = await r.content.read()
 
-#         print_content(data)
-#         response.status_code = r.status
-#         return data
 
-# def print_content(data:bytes):
-#     try:
-#         print("data=",json.dumps(json.loads(data.decode()), indent=2))
-#     except Exception:
-#         data_s = [ d.strip() for d in data.decode().split("\n") if d.strip() != ""]
-#         for d in data_s:
-#             print(d)
+    body = await request.body()
+    print_content(body, "QUERY catch_all_post")
+    async with http_sess.post("http://localhost:11434/"+full_path, data=body) as r:
+        data = await r.content.read()
 
-# @app.put("/{full_path:path}")
-# async def catch_all_put(full_path: str, request:Request,response:Response, http_sess: aiohttp.ClientSession = Depends(get_http_session)):
-#     body = await request.body()
-#     print_content(body)
+        print_content(data, "RESPONSE catch_all_post")
+        response.status_code = r.status
+        return data
 
-#     async with http_sess.put("http://localhost:11434/"+full_path, data=body) as r:
-#         data = await r.content.read()
-#         response.status_code = r.status
-#         print_content(data)
+@app.put("/{full_path:path}")
+async def catch_all_put(full_path: str, request:Request,response:Response, http_sess: aiohttp.ClientSession = Depends(get_http_session)):
+    body = await request.body()
+    print_content(body, "QUERY catch_all_put")
 
-#         return data
+    async with http_sess.put("http://localhost:11434/"+full_path, data=body) as r:
+        data = await r.content.read()
+        response.status_code = r.status
+        print_content(data, "RESPONSE catch_all_put")
+
+        return data

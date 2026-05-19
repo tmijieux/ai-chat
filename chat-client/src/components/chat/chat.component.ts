@@ -1,9 +1,10 @@
-import { Component, inject, OnDestroy, OnInit } from '@angular/core'
+import { Component, inject, model, OnDestroy, OnInit } from '@angular/core'
 import { CommonModule } from '@angular/common'
 import { FormsModule } from '@angular/forms'
 import { ChatService } from '../../services/chat.service'
 import { map, Observable } from 'rxjs'
-import { Conversation, ConversationHistory, Message } from '../../message-types'
+import { Conversation, ConversationHistory, Message } from '../../types/message-types'
+import { ActivatedRoute, Router } from '@angular/router'
 
 @Component({
   selector: 'app-chat',
@@ -16,51 +17,42 @@ import { Conversation, ConversationHistory, Message } from '../../message-types'
   },
 })
 export class ChatComponent implements OnInit, OnDestroy {
-  // Inject the service (which holds the state)
+  private route = inject(ActivatedRoute)
+  private router = inject(Router)
   readonly chatSvc = inject(ChatService)
-  constructor() {}
 
   // Local state to hold the current history snapshot for UI rendering
-  currentHistory: ConversationHistory = []
+  currentHistory: Message[] = []
 
   // Observable references for the template
-  history$: Observable<ConversationHistory> = this.chatSvc.history$
+  history$: Observable<Message[]> = this.chatSvc.history$
   isLoading$: Observable<boolean> = this.chatSvc.isLoading$
   contextTokens$: Observable<number> = this.chatSvc.contextTokens$
-  currentConversationTitle$: Observable<string> = this.chatSvc.currentConversationTitle$
 
   // Local input state (standard TS property)
-  currentInput: string = ''
+  currentInput = model('')
 
-  historySub = this.history$.subscribe((h) => {
+  private historySub = this.history$.subscribe((h) => {
     this.currentHistory = [...h]
   })
   conversations$ = this.chatSvc.conversations.obs$.pipe(
     map((conversations) => conversations.map((c) => ({ ...c, menuOpened: false }))),
   )
 
-  ngOnInit(): void {
-    // Initialize with a new chat title
-    this.chatSvc.startNewChat('New Chat')
+  constructor() {
+    this.route.queryParamMap.subscribe((pm) => {
+      console.log('pm=', pm)
+      const convId = pm.get('conversationId')
+      if (convId) {
+        this.chatSvc.selectConversation({ id: convId, title: '???' })
+      }
+    })
   }
+
+  ngOnInit(): void {}
 
   ngOnDestroy() {
     this.historySub.unsubscribe()
-  }
-
-  // --- Event Handlers ---
-
-  /**
-   * Handles starting a new conversation.
-   * @param title The title derived from the user action.
-   */
-  handleMenuClick(action: string): void {
-    if (action === 'new-chat') {
-      // 1. Use the service method to reset state.
-      this.chatSvc.startNewChat('New Chat')
-      // 2. Manually update the component's local state cache (optional but helpful)
-      this.currentHistory = []
-    }
   }
 
   /**
@@ -68,13 +60,13 @@ export class ChatComponent implements OnInit, OnDestroy {
    * @param event The submit event object.
    */
   sendMessage(event: any): void {
-    const input = this.currentInput
+    const input = this.currentInput()
     if (!input.trim()) {
       return
     }
-    this.currentInput = ''
+    this.currentInput.set('')
 
-    const userMessage: Message = { role: 'user', content: input }
+    const userMessage: Message = { id: 'next-loading', role: 'user', content: input }
 
     // 1. Immediately update the component's local history cache (for the user message)
     this.currentHistory.push(userMessage)
@@ -85,6 +77,7 @@ export class ChatComponent implements OnInit, OnDestroy {
     // 3. Call the service and subscribe to the stream Observable
     this.chatSvc.sendMessage(historyToSend).subscribe()
   }
+
   openConversationMenu() {}
 
   deleteConversation(conv: Conversation) {

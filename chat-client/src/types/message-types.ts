@@ -1,9 +1,13 @@
 export type Role = 'user' | 'assistant' | 'system'
 
 export type Message = {
+  id: string
   role: Role
   content: string
   thinking?: string
+  thinking_visible?: boolean
+  thinking_included_in_context?: boolean
+  loading?: boolean
 }
 
 export type ApiDone =
