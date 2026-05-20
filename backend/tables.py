@@ -1,28 +1,38 @@
 from sqlalchemy import Integer, String, ForeignKey, Text
-from sqlalchemy.orm import relationship, mapped_column as column
+from sqlalchemy.orm import mapped_column as column
+from database import Base
 
-# Base class for models
-from database import Base 
 
 class Conversation(Base):
     __tablename__ = "conversations"
     id = column(String, primary_key=True, index=True)
     title = column(String, index=True, nullable=False)
-    # System prompt/settings can be stored here
-    settings = column(Text, nullable=True) 
-    
-    # Relationship to all messages within this conversation
-    messages = relationship("Message", back_populates="conversation")
+    # JSON: {active_prompt_ids, active_tool_names, tools_enabled, agentic_mode}
+    settings = column(Text, nullable=True)
+    created_at = column(String, nullable=False)
+    # Logical FK to messages.id — not declared as FK to avoid circular constraint on SQLite
+    active_message_id = column(String, nullable=True)
+
 
 class Message(Base):
     __tablename__ = "messages"
     id = column(String, primary_key=True, index=True)
     conversation_id = column(String, ForeignKey("conversations.id"), index=True)
-    role = column(String, index=True)  # 'user', 'assistant', 'system'
+    # Null for the first message in a conversation; set to the parent message id otherwise
+    parent_id = column(String, ForeignKey("messages.id"), nullable=True, index=True)
+    role = column(String, index=True)  # user | assistant | system | tool
     content = column(Text)
-    thinking = column(Text)
-    created_at = column(String, index=True)
-    token_count = column(Integer)
-    
-    # Relationship back to the parent conversation
-    conversation = relationship(Conversation, back_populates="messages")
+    thinking = column(Text, nullable=True)
+    created_at = column(String, nullable=False)
+    token_count = column(Integer, nullable=True)
+
+
+class SystemPromptTemplate(Base):
+    __tablename__ = "system_prompt_templates"
+    id = column(String, primary_key=True, index=True)
+    name = column(String, nullable=False)
+    # general | code | summarization | context_compaction | state_storage
+    category = column(String, nullable=False)
+    content = column(Text, nullable=False)
+    is_global = column(Integer, nullable=False, default=1)  # 1=true 0=false
+    created_at = column(String, nullable=False)

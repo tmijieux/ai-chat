@@ -126,12 +126,17 @@ button {
   --var-color-user: #303030;
   background-color: var(--var-color-user);
   padding: 1rem;
-  border-radius: 500px;
+  border-radius: 1rem;
 }
 .bg-assistant-bubble {
-  background-color: var(--var-color-assistant);
-  border: 1px solid var(--var-color-border);
-  color: var(--var-text-primary);
+  background-color: #2d2d2d;
+  border: 1px solid #3f3f3f;
+  color: #e2e8f0;
+}
+.bg-thinking-bubble {
+  background-color: #1a1a2e;
+  border: 1px solid #2e2e4a;
+  color: #8b9db5;
 }
 .text-secondary {
   color: var(--var-text-secondary);
@@ -157,7 +162,10 @@ button {
   max-width: 768px;
 }
 .rounded-xl {
-  border-radius: 0.75rem;
+  border-radius: 1rem;
+}
+.rounded-lg {
+  border-radius: 1rem;
 }
 .border-l {
   border-left: 1px solid var(--var-color-border);
@@ -191,4 +199,17 @@ button {
 
 .mb-1 {
   margin-bottom: 0.5rem;
+}
+.whitespace-pre-wrap {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.overflow-hidden {
+  overflow: hidden;
+}
+.gap-2 {
+  gap: 0.5rem;
+}
+.align-self-end {
+  align-self: flex-end;
 }

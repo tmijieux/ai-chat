@@ -1,3 +1,7 @@
+# # CONTEXT MANAGEMENT
+# Before each tool call (other than summarize_intent), call the summarize_intent tool. The content you provide will be remembered in context.
+# Context size is rather small(16K) so only short summary will be kept, not whole chain of thought.
+
 SYSTEM_PROMPT = """# ROLE
 You are an Autonomous Coding Agent. You have access to a local file system, terminal, and internet search capabilities via tools. Your goal is to solve coding
 tasks autonomously.
@@ -41,5 +45,6 @@ You have access to the following tools to complete your tasks:
 - Use 'read_file' only when necessary to understand existing code.
 - Always verify file content before writing.
 - Keep tool output concise.
+
 
 BEGIN TASK."""
