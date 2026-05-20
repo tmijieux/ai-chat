@@ -3,6 +3,7 @@ import uuid
 import logging
 import json
 from contextlib import asynccontextmanager
+from pathlib import Path
 from fastapi import FastAPI, Depends, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -11,8 +12,10 @@ from database import init_db, get_db_session, AsyncSession
 import loaders as ld
 import tables as db
 import aiohttp
+import asyncio
+from agent.agent import AgentSession, run_agent
+from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
 from agent.count_token import count_token
-from agent.system_prompt import SYSTEM_PROMPT
 
 MODEL_NAME = "qwen3.5:9b"
 
@@ -30,17 +33,82 @@ disable_sqlalchemy_logging()
 logging.basicConfig()
 
 
+# ---------------------------------------------------------------------------
+# Prompt seeding
+# ---------------------------------------------------------------------------
+
+def _parse_frontmatter(text: str) -> tuple[dict, str]:
+    """Parse YAML-like frontmatter from a markdown file. No external dependency."""
+    if not text.startswith("---"):
+        return {}, text
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        return {}, text
+    meta: dict = {}
+    for line in parts[1].splitlines():
+        line = line.strip()
+        if not line or ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key = key.strip()
+        value = value.strip()
+        if value.lower() == "true":
+            meta[key] = True
+        elif value.lower() == "false":
+            meta[key] = False
+        elif value.startswith('"') and value.endswith('"'):
+            meta[key] = value[1:-1]
+        else:
+            meta[key] = value
+    return meta, parts[2].strip()
+
+
+async def _seed_prompts(sess: AsyncSession) -> None:
+    prompts_dir = Path(__file__).parent / "prompts"
+    if not prompts_dir.exists():
+        return
+    for md_file in sorted(prompts_dir.glob("*.md")):
+        meta, content = _parse_frontmatter(md_file.read_text(encoding="utf-8"))
+        if not meta.get("is_current"):
+            continue
+        name = meta.get("name", md_file.stem)
+        existing = (
+            await sess.scalars(
+                select(db.SystemPromptTemplate).where(db.SystemPromptTemplate.name == name)
+            )
+        ).first()
+        if existing:
+            continue
+        token_count_value = None
+        try:
+            token_count_value = await count_token([{"role": "system", "content": content}])
+        except Exception:
+            pass
+        sess.add(
+            db.SystemPromptTemplate(
+                id=str(uuid.uuid4()),
+                name=name,
+                category=meta.get("category", "general"),
+                content=content,
+                is_default=1,
+                token_count=token_count_value,
+                created_at=_now(),
+            )
+        )
+    await sess.commit()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize the database on startup."""
     await init_db()
     print("Database initialized successfully.")
+    async for sess in get_db_session():
+        await _seed_prompts(sess)
     yield
 
 
 app = FastAPI(title="LLM Chat Backend", lifespan=lifespan)
 
-# Configure CORS to allow Angular (Angular default port is 4200)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:4200", "http://localhost:4200/*"],
@@ -92,6 +160,35 @@ def _now() -> str:
     return datetime.datetime.now(datetime.UTC).isoformat()
 
 
+async def _build_inference_context(
+    branch: list[db.Message],
+    prompt_id: str | None,
+    sess: AsyncSession,
+) -> list[dict]:
+    """Build the message list sent to Ollama. Prepends system prompt from DB if prompt_id given."""
+    messages: list[dict] = []
+    if prompt_id is not None:
+        p = (
+            await sess.scalars(
+                select(db.SystemPromptTemplate).where(db.SystemPromptTemplate.id == prompt_id)
+            )
+        ).first()
+        if p is not None:
+            messages.append({"role": "system", "content": p.content})
+    for m in branch:
+        if m.content is None or m.content.strip() == "":
+            continue
+        messages.append({"role": m.role, "content": m.content})
+    return messages
+
+
+def _parse_conv_settings(conv: db.Conversation) -> ld.ConversationSettings:
+    try:
+        return ld.ConversationSettings.model_validate_json(conv.settings or "{}")
+    except Exception:
+        return ld.ConversationSettings()
+
+
 def _msg_dict(m: db.Message) -> dict:
     return {
         "id": m.id,
@@ -111,7 +208,6 @@ def _msg_dict(m: db.Message) -> dict:
 
 @app.get("/api/conversations")
 async def list_conversations(sess: AsyncSession = Depends(get_db_session)):
-    """Retrieves a list of all saved conversations."""
     result = await sess.execute(select(db.Conversation))
     convs = result.scalars().all()
     return [
@@ -130,10 +226,13 @@ async def list_conversations(sess: AsyncSession = Depends(get_db_session)):
 async def create_conversation(
     input: ld.NewConversation, sess: AsyncSession = Depends(get_db_session)
 ):
-    """Creates and returns a new empty conversation object."""
+    default_settings = ld.ConversationSettings(
+        active_tool_names=list(TOOL_REGISTRY.keys())
+    ).model_dump_json()
     new_conv = db.Conversation(
         id=str(uuid.uuid4()),
         title=input.title,
+        settings=default_settings,
         created_at=_now(),
     )
     sess.add(new_conv)
@@ -149,7 +248,6 @@ async def create_conversation(
 
 @app.delete("/api/conversations/{id}")
 async def delete_conversation(id: str, sess: AsyncSession = Depends(get_db_session)):
-    """Deletes a conversation and all its messages."""
     await sess.execute(delete(db.Message).where(db.Message.conversation_id == id))
     await sess.execute(delete(db.Conversation).where(db.Conversation.id == id))
     return ""
@@ -159,7 +257,6 @@ async def delete_conversation(id: str, sess: AsyncSession = Depends(get_db_sessi
 async def update_conversation_settings(
     id: str, body: ld.ConversationSettings, sess: AsyncSession = Depends(get_db_session)
 ):
-    """Update per-conversation settings (active prompts, tools, agentic mode)."""
     conv = (
         await sess.scalars(select(db.Conversation).where(db.Conversation.id == id))
     ).first()
@@ -173,7 +270,6 @@ async def update_conversation_settings(
 async def set_active_branch(
     id: str, body: ld.BranchNavigation, sess: AsyncSession = Depends(get_db_session)
 ):
-    """Switch the active branch. Auto-advances to the deepest single-child leaf from the given message."""
     conv = (
         await sess.scalars(select(db.Conversation).where(db.Conversation.id == id))
     ).first()
@@ -202,7 +298,6 @@ async def set_active_branch(
 async def get_conversation_messages(
     id: str, sess: AsyncSession = Depends(get_db_session)
 ):
-    """Retrieves messages for the active branch of a conversation (root→leaf order)."""
     conv = (
         await sess.scalars(select(db.Conversation).where(db.Conversation.id == id))
     ).first()
@@ -222,7 +317,6 @@ async def get_conversation_messages(
 async def get_conversation_tree(
     id: str, sess: AsyncSession = Depends(get_db_session)
 ):
-    """Returns the full message tree with sibling counts for branch navigation."""
     conv = (
         await sess.scalars(select(db.Conversation).where(db.Conversation.id == id))
     ).first()
@@ -260,7 +354,6 @@ async def add_message(
     conversationId: str,
     sess: AsyncSession = Depends(get_db_session),
 ):
-    """Append a message to a conversation. Uses conversation.active_message_id as parent when parent_id is omitted."""
     conv = (
         await sess.scalars(
             select(db.Conversation).where(db.Conversation.id == conversationId)
@@ -293,7 +386,6 @@ async def add_message(
 async def branch_message(
     id: str, body: ld.EditMessageContent, sess: AsyncSession = Depends(get_db_session)
 ):
-    """Create a sibling of message `id` with new content, forming a new branch. Updates conversation active branch."""
     original = (
         await sess.scalars(select(db.Message).where(db.Message.id == id))
     ).first()
@@ -329,7 +421,6 @@ async def branch_message(
 async def delete_message_branch(
     conv_id: str, msg_id: str, sess: AsyncSession = Depends(get_db_session)
 ):
-    """Delete a message and all its descendants. Adjusts active_message_id if it was inside the deleted subtree."""
     conv = (
         await sess.scalars(select(db.Conversation).where(db.Conversation.id == conv_id))
     ).first()
@@ -380,36 +471,63 @@ async def delete_message_branch(
 # System prompts
 # ---------------------------------------------------------------------------
 
+async def _compute_prompt_token_count(content: str) -> int | None:
+    try:
+        return await count_token([{"role": "system", "content": content}], tool_names=[])
+    except Exception as e:
+        logger.exception("unexpected error in _compute_prompt_token_count()", exc_info=e)
+        return None
+
+
 @app.get("/api/system-prompts")
 async def list_system_prompts(sess: AsyncSession = Depends(get_db_session)):
-    """List all system prompt templates."""
     result = await sess.scalars(select(db.SystemPromptTemplate))
-    return result.all()
+    prompts = result.all()
+    return [
+        {
+            "id": p.id,
+            "name": p.name,
+            "category": p.category,
+            "content": p.content,
+            "is_default": p.is_default,
+            "token_count": p.token_count,
+            "created_at": p.created_at,
+        }
+        for p in prompts
+    ]
 
 
 @app.post("/api/system-prompts")
 async def create_system_prompt(
     body: ld.NewSystemPrompt, sess: AsyncSession = Depends(get_db_session)
 ):
-    """Create a new system prompt template."""
+    token_count_value = await _compute_prompt_token_count(body.content)
     p = db.SystemPromptTemplate(
         id=str(uuid.uuid4()),
         name=body.name,
         category=body.category,
         content=body.content,
-        is_global=1 if body.is_global else 0,
+        is_default=1 if body.is_default else 0,
+        token_count=token_count_value,
         created_at=_now(),
     )
     sess.add(p)
     await sess.flush()
-    return p
+    return {
+        "id": p.id,
+        "name": p.name,
+        "category": p.category,
+        "content": p.content,
+        "is_default": p.is_default,
+        "token_count": p.token_count,
+        "created_at": p.created_at,
+    }
 
 
 @app.put("/api/system-prompts/{id}")
 async def update_system_prompt(
     id: str, body: ld.UpdateSystemPrompt, sess: AsyncSession = Depends(get_db_session)
 ):
-    """Update fields on an existing system prompt template."""
     p = (
         await sess.scalars(
             select(db.SystemPromptTemplate).where(db.SystemPromptTemplate.id == id)
@@ -423,20 +541,44 @@ async def update_system_prompt(
         p.category = body.category
     if body.content is not None:
         p.content = body.content
-    if body.is_global is not None:
-        p.is_global = 1 if body.is_global else 0
-    return p
+        p.token_count = await _compute_prompt_token_count(body.content)
+    if body.is_default is not None:
+        p.is_default = 1 if body.is_default else 0
+    return {
+        "id": p.id,
+        "name": p.name,
+        "category": p.category,
+        "content": p.content,
+        "is_default": p.is_default,
+        "token_count": p.token_count,
+        "created_at": p.created_at,
+    }
 
 
 @app.delete("/api/system-prompts/{id}")
 async def delete_system_prompt(
     id: str, sess: AsyncSession = Depends(get_db_session)
 ):
-    """Delete a system prompt template."""
     await sess.execute(
         delete(db.SystemPromptTemplate).where(db.SystemPromptTemplate.id == id)
     )
     return ""
+
+
+# ---------------------------------------------------------------------------
+# Agent tools
+# ---------------------------------------------------------------------------
+
+@app.get("/api/agent/tools")
+async def list_agent_tools():
+    return [
+        {
+            "name": t.name,
+            "description": t.description,
+            "requires_confirmation": t.requires_confirmation,
+        }
+        for t in TOOL_REGISTRY.values()
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -483,9 +625,7 @@ async def chat_endpoint(
     conversation: ld.Conversation,
     http_sess: aiohttp.ClientSession = Depends(get_http_session),
 ):
-    """Streaming chat endpoint. Proxies to Ollama and streams NDJSON chunks back."""
     print(f"--- Received chat request for {len(conversation.messages)} messages ---")
-
     return StreamingResponse(
         chat_endpoint_generator(http_sess, conversation),
         media_type="application/x-ndjson",
@@ -498,7 +638,6 @@ async def chat_endpoint(
 
 @app.post("/api/conversations/{id}/count-tokens")
 async def count_conversation_tokens(id: str, sess: AsyncSession = Depends(get_db_session)):
-    """Count tokens for the active branch via a 1-token Ollama generate and persist on the last message."""
     conv = (await sess.scalars(select(db.Conversation).where(db.Conversation.id == id))).first()
     if conv is None:
         raise HTTPException(404)
@@ -506,13 +645,10 @@ async def count_conversation_tokens(id: str, sess: AsyncSession = Depends(get_db
     all_msgs = list((await sess.scalars(select(db.Message).where(db.Message.conversation_id == id))).all())
     branch = _build_active_branch_path(all_msgs, conv.active_message_id)
 
-    messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
-    for m in branch:
-        if m.role == "tool" or not (m.content or "").strip():
-            continue
-        messages.append({"role": m.role, "content": m.content})
-
-    token_count_value = await count_token(messages)
+    settings = _parse_conv_settings(conv)
+    messages = await _build_inference_context(branch, settings.active_prompt_id, sess)
+    tool_names = settings.active_tool_names or list(TOOL_REGISTRY.keys())
+    token_count_value = await count_token(messages, tool_names=tool_names)
 
     last_id: str | None = None
     if branch:
@@ -527,17 +663,7 @@ async def count_conversation_tokens(id: str, sess: AsyncSession = Depends(get_db
 # Agent WebSocket
 # ---------------------------------------------------------------------------
 
-async def _ws_send_events(websocket: WebSocket, session) -> None:
-    """Forward agent events to the WebSocket client until done/error."""
-    while True:
-        event = await session.outbound.get()
-        await websocket.send_json(event)
-        if event["type"] in ("done", "error"):
-            return
-
-
-async def _ws_receive_messages(websocket: WebSocket, session, agent_task) -> None:
-    """Forward client confirm/abort messages to the agent session."""
+async def _ws_receive_messages(websocket: WebSocket, session: AgentSession, agent_task: asyncio.Task) -> None:
     try:
         while True:
             data = await websocket.receive_json()
@@ -556,17 +682,12 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
     WebSocket endpoint for the agentic loop.
     First client message: {"message": "...", "conversation_id": "optional"}
     """
-    import asyncio
-    from agent.agent import AgentSession, run_agent
-
     await websocket.accept()
     try:
         init_data = await websocket.receive_json()
         user_message: str = init_data.get("message", "")
         conversation_id: str | None = init_data.get("conversation_id")
 
-        # Build initial message history
-        messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
         conv: db.Conversation | None = None
         branch: list[db.Message] = []
 
@@ -581,15 +702,15 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
                 )
                 all_msgs = list(all_msgs_result.scalars().all())
                 branch = _build_active_branch_path(all_msgs, conv.active_message_id)
-                for m in branch:
-                    if len(m.content) == 0:
-                        # skip messages that only contains thinking
-                        continue
-                    messages.append({"role": m.role, "content": m.content})
 
+        settings = _parse_conv_settings(conv) if conv else ld.ConversationSettings()
+        active_tool_names = settings.active_tool_names or list(TOOL_REGISTRY.keys())
+        working_directory = settings.working_directory
+
+        tools = get_ollama_tool_list(active_tool_names)
+        messages = await _build_inference_context(branch, settings.active_prompt_id, sess)
         messages.append({"role": "user", "content": user_message})
 
-        # Find the last user message in DB branch so we can store its token_count after iter 1
         last_user_msg_id: str | None = None
         if conversation_id and conv and branch:
             for m in reversed(branch):
@@ -598,28 +719,32 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
                     break
 
         session = AgentSession()
-        agent_task = asyncio.create_task(run_agent(session, messages))
+        agent_task = asyncio.create_task(run_agent(session, messages, tools, working_directory))
 
         async def send_events_with_token_update() -> None:
-            """Forward agent events to WebSocket, updating user message token_count after iteration 1."""
             iteration = 0
             while True:
                 event = await session.outbound.get()
                 await websocket.send_json(event)
+
                 if event["type"] == "iteration_end":
                     iteration += 1
                     if iteration == 1 and last_user_msg_id:
-                        user_msg = (await sess.scalars(select(db.Message).where(db.Message.id == last_user_msg_id))).first()
+                        user_msg = (
+                            await sess.scalars(
+                                select(db.Message).where(db.Message.id == last_user_msg_id)
+                            )
+                        ).first()
                         if user_msg:
                             user_msg.token_count = event.get("prompt_tokens", 0)
                             await sess.flush()
+
                 if event["type"] in ("done", "error"):
                     return
 
         send_task = asyncio.create_task(send_events_with_token_update())
         recv_task = asyncio.create_task(_ws_receive_messages(websocket, session, agent_task))
 
-        # Wait for send_task to finish (it ends when agent emits done/error)
         await send_task
         recv_task.cancel()
         agent_task.cancel()
@@ -627,65 +752,9 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
     except WebSocketDisconnect:
         pass
     except Exception as e:
+        logger.exception("error in main agent websocket handling")
         try:
             await websocket.send_json({"type": "error", "message": str(e)})
         except Exception:
+            logger.exception("error when sending error message in websocket")
             pass
-
-
-# ---------------------------------------------------------------------------
-# Ollama proxy (catch-all — must stay last to not shadow API routes)
-# ---------------------------------------------------------------------------
-
-def print_content(data: bytes, point_in_code: str):
-    try:
-        print(f"{point_in_code=} data=", json.dumps(json.loads(data.decode()), indent=2))
-    except Exception:
-        data_s = [d.strip() for d in data.decode().split("\n") if d.strip() != ""]
-        for d in data_s:
-            print(d)
-
-
-@app.get("/{full_path:path}")
-async def catch_all_get(
-    full_path: str,
-    response: Response,
-    http_sess: aiohttp.ClientSession = Depends(get_http_session),
-):
-    async with http_sess.get("http://localhost:11434/" + full_path) as r:
-        data = await r.content.read()
-        print_content(data, "RESPONSE catch_all_get")
-        response.status_code = r.status
-        return data
-
-
-@app.post("/{full_path:path}")
-async def catch_all_post(
-    full_path: str,
-    request: Request,
-    response: Response,
-    http_sess: aiohttp.ClientSession = Depends(get_http_session),
-):
-    body = await request.body()
-    print_content(body, "QUERY catch_all_post")
-    async with http_sess.post("http://localhost:11434/" + full_path, data=body) as r:
-        data = await r.content.read()
-        print_content(data, "RESPONSE catch_all_post")
-        response.status_code = r.status
-        return data
-
-
-@app.put("/{full_path:path}")
-async def catch_all_put(
-    full_path: str,
-    request: Request,
-    response: Response,
-    http_sess: aiohttp.ClientSession = Depends(get_http_session),
-):
-    body = await request.body()
-    print_content(body, "QUERY catch_all_put")
-    async with http_sess.put("http://localhost:11434/" + full_path, data=body) as r:
-        data = await r.content.read()
-        response.status_code = r.status
-        print_content(data, "RESPONSE catch_all_put")
-        return data

@@ -32,21 +32,21 @@ class BranchNavigation(BaseModel):
 
 
 class ConversationSettings(BaseModel):
-    active_prompt_ids: list[str] = []
+    active_prompt_id: str | None = None
     active_tool_names: list[str] = []
-    tools_enabled: bool = True
     agentic_mode: bool = True
+    working_directory: str | None = None
 
 
 class NewSystemPrompt(BaseModel):
     name: str
     category: str
     content: str
-    is_global: bool = True
+    is_default: bool = False
 
 
 class UpdateSystemPrompt(BaseModel):
     name: str | None = None
     category: str | None = None
     content: str | None = None
-    is_global: bool | None = None
+    is_default: bool | None = None

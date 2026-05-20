@@ -1,0 +1,78 @@
+<div class="fixed inset-0 z-40" (click)="closed.emit()"></div>
+
+<aside class="fixed right-0 top-0 h-full w-80 z-50 flex flex-col shadow-2xl bg-sidebar border-l border-gray-700">
+  <div class="flex items-center justify-between p-4 border-b border-gray-700 bg-gray-800">
+    <h2 class="font-semibold text-white">Conversation Settings</h2>
+    <button class="text-gray-400 hover:text-white text-xl leading-none" (click)="closed.emit()">×</button>
+  </div>
+
+  <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-6 bg-gray-800">
+
+    <!-- Active System Prompt -->
+    <section>
+      <h3 class="text-gray-400 text-xs font-semibold uppercase tracking-wide mb-2">System Prompt</h3>
+      <select
+        class="w-full bg-gray-700 text-white rounded px-3 py-2 text-sm border border-gray-600"
+        [ngModel]="settings().active_prompt_id ?? ''"
+        (ngModelChange)="setPrompt($event)"
+      >
+        <option value="">None</option>
+        @for (p of prompts(); track p.id) {
+          <option [value]="p.id">
+            {{ p.name }}{{ p.token_count !== null ? ' (~' + p.token_count + ' tok)' : '' }}
+          </option>
+        }
+      </select>
+    </section>
+
+    <!-- Tools -->
+    <section>
+      <h3 class="text-gray-400 text-xs font-semibold uppercase tracking-wide mb-2">Tools</h3>
+      @if (tools().length === 0) {
+        <p class="text-gray-500 text-sm">Loading…</p>
+      }
+      <div class="flex flex-col gap-2">
+        @for (tool of tools(); track tool.name) {
+          <label class="flex items-start gap-3 cursor-pointer p-2 rounded hover:bg-gray-700">
+            <input
+              type="checkbox"
+              class="mt-0.5 accent-indigo-500"
+              [checked]="isToolEnabled(tool.name)"
+              (change)="toggleTool(tool.name, $any($event.target).checked)"
+            />
+            <div>
+              <div class="text-sm text-white">{{ tool.name }}</div>
+              @if (tool.requires_confirmation) {
+                <div class="text-xs text-yellow-400">requires confirmation</div>
+              }
+            </div>
+          </label>
+        }
+      </div>
+    </section>
+
+    <!-- Workspace -->
+    <section>
+      <h3 class="text-gray-400 text-xs font-semibold uppercase tracking-wide mb-2">Workspace Directory</h3>
+      <div class="flex gap-2">
+        <input
+          class="flex-1 bg-gray-700 text-white rounded px-3 py-2 text-sm border border-gray-600 placeholder-gray-500"
+          placeholder="No workspace (file tools disabled)"
+          [value]="settings().working_directory ?? ''"
+          (change)="setWorkingDirectory($any($event.target).value)"
+        />
+        @if (settings().working_directory !== null) {
+          <button
+            class="text-gray-400 hover:text-red-400 px-2 text-sm"
+            title="Clear workspace"
+            (click)="setWorkingDirectory('')"
+          >✕</button>
+        }
+      </div>
+      <p class="text-gray-500 text-xs mt-1">
+        File tools and shell are disabled when empty.
+      </p>
+    </section>
+
+  </div>
+</aside>

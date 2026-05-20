@@ -1,0 +1,64 @@
+import { Component, inject, input, output, OnInit, signal, computed } from '@angular/core'
+import { FormsModule } from '@angular/forms'
+import { ApiService } from '../../services/api.service'
+import {
+  AgentToolMeta,
+  ConversationSettings,
+  SystemPromptTemplate,
+} from '../../types/message-types'
+
+@Component({
+  selector: 'app-conversation-settings',
+  imports: [FormsModule],
+  templateUrl: './conversation-settings.component.html',
+})
+export class ConversationSettingsComponent implements OnInit {
+  readonly conversationId = input<string | undefined>(undefined)
+  readonly settings = input.required<ConversationSettings>()
+  readonly closed = output<void>()
+  readonly settingsChanged = output<ConversationSettings>()
+
+  private api = inject(ApiService)
+
+  readonly prompts = signal<SystemPromptTemplate[]>([])
+  readonly tools = signal<AgentToolMeta[]>([])
+
+  ngOnInit() {
+    this.api.get_system_prompts().subscribe((p) => this.prompts.set(p))
+    this.api.get_agent_tools().subscribe((t) => this.tools.set(t))
+  }
+
+  isToolEnabled(toolName: string): boolean {
+    return this.settings().active_tool_names.includes(toolName)
+  }
+
+  toggleTool(toolName: string, enabled: boolean) {
+    const current = this.settings().active_tool_names
+    const updated = enabled ? [...current, toolName] : current.filter((n) => n !== toolName)
+    this.save({ active_tool_names: updated })
+  }
+
+  setPrompt(promptId: string) {
+    this.save({ active_prompt_id: promptId === '' ? null : promptId })
+  }
+
+  setWorkingDirectory(dir: string) {
+    this.save({ working_directory: dir === '' ? null : dir })
+  }
+
+  private save(partial: Partial<ConversationSettings>) {
+    const updated: ConversationSettings = { ...this.settings(), ...partial }
+    const id = this.conversationId()
+    if (id) {
+      this.api.put_conversation_settings(id, updated).subscribe()
+    }
+    this.settingsChanged.emit(updated)
+  }
+
+  activePromptLabel(): string {
+    const id = this.settings().active_prompt_id
+    if (id === null) return 'None'
+    const p = this.prompts().find((p) => p.id === id)
+    return p ? p.name : 'None'
+  }
+}

@@ -1,5 +1,10 @@
 export type Role = 'user' | 'assistant' | 'system' | 'tool'
 
+export type MessageForQuery = {
+  role: Role
+  content: string
+}
+
 export type Message = {
   id: string
   conversation_id?: string
@@ -36,10 +41,10 @@ export type ApiResponse = {
 export type ConversationHistory = Message[]
 
 export type ConversationSettings = {
-  active_prompt_ids: string[]
+  active_prompt_id: string | null
   active_tool_names: string[]
-  tools_enabled: boolean
   agentic_mode: boolean
+  working_directory: string | null
 }
 
 export type Conversation = {
@@ -47,7 +52,7 @@ export type Conversation = {
   title: string
   created_at: string
   active_message_id: string | null
-  settings: string | null  // JSON-encoded ConversationSettings
+  settings: string | null // JSON-encoded ConversationSettings
   history?: ConversationHistory
 }
 
@@ -63,8 +68,15 @@ export type SystemPromptTemplate = {
   name: string
   category: SystemPromptCategory
   content: string
-  is_global: number  // 1 | 0
+  is_default: number // 1 | 0
+  token_count: number | null
   created_at: string
+}
+
+export type AgentToolMeta = {
+  name: string
+  description: string
+  requires_confirmation: boolean
 }
 
 /** Flat node returned by GET /api/conversations/{id}/tree */
@@ -98,31 +110,75 @@ export type AgentEventType =
 
 export type AgentEvent = {
   type: AgentEventType
-  // content/thinking chunks
   content?: string
-  // tool events
   tool_id?: string
   tool_name?: string
   arguments?: Record<string, unknown>
   preview?: string
-  // tool_result
-  // iteration_end
   prompt_tokens?: number
   response_tokens?: number
-  // error
   message?: string
 }
 
-/** A message-like object used only in the UI for agent tool interactions. */
-export type AgentUiMessage = {
-  id: string
-  ui_type: 'user' | 'thinking' | 'content' | 'tool_confirm' | 'tool_result' | 'iteration_end'
-  done?: boolean
-  tool_id?: string
-  tool_name?: string
-  tool_args?: Record<string, unknown>
-  preview?: string
-  content: string
-  confirmed?: boolean | null
-  prompt_tokens?: number
+// ---------------------------------------------------------------------------
+// Unified display message — single type rendered in the template.
+// Sources: DB reload (via selectConversation) and live agent event stream.
+// ---------------------------------------------------------------------------
+
+/** Token metadata added to messages that carry a cumulative context size. */
+export type TokenMeta = {
+  token_count: number
+  /** Tokens added by this message relative to the previous counted message. */
+  token_contribution: number | null
+  /** token_count as a percentage of the 16 384 context window. */
+  token_pct: number
+}
+
+export type DisplayMessage =
+  | {
+      kind: 'user'
+      id: string
+      content: string
+      token_count?: number | null
+    }
+  | {
+      kind: 'assistant'
+      id: string
+      content: string
+      thinking?: string
+      /** True while the HTTP stream is still open (non-agentic mode). */
+      streaming?: boolean
+      token_count?: number | null
+    }
+  | {
+      kind: 'thinking'
+      id: string
+      content: string
+      /** False while still streaming; true once the block is complete. */
+      done: boolean
+    }
+  | {
+      kind: 'tool_confirm'
+      id: string
+      tool_id: string
+      tool_name: string
+      args: Record<string, unknown>
+      preview: string
+      /** null = awaiting response, true/false = confirmed/rejected */
+      confirmed: boolean | null
+    }
+  | {
+      kind: 'tool_result'
+      id: string
+      tool_name: string
+      content: string
+      token_count?: number | null
+    }
+
+/**
+ * DisplayMessage enriched with token contribution metadata.
+ * Computed in the component from the raw DisplayMessage array — not stored in the signal.
+ */
+export type DisplayMessageWithMeta = DisplayMessage & {
+  token_meta?: TokenMeta
 }

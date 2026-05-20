@@ -1,268 +1,634 @@
-import { Injectable, inject, signal } from '@angular/core'
-import { Observable, BehaviorSubject, firstValueFrom } from 'rxjs'
-import { catchError, tap, shareReplay, switchMap } from 'rxjs/operators'
-import { HttpClient, HttpEvent } from '@angular/common/http'
+import { Injectable, inject, signal, computed } from '@angular/core'
+import { BehaviorSubject, firstValueFrom, Observable, Subscription } from 'rxjs'
+import { catchError, shareReplay, switchMap, tap } from 'rxjs/operators'
 import { throwError } from 'rxjs'
-import { ApiResponse, Conversation, ConversationHistory, Message } from '../types/message-types'
+import {
+  AgentToolMeta,
+  ApiResponse,
+  Conversation,
+  ConversationSettings,
+  DisplayMessage,
+  Message,
+  MessageForQuery,
+  SystemPromptTemplate,
+} from '../types/message-types'
+import { ApiService } from './api.service'
+import { AgentService } from './agent.service'
 
-class MyShare<T> {
-  private _obs$: Observable<T>
-  constructor(observableFactory: () => Observable<T>) {
-    this._obs$ = this._refreshSubject.pipe(
-      switchMap(() => observableFactory()),
-      shareReplay(1),
-    )
-  }
-  private _refreshSubject = new BehaviorSubject<void>(undefined)
-  public get obs$(): Observable<T> {
-    return this._obs$
-  }
-  public refresh() {
-    this._refreshSubject.next()
+// ---------------------------------------------------------------------------
+// Shared observable helper — refreshable cached HTTP call
+// ---------------------------------------------------------------------------
+
+class RefreshableQuery<T> {
+  private _refreshTrigger = new BehaviorSubject<void>(undefined)
+  readonly obs$: Observable<T> = this._refreshTrigger.pipe(
+    switchMap(() => this._factory()),
+    shareReplay(1),
+  )
+  constructor(private _factory: () => Observable<T>) {}
+  refresh() {
+    this._refreshTrigger.next()
   }
 }
 
-function myShared<T>(observableFactory: () => Observable<T>) {
-  return new MyShare(observableFactory)
-}
+// ---------------------------------------------------------------------------
+// ChatService — single source of truth for all display state
+// ---------------------------------------------------------------------------
 
-@Injectable({
-  providedIn: 'root',
-})
+@Injectable({ providedIn: 'root' })
 export class ChatService {
-  private http = inject(HttpClient)
+  private api = inject(ApiService)
+  private agentSvc = inject(AgentService)
 
-  // --- State Management using BehaviorSubject ---
-  private historySubject = new BehaviorSubject<ConversationHistory>([])
-  public history$: Observable<ConversationHistory> = this.historySubject.asObservable()
+  // -------------------------------------------------------------------------
+  // Display state — the template reads only from here
+  // -------------------------------------------------------------------------
 
-  // Loading state
-  private isLoadingSubject = new BehaviorSubject<boolean>(false)
-  public isLoading$: Observable<boolean> = this.isLoadingSubject.asObservable()
+  private _messages = signal<DisplayMessage[]>([])
+  /** The full list of messages to render. Source: DB reload + live streaming. */
+  public readonly messages = this._messages.asReadonly()
 
-  // Token count
-  private contextTokensSubject = new BehaviorSubject<number>(0)
-  public contextTokens$: Observable<number> = this.contextTokensSubject.asObservable()
+  private _isLoading = signal(false)
+  /** True while a non-agentic HTTP stream is open. */
+  public readonly isLoading = this._isLoading.asReadonly()
 
-  conversations = myShared(() => {
-    return this.http.get<Conversation[]>('http://localhost:8000/api/conversations')
+  /** Delegates to AgentService so the component only needs to inject ChatService. */
+  public readonly agentRunning = computed(() => this.agentSvc.running())
+
+  private _promptTokens = signal(0)
+  /** Latest prompt_tokens from the most recent agent iteration_end. */
+  public readonly promptTokens = this._promptTokens.asReadonly()
+
+  /** Current streaming phase, derived from the last message in the list. */
+  public readonly phase = computed<'thinking' | 'responding' | null>(() => {
+    if (!this.agentSvc.running()) return null
+    const msgs = this._messages()
+    const last = msgs[msgs.length - 1]
+    if (!last) return null
+    if (last.kind === 'thinking' && !last.done) return 'thinking'
+    if (last.kind === 'assistant' && last.streaming) return 'responding'
+    return null
   })
-  // ------------------
 
-  constructor() {}
+  // -------------------------------------------------------------------------
+  // Conversation list (sidebar)
+  // -------------------------------------------------------------------------
 
-  /**
-   * Sets a new conversation state and resets the entire chat history and tokens.
-   * @param title The title for the new conversation.
-   */
-  public startNewChat(): void {
-    this.isLoadingSubject.next(false)
-    this.contextTokensSubject.next(0)
-    this.historySubject.next([])
-    this.conversation = undefined
-    this._conversationId.set(undefined)
-    this._conversationSettings.set(null)
-  }
+  conversations = new RefreshableQuery(() => this.api.get_conversations())
 
-  public async createConversation(message: Message) {
-    const conversation = await firstValueFrom(
-      this.http.post<Conversation>('http://localhost:8000/api/conversations', {
-        title: message.content.substring(0, 20),
-      }),
-    )
-    this.conversation = conversation
-    this._conversationId.set(conversation.id)
-    this.conversations.refresh()
-    const pendingSettings = this._conversationSettings()
-    if (pendingSettings) {
-      await firstValueFrom(
-        this.http.put(`http://localhost:8000/api/conversations/${conversation.id}/settings`, pendingSettings)
-      )
-    }
-    await this.addMessageToConversation(conversation, message)
-  }
+  // -------------------------------------------------------------------------
+  // Active conversation metadata
+  // -------------------------------------------------------------------------
 
-  async addMessageToConversation(conversation: Conversation, message: Message): Promise<string> {
-    const res = await firstValueFrom(
-      this.http.post<{ id: string; parent_id: string | null }>(
-        'http://localhost:8000/api/messages',
-        message,
-        { params: { conversationId: conversation.id } },
-      ),
-    )
-    return res.id
-  }
-
-  private conversation: Conversation | undefined = undefined
+  private _conversation: Conversation | undefined
 
   private _conversationId = signal<string | undefined>(undefined)
-  public currentConversationId = this._conversationId.asReadonly()
+  public readonly currentConversationId = this._conversationId.asReadonly()
 
-  private _conversationSettings = signal<{ agentic_mode: boolean } | null>(null)
-  public currentConversationSettings = this._conversationSettings.asReadonly()
+  private _conversationSettings = signal<ConversationSettings | null>({
+    agentic_mode: true,
+    active_prompt_id: null,
+    active_tool_names: [],
+    working_directory: null,
+  })
+  public readonly currentConversationSettings = this._conversationSettings.asReadonly()
 
-  public selectConversation(conversation: Conversation | undefined) {
-    if (conversation === undefined) {
-      this.historySubject.next([])
-      this.conversation = undefined
-      this._conversationId.set(undefined)
-      this._conversationSettings.set(null)
-    } else {
-      this.http
-        .get<Message[]>(`http://localhost:8000/api/conversations/${conversation.id}/messages`)
-        .subscribe((messages) => {
-          this.historySubject.next(messages)
-          this.conversation = conversation
-          this._conversationId.set(conversation.id)
-          const settings = conversation.settings ? JSON.parse(conversation.settings) : null
-          this._conversationSettings.set(settings)
-          const lastWithCount = [...messages].reverse().find(m => m.token_count != null)
-          this.contextTokensSubject.next(lastWithCount?.token_count ?? 0)
-        })
-    }
+  private _prompts = signal<SystemPromptTemplate[]>([])
+  /** All system prompt templates — loaded once, shared across the service. */
+  public readonly prompts = this._prompts.asReadonly()
+
+  private _allToolNames = signal<string[]>([])
+  /** Names of all registered agent tools — loaded once on startup. */
+  public readonly allToolNames = this._allToolNames.asReadonly()
+
+  // Active subscription to agentSvc.events$ — replaced on each new agent run
+  private _agentEventSub: Subscription | null = null
+
+  constructor() {
+    this.api.get_system_prompts().subscribe(p => this._prompts.set(p))
+    this.api.get_agent_tools().subscribe(tools => {
+      const names = tools.map((t: AgentToolMeta) => t.name)
+      this._allToolNames.set(names)
+      // Patch the pending new-chat settings so tools are enabled by default
+      const current = this._conversationSettings()
+      if (current !== null && current.active_tool_names.length === 0) {
+        this._conversationSettings.set({ ...current, active_tool_names: names })
+      }
+    })
   }
 
-  /**
-   * Sends the chat history and returns an Observable that streams the response.
-   */
-  public sendMessage(history: ConversationHistory): Observable<HttpEvent<string>> {
-    // 1. Set loading state
-    this.isLoadingSubject.next(true)
+  // -------------------------------------------------------------------------
+  // Navigation
+  // -------------------------------------------------------------------------
 
-    // Build messages array for backend
-    const messagesArray: { role: string; content: string }[] = history.map((m) => ({
-      role: m.role,
-      content: m.content,
-      thinking: m.thinking,
-    }))
-    const lastMessage = history[history.length - 1]
-    if (history.length === 1) {
-      this.createConversation(lastMessage)
-    } else if (this.conversation) {
-      this.addMessageToConversation(this.conversation, lastMessage)
-    }
-
-    const svcHistory = this.historySubject.getValue()
-    svcHistory.push(history[history.length - 1])
-    svcHistory.push({
-      id: 'next-loading',
-      role: 'assistant',
-      content: '',
-      thinking: '',
-      loading: true,
+  startNewChat(): void {
+    this._stopAgentAndClearSub()
+    this._messages.set([])
+    this._isLoading.set(false)
+    this._promptTokens.set(0)
+    this._conversation = undefined
+    this._conversationId.set(undefined)
+    this._conversationSettings.set({
+      agentic_mode: true,
+      active_prompt_id: null,
+      active_tool_names: this._allToolNames(),
+      working_directory: null,
     })
-    this.historySubject.next(svcHistory)
+  }
 
-    // Call backend API and stream response
-    return this.http
-      .post(
-        'http://localhost:8000/api/chat',
-        { messages: messagesArray },
-        {
-          observe: 'events',
-          responseType: 'text',
-          reportProgress: true,
-        },
+  selectConversation(conversation: Conversation | undefined): void {
+    this._stopAgentAndClearSub()
+    if (conversation === undefined) {
+      this._messages.set([])
+      this._conversation = undefined
+      this._conversationId.set(undefined)
+      this._conversationSettings.set(null)
+      return
+    }
+    this.api.get_conversation_messages(conversation.id).subscribe((dbMessages) => {
+      this._messages.set(this._fromDbMessages(dbMessages))
+      this._conversation = conversation
+      this._conversationId.set(conversation.id)
+      this._conversationSettings.set(
+        conversation.settings ? JSON.parse(conversation.settings) : null,
       )
-      .pipe(
-        tap((response) => {
-          if (response.type === 3) {
-            const lines = (response.partialText ?? '').split('\n')
-            const objs: ApiResponse[] = lines
-              .filter((t) => t.endsWith('}'))
-              .map((t) => JSON.parse(t))
-            const thinking = objs.map((o) => o.message.thinking ?? '').join('')
-            const content = objs.map((o) => o.message.content).join('')
-            const back = svcHistory[svcHistory.length - 1]
-            back.content = content
-            back.thinking = thinking
-            // console.log('thinking=', thinking)
-            // console.log('content=', content)
-            if (back.thinking && !back.content) {
-              console.log('started thinking')
-              back.loading = false
-              back.thinking_visible = true
-            } else if (back.content) {
-              console.log('finished thinking')
-              back.loading = false
-              back.thinking_visible = false
-            }
-            this.historySubject.next([...svcHistory])
+      this._promptTokens.set(0)
+    })
+  }
 
-            const lastResponse = objs[objs.length - 1]
-            if (lastResponse.done) {
-              this.isLoadingSubject.next(false)
-              if (this.conversation) {
-                const conv = this.conversation
+  // -------------------------------------------------------------------------
+  // Non-agentic chat
+  // -------------------------------------------------------------------------
+
+  sendMessage(input: string): void {
+    this._isLoading.set(true)
+
+    // Build the Ollama payload from current messages + the new user message
+    const baseMessages = this._toOllamaMessages(this._messages())
+    const ollamaMessages: MessageForQuery[] = [
+      ...this._prependSystemPrompt(baseMessages),
+      { role: 'user', content: input },
+    ]
+
+    const userMsg: DisplayMessage = { kind: 'user', id: crypto.randomUUID(), content: input }
+    const loadingMsg: DisplayMessage = {
+      kind: 'assistant',
+      id: 'streaming',
+      content: '',
+      streaming: true,
+    }
+    this._messages.update((msgs) => [...msgs, userMsg, loadingMsg])
+
+    // Save user message to DB, then start streaming
+    const persist = !this._conversation
+      ? this._createConversation(userMsg)
+      : this._addUserMessageToDb(userMsg)
+
+    persist.then(() => {
+      this.api
+        .generate_chat_response(ollamaMessages)
+        .pipe(
+          tap((response) => {
+            if (response.type !== 3) return
+            const chunks: ApiResponse[] = (response.partialText ?? '')
+              .split('\n')
+              .filter((line) => line.endsWith('}'))
+              .map((line) => JSON.parse(line))
+
+            const thinking = chunks.map((c) => c.message.thinking ?? '').join('')
+            const content = chunks.map((c) => c.message.content).join('')
+
+            this._messages.update((msgs) =>
+              msgs.map((m) =>
+                m.id === 'streaming' && m.kind === 'assistant'
+                  ? { ...m, content, thinking: thinking || undefined }
+                  : m,
+              ),
+            )
+
+            const lastChunk = chunks[chunks.length - 1]
+            if (lastChunk?.done) {
+              this._isLoading.set(false)
+              if (this._conversation) {
+                const conv = this._conversation
+                const finalId = crypto.randomUUID()
+                // Replace the ephemeral 'streaming' id with a real one
+                this._messages.update((msgs) =>
+                  msgs.map((m) =>
+                    m.id === 'streaming' && m.kind === 'assistant'
+                      ? { ...m, id: finalId, streaming: false }
+                      : m,
+                  ),
+                )
                 ;(async () => {
-                  await this.addMessageToConversation(conv, back)
-                  await this.countTokensForCurrentConversation()
+                  const savedMsg: Message = {
+                    id: finalId,
+                    role: 'assistant',
+                    content,
+                    thinking: thinking || undefined,
+                  }
+                  await firstValueFrom(this.api.post_message(conv.id, savedMsg))
+                  await this._computeTokenCountForLastMessage()
                 })()
               }
             }
-          }
-        }),
-        catchError((error) => {
-          this.isLoadingSubject.next(false)
-          console.error('API Call Failed:', error)
-          return throwError(() => error)
-        }),
-      )
+          }),
+          catchError((err) => {
+            this._isLoading.set(false)
+            return throwError(() => err)
+          }),
+        )
+        .subscribe()
+    })
   }
 
-  public async countTokensForCurrentConversation(): Promise<void> {
-    const id = this._conversationId()
-    if (!id) return
-    const result = await firstValueFrom(
-      this.http.post<{ token_count: number; message_id: string }>(
-        `http://localhost:8000/api/conversations/${id}/count-tokens`,
-        {}
-      )
+  // -------------------------------------------------------------------------
+  // Agentic chat
+  // -------------------------------------------------------------------------
+
+  startAgentRun(input: string): void {
+    const userMsg: DisplayMessage = { kind: 'user', id: crypto.randomUUID(), content: input }
+    this._messages.update((msgs) => [...msgs, userMsg])
+    this._promptTokens.set(0)
+
+    const persist = !this._conversation
+      ? this._createConversation(userMsg)
+      : this._addUserMessageToDb(userMsg)
+
+    persist.then(() => {
+      const convId = this._conversationId()
+      this._subscribeToAgentEvents()
+      this.agentSvc.start(input, convId)
+    })
+  }
+
+  confirmTool(toolId: string, approved: boolean): void {
+    this.agentSvc.confirm(toolId, approved)
+    this._messages.update((msgs) =>
+      msgs.map((m) =>
+        m.kind === 'tool_confirm' && m.tool_id === toolId ? { ...m, confirmed: approved } : m,
+      ),
     )
-    this.contextTokensSubject.next(result.token_count)
-    const history = this.historySubject.getValue()
-    if (history.length > 0) {
-      history[history.length - 1].token_count = result.token_count
-      this.historySubject.next([...history])
-    }
   }
 
-  public async addMessageToCurrentConversation(role: 'assistant' | 'tool', content: string, thinking?: string, tokenCount?: number): Promise<void> {
-    if (!this.conversation) return
-    const msg: Message = { id: crypto.randomUUID(), role, content, thinking, token_count: tokenCount }
-    await this.addMessageToConversation(this.conversation, msg)
+  abortAgent(): void {
+    this.agentSvc.abort()
   }
 
-  public async prepareAgentConversation(userMessage: string): Promise<string | undefined> {
-    this.contextTokensSubject.next(0)
-    const msg: Message = { id: crypto.randomUUID(), role: 'user', content: userMessage }
-    if (!this.conversation) {
-      await this.createConversation(msg)
-    } else {
-      await this.addMessageToConversation(this.conversation, msg)
-    }
-    return this._conversationId()
-  }
+  // -------------------------------------------------------------------------
+  // Settings / conversation management
+  // -------------------------------------------------------------------------
 
   async setAgenticMode(enabled: boolean): Promise<void> {
-    const current = this._conversationSettings() ?? { agentic_mode: false, active_prompt_ids: [], active_tool_names: [], tools_enabled: true }
+    const current = this._conversationSettings() ?? {
+      agentic_mode: true,
+      active_prompt_id: null,
+      active_tool_names: [],
+      working_directory: null,
+    }
     const updated = { ...current, agentic_mode: enabled }
     this._conversationSettings.set(updated)
     const id = this._conversationId()
     if (!id) return
+    await firstValueFrom(this.api.put_conversation_settings(id, updated))
+  }
+
+  updateConversationSettings(settings: ConversationSettings): void {
+    this._conversationSettings.set(settings)
+  }
+
+  reloadPrompts(): void {
+    this.api.get_system_prompts().subscribe(p => this._prompts.set(p))
+  }
+
+  async deleteConversation(conv: Conversation): Promise<void> {
+    await firstValueFrom(this.api.delete_conversation(conv.id))
+    this.conversations.refresh()
+    if (conv.id === this._conversation?.id) {
+      this.selectConversation(undefined)
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Private: agent event accumulation
+  // -------------------------------------------------------------------------
+
+  private _subscribeToAgentEvents(): void {
+    this._agentEventSub?.unsubscribe()
+
+    // Track streaming block IDs so we can append to them as chunks arrive
+    let thinkingId: string | null = null
+    let contentId: string | null = null
+
+    // prompt_tokens from each iteration_end, in order — used to assign token_counts when saving
+    const iterationPromptTokens: number[] = []
+    // Maps tool_result message id → the iteration index it belongs to (i.e. how many
+    // iteration_ends had fired before this tool_result was received)
+    const toolResultIterations = new Map<string, number>()
+
+    this._agentEventSub = this.agentSvc.events$.subscribe(async (event) => {
+      if (event.type === 'thinking' && event.content) {
+        if (thinkingId) {
+          this._messages.update((msgs) =>
+            msgs.map((m) =>
+              m.id === thinkingId && m.kind === 'thinking'
+                ? { ...m, content: m.content + event.content }
+                : m,
+            ),
+          )
+        } else {
+          thinkingId = crypto.randomUUID()
+          this._messages.update((msgs) => [
+            ...msgs,
+            { kind: 'thinking', id: thinkingId!, content: event.content!, done: false },
+          ])
+        }
+      } else if (event.type === 'content' && event.content) {
+        if (contentId) {
+          this._messages.update((msgs) =>
+            msgs.map((m) =>
+              m.id === contentId && m.kind === 'assistant'
+                ? { ...m, content: m.content + event.content }
+                : m,
+            ),
+          )
+        } else {
+          contentId = crypto.randomUUID()
+          if (thinkingId) {
+            // Thinking block is done — mark it so the template collapses it
+            this._messages.update((msgs) =>
+              msgs.map((m) =>
+                m.id === thinkingId && m.kind === 'thinking' ? { ...m, done: true } : m,
+              ),
+            )
+            thinkingId = null
+          }
+          this._messages.update((msgs) => [
+            ...msgs,
+            { kind: 'assistant', id: contentId!, content: event.content!, streaming: true },
+          ])
+        }
+      } else if (event.type === 'tool_confirm') {
+        this._messages.update((msgs) => [
+          ...msgs,
+          {
+            kind: 'tool_confirm',
+            id: event.tool_id!,
+            tool_id: event.tool_id!,
+            tool_name: event.tool_name ?? '',
+            args: event.arguments ?? {},
+            preview: event.preview ?? '',
+            confirmed: null,
+          },
+        ])
+      } else if (event.type === 'tool_result') {
+        // Seal any open streaming blocks before showing the result
+        if (thinkingId) {
+          this._messages.update((msgs) =>
+            msgs.map((m) =>
+              m.id === thinkingId && m.kind === 'thinking' ? { ...m, done: true } : m,
+            ),
+          )
+          thinkingId = null
+        }
+        if (contentId) {
+          this._messages.update((msgs) =>
+            msgs.map((m) =>
+              m.id === contentId && m.kind === 'assistant' ? { ...m, streaming: false } : m,
+            ),
+          )
+          contentId = null
+        }
+        const resultId = `result-${event.tool_id}`
+        toolResultIterations.set(resultId, iterationPromptTokens.length)
+        this._messages.update((msgs) => [
+          ...msgs,
+          {
+            kind: 'tool_result',
+            id: resultId,
+            tool_name: event.tool_name ?? '',
+            content: event.content ?? '',
+          },
+        ])
+      } else if (event.type === 'iteration_end') {
+        iterationPromptTokens.push(event.prompt_tokens ?? 0)
+        this._promptTokens.set(event.prompt_tokens ?? 0)
+        // Seal open streaming blocks at iteration boundary
+        if (thinkingId) {
+          this._messages.update((msgs) =>
+            msgs.map((m) =>
+              m.id === thinkingId && m.kind === 'thinking' ? { ...m, done: true } : m,
+            ),
+          )
+          thinkingId = null
+        }
+        if (contentId) {
+          this._messages.update((msgs) =>
+            msgs.map((m) =>
+              m.id === contentId && m.kind === 'assistant' ? { ...m, streaming: false } : m,
+            ),
+          )
+          contentId = null
+        }
+      } else if (event.type === 'done' || event.type === 'error') {
+        await this._saveAgentMessages(iterationPromptTokens, toolResultIterations)
+        await this._reloadFromDb()
+        await this._computeTokenCountForLastMessage()
+        this._agentEventSub?.unsubscribe()
+        this._agentEventSub = null
+      }
+    })
+  }
+
+  // -------------------------------------------------------------------------
+  // Private: persist agent run to DB then reload
+  // -------------------------------------------------------------------------
+
+  private async _saveAgentMessages(
+    iterationPromptTokens: number[],
+    toolResultIterations: Map<string, number>,
+  ): Promise<void> {
+    if (!this._conversation) return
+    const conv = this._conversation
+    let pendingThinking: string | undefined
+
+    for (const msg of this._messages()) {
+      if (msg.kind === 'user') continue // already saved by startAgentRun
+      if (msg.kind === 'tool_confirm') continue // UI-only, not persisted
+
+      if (msg.kind === 'thinking') {
+        pendingThinking = msg.content
+      } else if (msg.kind === 'assistant' && msg.content) {
+        const dbMsg: Message = {
+          id: msg.id,
+          role: 'assistant',
+          content: msg.content,
+          thinking: pendingThinking,
+        }
+        await firstValueFrom(this.api.post_message(conv.id, dbMsg))
+        pendingThinking = undefined
+      } else if (msg.kind === 'tool_result') {
+        if (pendingThinking !== undefined) {
+          // Thinking block that was never paired with a content block — save as empty-content assistant
+          const dbMsg: Message = {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: '',
+            thinking: pendingThinking,
+          }
+          await firstValueFrom(this.api.post_message(conv.id, dbMsg))
+          pendingThinking = undefined
+        }
+        // token_count for a tool_result = prompt_tokens of the iteration that consumed it as input
+        const iterIdx = toolResultIterations.get(msg.id) ?? 0
+        const tokenCount =
+          iterIdx + 1 < iterationPromptTokens.length
+            ? iterationPromptTokens[iterIdx + 1]
+            : undefined
+        const dbMsg: Message = {
+          id: msg.id,
+          role: 'tool',
+          content: msg.content,
+          token_count: tokenCount,
+        }
+        await firstValueFrom(this.api.post_message(conv.id, dbMsg))
+      }
+    }
+  }
+
+  private async _reloadFromDb(): Promise<void> {
+    const id = this._conversationId()
+    if (!id) return
+    const dbMessages = await firstValueFrom(this.api.get_conversation_messages(id))
+    this._messages.set(this._fromDbMessages(dbMessages))
+  }
+
+  // -------------------------------------------------------------------------
+  // Private: type conversions between DisplayMessage and DB Message
+  // -------------------------------------------------------------------------
+
+  /** Convert DB messages (from GET /messages) into DisplayMessages for rendering. */
+  private _fromDbMessages(dbMessages: Message[]): DisplayMessage[] {
+    const result: DisplayMessage[] = []
+    for (const m of dbMessages) {
+      if (m.role === 'user') {
+        result.push({ kind: 'user', id: m.id, content: m.content, token_count: m.token_count })
+      } else if (m.role === 'assistant') {
+        if (m.content) {
+          result.push({
+            kind: 'assistant',
+            id: m.id,
+            content: m.content,
+            thinking: m.thinking ?? undefined,
+            token_count: m.token_count,
+          })
+        } else if (m.thinking) {
+          // Thinking-only message (no content) — show as a collapsed thinking block
+          result.push({ kind: 'thinking', id: m.id, content: m.thinking, done: true })
+        }
+      } else if (m.role === 'tool') {
+        result.push({
+          kind: 'tool_result',
+          id: m.id,
+          tool_name: '',
+          content: m.content,
+          token_count: m.token_count,
+        })
+      }
+    }
+    return result
+  }
+
+  /** Convert DisplayMessages into the flat role/content format the chat API expects. */
+  private _toOllamaMessages(messages: DisplayMessage[]): MessageForQuery[] {
+    const result: MessageForQuery[] = []
+    for (const m of messages) {
+      if (m.kind === 'user') {
+        result.push({ role: 'user', content: m.content })
+      } else if (m.kind === 'assistant' && m.content) {
+        result.push({ role: 'assistant', content: m.content })
+      } else if (m.kind === 'tool_result') {
+        result.push({ role: 'tool', content: m.content })
+      }
+      // thinking, tool_confirm, streaming assistant with no content → not sent to Ollama
+    }
+    return result
+  }
+
+  // -------------------------------------------------------------------------
+  // Private: DB persistence helpers
+  // -------------------------------------------------------------------------
+
+  private async _createConversation(userMsg: { id: string; content: string }): Promise<void> {
+    const title = userMsg.content.substring(0, 20)
+    const conversation = await firstValueFrom(this.api.post_conversation(title))
+    this._conversation = conversation
+    this._conversationId.set(conversation.id)
+    this.conversations.refresh()
+
+    // Persist whatever the user configured before sending (tools, prompt, agentic mode)
+    const pendingSettings = this._conversationSettings()
+    if (pendingSettings) {
+      await firstValueFrom(this.api.put_conversation_settings(conversation.id, pendingSettings))
+    }
+
     await firstValueFrom(
-      this.http.put(`http://localhost:8000/api/conversations/${id}/settings`, updated)
+      this.api.post_message(conversation.id, {
+        id: userMsg.id,
+        role: 'user',
+        content: userMsg.content,
+      }),
     )
   }
 
-  async deleteConversation(conv: Conversation) {
-    await firstValueFrom(this.http.delete(`http://localhost:8000/api/conversations/${conv.id}`))
-    this.conversations.refresh()
-    if (conv.id === this.conversation?.id) {
-      console.log('was selected conversation !!!!!')
-      this.selectConversation(undefined)
-    } else {
-      console.log('was NOT selected conversation ?!?!?!')
+  private async _addUserMessageToDb(userMsg: { id: string; content: string }): Promise<void> {
+    if (!this._conversation) {
+      return
     }
+    await firstValueFrom(
+      this.api.post_message(this._conversation.id, {
+        id: userMsg.id,
+        role: 'user',
+        content: userMsg.content,
+      }),
+    )
+  }
+
+  private async _computeTokenCountForLastMessage(): Promise<void> {
+    const id = this._conversationId()
+    if (!id) return
+    const result = await firstValueFrom(this.api.compute_conversation_token_count(id))
+    this._promptTokens.set(result.token_count)
+    this._messages.update((msgs) => {
+      const copy = [...msgs]
+      const last = copy[copy.length - 1]
+      if (!last) {
+        return copy
+      }
+      if (last.kind === 'user') {
+        copy[copy.length - 1] = { ...last, token_count: result.token_count }
+      } else if (last.kind === 'assistant') {
+        copy[copy.length - 1] = { ...last, token_count: result.token_count }
+      } else if (last.kind === 'tool_result') {
+        copy[copy.length - 1] = { ...last, token_count: result.token_count }
+      }
+      return copy
+    })
+  }
+
+  private _prependSystemPrompt(messages: MessageForQuery[]): MessageForQuery[] {
+    const promptId = this._conversationSettings()?.active_prompt_id
+    if (promptId === null || promptId === undefined) return messages
+    const prompt = this._prompts().find(p => p.id === promptId)
+    if (!prompt) return messages
+    return [{ role: 'system', content: prompt.content }, ...messages]
+  }
+
+  private _stopAgentAndClearSub(): void {
+    if (this.agentSvc.running()) {
+      this.agentSvc.abort()
+    }
+    this._agentEventSub?.unsubscribe()
+    this._agentEventSub = null
   }
 }

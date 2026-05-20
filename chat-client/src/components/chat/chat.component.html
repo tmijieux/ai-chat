@@ -1,17 +1,17 @@
-<!-- Token meta tooltip: pass msg object -->
-<ng-template #tokenMeta let-msg="msg">
+<!-- Token tooltip template -->
+<ng-template #tokenTooltip let-meta="meta">
     <div class="token-meta">
         ⓘ
         <div class="token-tooltip">
-            <div>Context: {{ msg.token_count | number:'1.0-0' }} / 16 384 ({{ msg.tokenPct }}%)</div>
-            @if (msg.tokenContribution != null) {
-                <div>This message: ~{{ msg.tokenContribution | number:'1.0-0' }} tokens</div>
+            <div>Context: {{ meta.token_count | number:'1.0-0' }} / 16 384 ({{ meta.token_pct }}%)</div>
+            @if (meta.token_contribution != null) {
+                <div>This message: ~{{ meta.token_contribution | number:'1.0-0' }} tokens</div>
             }
         </div>
     </div>
 </ng-template>
 
-<!-- Shared thinking block: pass text (string) and active (boolean = still streaming) -->
+<!-- Thinking block template: active = still streaming -->
 <ng-template #thinkingBlock let-text="text" let-active="active">
     @if (active) {
         <div class="p-4 bg-thinking-bubble rounded-lg shadow-md text-xs italic overflow-hidden">{{ text }}</div>
@@ -25,28 +25,25 @@
 
 <!-- =========================
    LEFT SIDEBAR
-   ================================= -->
+   ========================= -->
 <div class="w-64 flex flex-col shadow-2xl bg-sidebar slate-200">
 
-    <!-- Sidebar Header -->
     <div class="p-6 border-b border-gray-700 bg-gray-800">
         <h1 class="text-2xl font-extrabold tracking-wide text-white">AI Chat</h1>
         <p class="text-sm text-gray-400 mt-1">Context Token Counter</p>
     </div>
 
-    <!-- Conversation List -->
     <div class="flex-grow overflow-y-auto p-4 space-y-2">
-        <div class="cursor-pointer p-2 hover:bg-gray-700 rounded transition-all" (click)="chatSvc.startNewChat()">
+        <div class="cursor-pointer p-2 hover:bg-gray-700 rounded transition-all" (click)="startNewChat()">
             + New Chat
         </div>
         @for (conv of conversations$ | async; track conv.id) {
             <div class="p-2 cursor-pointer hover:bg-gray-700 rounded transition-all flex row items-center justify-between"
-                (click)="chatSvc.selectConversation(conv)">
-                {{conv.title}}
-
+                (click)="selectConversation(conv)">
+                {{ conv.title }}
                 <div class="px-1 p-relative"
-                 (click)="conv.menuOpened = !conv.menuOpened; $event.stopPropagation()"
-                 (clickOutside)="conv.menuOpened=false">
+                     (click)="conv.menuOpened = !conv.menuOpened; $event.stopPropagation()"
+                     (clickOutside)="conv.menuOpened=false">
                     ⋮
                     @if (conv.menuOpened) {
                         <div class="p-absolute top-100 right-0 bg-grey p-2" (click)="deleteConversation(conv)">
@@ -58,112 +55,99 @@
         }
     </div>
 
-    <!-- Footer/Settings -->
     <div class="p-4 border-t border-gray-700 bg-gray-800">
-        <button class="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-sm transition-all">
+        <button class="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-sm transition-all" [routerLink]="['/settings']">
             ⚙️ Settings
         </button>
     </div>
 </div>
 
-<!-- =================================================================
-   MAIN CHAT ZONE (The remaining flexible space)
-   ================================================================= -->
+<!-- =========================
+   MAIN CHAT AREA
+   ========================= -->
 <div class="flex flex-col flex-grow bg-main h-full">
 
-    <!-- Token Status Bar -->
+    <!-- Token status bar -->
     <div class="p-2 border-b bg-gray-100 flex justify-between items-center gap-4">
         <span class="font-medium text-gray-700">Context Tokens:
-            <span class="font-bold text-indigo-600">{{ displayTokens() }} / 16,384</span>
+            <span class="font-bold text-indigo-600">{{ chatSvc.promptTokens() }} / 16,384</span>
         </span>
-        <label class="flex items-center gap-2 cursor-pointer select-none text-sm">
-            <span class="text-gray-600">Agentic mode</span>
-            <input type="checkbox"
-                   [checked]="chatSvc.currentConversationSettings()?.agentic_mode ?? false"
-                   (change)="chatSvc.setAgenticMode($any($event.target).checked)"
-                   class="w-4 h-4 accent-indigo-600" />
-        </label>
+        <div class="flex items-center gap-3">
+            <label class="flex items-center gap-2 cursor-pointer select-none text-sm">
+                <span class="text-gray-600">Agentic mode</span>
+                <input type="checkbox"
+                       [checked]="chatSvc.currentConversationSettings()?.agentic_mode ?? false"
+                       (change)="chatSvc.setAgenticMode($any($event.target).checked)"
+                       class="w-4 h-4 accent-indigo-600" />
+            </label>
+            <button
+                class="text-gray-500 hover:text-indigo-600 text-lg leading-none transition-colors cursor-pointer"
+                title="Conversation settings"
+                (click)="drawerOpen.set(!drawerOpen())"
+            >⚙</button>
+        </div>
     </div>
 
-    <!-- Message History Container (Must be scrollable) -->
+    <!-- Single message list -->
     <div class="flex-grow v-scroll p-6 space-y-6">
 
-        <!-- Regular conversation messages -->
-        @for (msg of historyWithMeta(); track msg.id) {
-            <div class="flex w-800px mx-auto"
-                 [class]="msg.role === 'user' ? 'justify-end' : msg.role === 'tool' ? 'justify-center' : 'justify-start'">
-
-                @if (msg.role === 'user') {
-                    <div class="flex flex-col items-end gap-1">
-                        <div class="max-w-3xl p-4 shadow-md bg-user-bubble">{{ msg.content }}</div>
-                        @if (msg.token_count != null) {
-                            <ng-container *ngTemplateOutlet="tokenMeta; context: { msg: msg }"></ng-container>
+        <!-- Active prompt bubble — scrolls with messages -->
+        @let prompt = activePrompt();
+        @if (!!prompt) {
+            <div class="flex w-800px mx-auto">
+                <details class="bg-thinking-bubble rounded-lg shadow-sm overflow-hidden w-full max-w-3xl">
+                    <summary class="cursor-pointer p-4 text-xs font-medium select-none opacity-70 italic">
+                        System prompt: {{ prompt.name }}
+                        @if (prompt.token_count !== null) {
+                            <span class="opacity-60">(~{{ prompt.token_count }} tokens)</span>
                         }
-                    </div>
-                }
-
-                @if (msg.role === 'assistant') {
-                    <div class="flex flex-col max-w-3xl gap-2">
-                        @if (msg.loading) {
-                            <div class="p-4 bg-assistant-bubble shadow-md rounded-lg">...</div>
-                        } @else {
-                            @if (msg.thinking) {
-                                <ng-container *ngTemplateOutlet="thinkingBlock; context: { text: msg.thinking, active: msg.thinking_visible }"></ng-container>
-                            }
-                            @if (msg.content) {
-                                <div class="p-4 bg-assistant-bubble shadow-md rounded-lg">{{ msg.content }}</div>
-                            }
-                            @if (msg.token_count != null) {
-                                <ng-container *ngTemplateOutlet="tokenMeta; context: { msg: msg }"></ng-container>
-                            }
-                        }
-                    </div>
-                }
-
-                @if (msg.role === 'system') {
-                    <div class="max-w-3xl p-4 shadow-md bg-system-bubble rounded-lg">{{ msg.content }}</div>
-                }
-
-                @if (msg.role === 'tool') {
-                    <div class="flex flex-col w-full max-w-2xl gap-1">
-                        <details class="border border-gray-300 bg-gray-50 rounded-lg shadow-sm overflow-hidden">
-                            <summary class="cursor-pointer p-4 text-sm text-gray-600 font-medium select-none">Tool result</summary>
-                            <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-200">{{ msg.content }}</pre>
-                        </details>
-                        @if (msg.token_count != null) {
-                            <ng-container *ngTemplateOutlet="tokenMeta; context: { msg: msg }"></ng-container>
-                        }
-                    </div>
-                }
+                    </summary>
+                    <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-700 opacity-80">{{ activePrompt()!.content }}</pre>
+                </details>
             </div>
         }
-
-        <!-- Agent run messages (streamed live via WebSocket) -->
-        @for (msg of agentMessages(); track msg.id) {
+        
+        @for (msg of messagesWithMeta(); track msg.id) {
             <div class="flex w-800px mx-auto"
-                 [class]="msg.ui_type === 'user' ? 'justify-end' : msg.ui_type === 'tool_confirm' || msg.ui_type === 'tool_result' ? 'justify-center' : 'justify-start'">
+                 [class]="msg.kind === 'user' ? 'justify-end'
+                         : msg.kind === 'tool_confirm' || msg.kind === 'tool_result' ? 'justify-center'
+                         : 'justify-start'">
 
-                <!-- User bubble -->
-                @if (msg.ui_type === 'user') {
-                    <div class="max-w-3xl p-3 bg-user-bubble shadow-md align-self-end">
-                        {{ msg.content }}
+                <!-- User message -->
+                @if (msg.kind === 'user') {
+                    <div class="flex flex-col items-end gap-1">
+                        <div class="max-w-3xl p-4 shadow-md bg-user-bubble">{{ msg.content }}</div>
+                        @if (msg.token_meta) {
+                            <ng-container *ngTemplateOutlet="tokenTooltip; context: { meta: msg.token_meta }"></ng-container>
+                        }
                     </div>
                 }
 
-                <!-- Thinking block (shared template) -->
-                @if (msg.ui_type === 'thinking') {
+                <!-- Assistant message (non-agentic streaming or DB-loaded) -->
+                @if (msg.kind === 'assistant') {
+                    <div class="flex flex-col max-w-3xl gap-2">
+                        @if (msg.thinking) {
+                            <!-- Streaming: thinking with no content yet = still in thinking phase -->
+                            <ng-container *ngTemplateOutlet="thinkingBlock; context: { text: msg.thinking, active: msg.streaming && !msg.content }"></ng-container>
+                        }
+                        @if (msg.content) {
+                            <div class="p-4 bg-assistant-bubble shadow-md rounded-lg">{{ msg.content }}</div>
+                        } @else if (msg.streaming) {
+                            <div class="p-4 bg-assistant-bubble shadow-md rounded-lg">...</div>
+                        }
+                        @if (msg.token_meta) {
+                            <ng-container *ngTemplateOutlet="tokenTooltip; context: { meta: msg.token_meta }"></ng-container>
+                        }
+                    </div>
+                }
+
+                <!-- Live streaming thinking block (agent run only) -->
+                @if (msg.kind === 'thinking') {
                     <ng-container *ngTemplateOutlet="thinkingBlock; context: { text: msg.content, active: !msg.done }"></ng-container>
                 }
 
-                <!-- Content block -->
-                @if (msg.ui_type === 'content') {
-                    <div class="max-w-3xl p-4 bg-assistant-bubble shadow-md rounded-lg">
-                        {{ msg.content }}
-                    </div>
-                }
-
                 <!-- Tool confirmation card -->
-                @if (msg.ui_type === 'tool_confirm') {
+                @if (msg.kind === 'tool_confirm') {
                     <div class="w-full max-w-2xl border border-amber-400 bg-amber-50 rounded-lg p-4 shadow-md">
                         <div class="flex items-center gap-2 mb-2">
                             <span class="font-semibold text-amber-800">Tool request:</span>
@@ -178,13 +162,11 @@
                         <pre class="text-xs bg-white border border-amber-200 rounded p-2 overflow-auto max-h-40 whitespace-pre-wrap">{{ msg.preview }}</pre>
                         @if (msg.confirmed === null) {
                             <div class="flex gap-2 mt-3">
-                                <button
-                                    (click)="confirmTool(msg.tool_id!, true)"
+                                <button (click)="confirmTool(msg.tool_id, true)"
                                     class="px-4 py-1.5 bg-green-600 hover:bg-green-700 text-white text-sm rounded transition-all">
                                     Approve
                                 </button>
-                                <button
-                                    (click)="confirmTool(msg.tool_id!, false)"
+                                <button (click)="confirmTool(msg.tool_id, false)"
                                     class="px-4 py-1.5 bg-red-500 hover:bg-red-600 text-white text-sm rounded transition-all">
                                     Reject
                                 </button>
@@ -193,27 +175,30 @@
                     </div>
                 }
 
-                <!-- Tool result block (collapsible) -->
-                @if (msg.ui_type === 'tool_result') {
-                    <details class="w-full max-w-2xl border border-gray-300 bg-gray-50 rounded-lg shadow-sm overflow-hidden">
-                        <summary class="cursor-pointer p-4 text-sm text-gray-600 font-medium select-none">
-                            Tool result: <code class="bg-gray-200 px-1 rounded">{{ msg.tool_name }}</code>
-                        </summary>
-                        <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-200">{{ msg.content }}</pre>
-                    </details>
+                <!-- Tool result (collapsible) -->
+                @if (msg.kind === 'tool_result') {
+                    <div class="flex flex-col w-full max-w-2xl gap-1">
+                        <details class="border border-gray-300 bg-gray-50 rounded-lg shadow-sm overflow-hidden">
+                            <summary class="cursor-pointer p-4 text-sm text-gray-600 font-medium select-none">
+                                Tool result@if (msg.tool_name) {: <code class="bg-gray-200 px-1 rounded">{{ msg.tool_name }}</code>}
+                            </summary>
+                            <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-200">{{ msg.content }}</pre>
+                        </details>
+                        @if (msg.token_meta) {
+                            <ng-container *ngTemplateOutlet="tokenTooltip; context: { meta: msg.token_meta }"></ng-container>
+                        }
+                    </div>
                 }
             </div>
         }
 
-        <!-- Agent phase indicator -->
-        @if (agentPhase() === 'thinking') {
+        <!-- Agent streaming phase indicator -->
+        @if (chatSvc.phase() === 'thinking') {
             <div class="flex justify-start w-800px mx-auto">
-                <div class="p-4 bg-thinking-bubble rounded-lg shadow-md text-xs italic animate-pulse">
-                    Thinking...
-                </div>
+                <div class="p-4 bg-thinking-bubble rounded-lg shadow-md text-xs italic animate-pulse">Thinking...</div>
             </div>
         }
-        @if (agentPhase() === 'responding') {
+        @if (chatSvc.phase() === 'responding') {
             <div class="flex justify-start w-800px mx-auto">
                 <div class="flex items-center gap-2 px-3 py-1 text-xs opacity-50">
                     <span class="animate-pulse">●</span> responding
@@ -222,7 +207,7 @@
         }
     </div>
 
-    <!-- Input Area -->
+    <!-- Input area -->
     <div class="p-6 border-t bg-white">
         <div class="flex items-end gap-3">
             <textarea
@@ -231,21 +216,29 @@
                 placeholder="Message the AI... (Shift+Enter for newline)"
                 rows="1"
                 class="flex-grow resize-none p-3 border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                [disabled]="((isLoading$ | async) ?? false) || agentRunning()"></textarea>
-            @if (agentRunning()) {
-                <button
-                    (click)="abortAgent()"
+                [disabled]="chatSvc.isLoading() || chatSvc.agentRunning()"></textarea>
+            @if (chatSvc.agentRunning()) {
+                <button (click)="abortAgent()"
                     class="send-button bg-red-500 hover:bg-red-600 text-white px-6 py-3 rounded-lg transition-all">
                     Stop
                 </button>
             } @else {
-                <button
-                    (click)="sendMessage(null)"
-                    [disabled]="(!currentInput().trim() || (isLoading$ | async)) ?? false"
+                <button (click)="sendMessage(null)"
+                    [disabled]="!currentInput().trim() || chatSvc.isLoading()"
                     class="send-button bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-lg disabled:bg-gray-300 transition-all">
-                    {{ (isLoading$ | async) ? '...' : 'Send' }}
+                    {{ chatSvc.isLoading() ? '...' : 'Send' }}
                 </button>
             }
         </div>
     </div>
 </div>
+
+<!-- Per-conversation settings drawer -->
+@if (drawerOpen()) {
+    <app-conversation-settings
+        [conversationId]="chatSvc.currentConversationId()"
+        [settings]="chatSvc.currentConversationSettings()!"
+        (closed)="drawerOpen.set(false)"
+        (settingsChanged)="onSettingsChanged($event)"
+    />
+}

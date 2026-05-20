@@ -3,9 +3,7 @@ import asyncio
 import aiohttp
 from typing import Any
 
-from .tools_definition import TOOLS
-from .system_prompt import SYSTEM_PROMPT
-from .tool_implementation import execute_tool
+from .tools import TOOL_REGISTRY, get_ollama_tool_list
 
 OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
 MODEL_NAME = "qwen3.5:9b"
@@ -42,7 +40,12 @@ class AgentSession:
             future.set_result((approved, reason))
 
 
-async def chat_with_tools(messages: list[dict[str, Any]], session: AgentSession) -> bool:
+async def chat_with_tools(
+    messages: list[dict[str, Any]],
+    session: AgentSession,
+    tools: list[dict],
+    working_directory: str | None,
+) -> bool:
     """
     One iteration of the Ollama call + tool execution loop.
     Returns True when the agent is done (no tool calls were made).
@@ -53,7 +56,7 @@ async def chat_with_tools(messages: list[dict[str, Any]], session: AgentSession)
             json={
                 "model": MODEL_NAME,
                 "messages": messages,
-                "tools": [{"type": "function", "function": t} for t in TOOLS],
+                "tools": tools,
                 "stream": True,
                 "options": {"temperature": 0.3},
             },
@@ -103,7 +106,18 @@ async def chat_with_tools(messages: list[dict[str, Any]], session: AgentSession)
                                     "arguments": tool_args,
                                 })
 
-                                tool_output = await execute_tool(tool_name, call_id, tool_args, session)
+                                if tool_name not in TOOL_REGISTRY:
+                                    result_dict = {
+                                        "tool": tool_name,
+                                        "status": "error",
+                                        "error": {"message": f"Unknown tool: {tool_name}"},
+                                    }
+                                else:
+                                    result_dict = await TOOL_REGISTRY[tool_name].execute(
+                                        tool_args, session, working_directory
+                                    )
+
+                                tool_output = json.dumps(result_dict)
 
                                 await session.emit({
                                     "type": "tool_result",
@@ -135,12 +149,17 @@ async def chat_with_tools(messages: list[dict[str, Any]], session: AgentSession)
     return not has_tool_calls
 
 
-async def run_agent(session: AgentSession, messages: list[dict[str, Any]]) -> None:
+async def run_agent(
+    session: AgentSession,
+    messages: list[dict[str, Any]],
+    tools: list[dict],
+    working_directory: str | None,
+) -> None:
     """Run the full agent loop until done, emitting events via session."""
     try:
         finished = False
         while not finished:
-            finished = await chat_with_tools(messages, session)
+            finished = await chat_with_tools(messages, session, tools, working_directory)
         await session.emit({"type": "done"})
     except asyncio.CancelledError:
         await session.emit({"type": "error", "message": "Agent was aborted"})

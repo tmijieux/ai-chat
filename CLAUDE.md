@@ -1,3 +1,7 @@
+PLAN THOUROUGHLY even when not asked. Create PRDs and ADR to remember details of plan
+
+DONT READ catchall.py it currently unused and irrelevant.
+
 # AI Chat Application
 
 A local AI chat app using Ollama, with an Angular frontend and FastAPI backend. Includes an autonomous coding agent subsystem.
@@ -201,7 +205,7 @@ uvicorn main:app --reload
 ### Frontend
 ```bash
 cd chat-client
-ng serve
+npm start
 ```
 
 Requires Ollama running with a model loaded (default: `qwen3.5:9b`).

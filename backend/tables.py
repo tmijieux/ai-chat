@@ -7,7 +7,7 @@ class Conversation(Base):
     __tablename__ = "conversations"
     id = column(String, primary_key=True, index=True)
     title = column(String, index=True, nullable=False)
-    # JSON: {active_prompt_ids, active_tool_names, tools_enabled, agentic_mode}
+    # JSON: {active_prompt_id, active_tool_names, agentic_mode, working_directory}
     settings = column(Text, nullable=True)
     created_at = column(String, nullable=False)
     # Logical FK to messages.id — not declared as FK to avoid circular constraint on SQLite
@@ -34,5 +34,6 @@ class SystemPromptTemplate(Base):
     # general | code | summarization | context_compaction | state_storage
     category = column(String, nullable=False)
     content = column(Text, nullable=False)
-    is_global = column(Integer, nullable=False, default=1)  # 1=true 0=false
+    is_default = column(Integer, nullable=False, default=0)  # 1=true 0=false
+    token_count = column(Integer, nullable=True)
     created_at = column(String, nullable=False)
