@@ -2,6 +2,7 @@ import datetime
 import uuid
 import logging
 import json
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, Depends, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
@@ -202,6 +203,30 @@ def _msg_dict(m: db.Message) -> dict:
     }
 
 
+def _enrich_branch(path: list[db.Message], all_msgs: list[db.Message]) -> list[dict]:
+    """Return _msg_dict for each message in path, enriched with sibling navigation metadata."""
+    children_by_parent: dict[str | None, list[db.Message]] = {}
+    for m in all_msgs:
+        children_by_parent.setdefault(m.parent_id, []).append(m)
+    for siblings in children_by_parent.values():
+        siblings.sort(key=lambda m: m.created_at)
+
+    result = []
+    for m in path:
+        siblings = children_by_parent.get(m.parent_id, [m])
+        idx = next((i for i, s in enumerate(siblings) if s.id == m.id), 0)
+        count = len(siblings)
+        result.append({
+            **_msg_dict(m),
+            "sibling_count": count,
+            "sibling_index": idx + 1,
+            "prev_sibling_id": siblings[idx - 1].id if idx > 0 else None,
+            "next_sibling_id": siblings[idx + 1].id if idx < count - 1 else None,
+            "has_children": len(children_by_parent.get(m.id, [])) > 0,
+        })
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Conversations
 # ---------------------------------------------------------------------------
@@ -286,7 +311,7 @@ async def set_active_branch(
     path = _build_active_branch_path(all_msgs, leaf_id)
     return {
         "active_message_id": leaf_id,
-        "messages": [_msg_dict(m) for m in path],
+        "messages": _enrich_branch(path, all_msgs),
     }
 
 
@@ -310,7 +335,7 @@ async def get_conversation_messages(
         ).all()
     )
     path = _build_active_branch_path(all_msgs, conv.active_message_id)
-    return [_msg_dict(m) for m in path]
+    return _enrich_branch(path, all_msgs)
 
 
 @app.get("/api/conversations/{id}/tree")
@@ -419,7 +444,7 @@ async def branch_message(
 
 @app.delete("/api/conversations/{conv_id}/messages/{msg_id}")
 async def delete_message_branch(
-    conv_id: str, msg_id: str, sess: AsyncSession = Depends(get_db_session)
+    conv_id: str, msg_id: str, subtree: bool = True, sess: AsyncSession = Depends(get_db_session)
 ):
     conv = (
         await sess.scalars(select(db.Conversation).where(db.Conversation.id == conv_id))
@@ -434,37 +459,62 @@ async def delete_message_branch(
             )
         ).all()
     )
+    msg_map = {m.id: m for m in all_msgs}
     children_map: dict[str, list[str]] = {}
     for m in all_msgs:
         if m.parent_id:
             children_map.setdefault(m.parent_id, []).append(m.id)
 
-    to_delete: set[str] = set()
-    queue = [msg_id]
-    while queue:
-        current = queue.pop()
-        to_delete.add(current)
-        queue.extend(children_map.get(current, []))
+    target = msg_map.get(msg_id)
+    if target is None:
+        raise HTTPException(404)
 
-    if conv.active_message_id in to_delete:
-        msg_map = {m.id: m for m in all_msgs}
-        target = msg_map.get(msg_id)
-        new_active: str | None = None
-        if target and target.parent_id:
-            siblings = [
-                m.id
-                for m in all_msgs
-                if m.parent_id == target.parent_id and m.id not in to_delete
-            ]
+    if subtree:
+        to_delete: set[str] = set()
+        queue = [msg_id]
+        while queue:
+            current = queue.pop()
+            to_delete.add(current)
+            queue.extend(children_map.get(current, []))
+
+        if conv.active_message_id in to_delete:
             remaining = [m for m in all_msgs if m.id not in to_delete]
-            if siblings:
-                new_active = _find_deepest_leaf(remaining, siblings[0])
+            new_active: str | None = None
+            if target.parent_id:
+                siblings = [m.id for m in all_msgs if m.parent_id == target.parent_id and m.id not in to_delete]
+                if siblings:
+                    new_active = _find_deepest_leaf(remaining, siblings[0])
+                else:
+                    new_active = target.parent_id
             else:
-                new_active = target.parent_id
-        conv.active_message_id = new_active
+                other_roots = [m.id for m in remaining if m.parent_id is None]
+                if other_roots:
+                    new_active = _find_deepest_leaf(remaining, other_roots[0])
+            conv.active_message_id = new_active
 
-    await sess.execute(delete(db.Message).where(db.Message.id.in_(list(to_delete))))
-    return {"deleted": list(to_delete)}
+        await sess.execute(delete(db.Message).where(db.Message.id.in_(list(to_delete))))
+        return {"deleted": list(to_delete)}
+    else:
+        # Single-message delete: re-parent direct children to target's parent
+        direct_children = children_map.get(msg_id, [])
+        for child_id in direct_children:
+            child = msg_map.get(child_id)
+            if child:
+                child.parent_id = target.parent_id
+        await sess.flush()
+
+        if conv.active_message_id == msg_id:
+            remaining = [m for m in all_msgs if m.id != msg_id]
+            if direct_children:
+                new_active = _find_deepest_leaf(remaining, direct_children[0])
+            elif target.parent_id:
+                new_active = target.parent_id
+            else:
+                new_active = next((m.id for m in remaining if m.parent_id is None), None)
+            conv.active_message_id = new_active
+
+        await sess.execute(delete(db.Message).where(db.Message.id == msg_id))
+        return {"deleted": [msg_id]}
 
 
 # ---------------------------------------------------------------------------
@@ -566,6 +616,28 @@ async def delete_system_prompt(
 
 
 # ---------------------------------------------------------------------------
+# Utils
+# ---------------------------------------------------------------------------
+
+@app.get("/api/utils/browse-directory")
+async def browse_directory(path: str | None = None):
+    current = Path(path).resolve() if path else Path.cwd()
+    try:
+        entries = sorted(
+            [
+                {"name": e.name, "path": str(e)}
+                for e in current.iterdir()
+                if e.is_dir() and not e.name.startswith(".")
+            ],
+            key=lambda e: e["name"].lower(),
+        )
+    except PermissionError:
+        raise HTTPException(403, detail=f"Permission denied: {current}")
+    parent = str(current.parent) if current != current.parent else None
+    return {"path": str(current), "parent": parent, "entries": entries}
+
+
+# ---------------------------------------------------------------------------
 # Agent tools
 # ---------------------------------------------------------------------------
 
@@ -647,7 +719,7 @@ async def count_conversation_tokens(id: str, sess: AsyncSession = Depends(get_db
 
     settings = _parse_conv_settings(conv)
     messages = await _build_inference_context(branch, settings.active_prompt_id, sess)
-    tool_names = settings.active_tool_names or list(TOOL_REGISTRY.keys())
+    tool_names = settings.active_tool_names if conv.settings is not None else list(TOOL_REGISTRY.keys())
     token_count_value = await count_token(messages, tool_names=tool_names)
 
     last_id: str | None = None
@@ -687,6 +759,8 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
         init_data = await websocket.receive_json()
         user_message: str = init_data.get("message", "")
         conversation_id: str | None = init_data.get("conversation_id")
+        # When set, the user message is already in DB (edit flow) — don't append it again.
+        user_message_id: str | None = init_data.get("user_message_id")
 
         conv: db.Conversation | None = None
         branch: list[db.Message] = []
@@ -704,19 +778,23 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
                 branch = _build_active_branch_path(all_msgs, conv.active_message_id)
 
         settings = _parse_conv_settings(conv) if conv else ld.ConversationSettings()
-        active_tool_names = settings.active_tool_names or list(TOOL_REGISTRY.keys())
+        active_tool_names = settings.active_tool_names if (conv and conv.settings is not None) else list(TOOL_REGISTRY.keys())
         working_directory = settings.working_directory
 
         tools = get_ollama_tool_list(active_tool_names)
         messages = await _build_inference_context(branch, settings.active_prompt_id, sess)
-        messages.append({"role": "user", "content": user_message})
+        if user_message_id is None:
+            messages.append({"role": "user", "content": user_message})
 
-        last_user_msg_id: str | None = None
-        if conversation_id and conv and branch:
-            for m in reversed(branch):
-                if m.role == "user":
-                    last_user_msg_id = m.id
-                    break
+        if user_message_id is not None:
+            last_user_msg_id: str | None = user_message_id
+        else:
+            last_user_msg_id = None
+            if conversation_id and conv and branch:
+                for m in reversed(branch):
+                    if m.role == "user":
+                        last_user_msg_id = m.id
+                        break
 
         session = AgentSession()
         agent_task = asyncio.create_task(run_agent(session, messages, tools, working_directory))

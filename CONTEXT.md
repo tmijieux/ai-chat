@@ -1,3 +1,14 @@
+# CSS Conventions
+
+The frontend does **not** use Tailwind. All CSS utility classes are hand-declared in `chat-client/src/styles.scss` following a Tailwind-like naming convention. When adding new styles:
+1. Add the utility class to `styles.scss` (grouped by category with a comment header).
+2. Use that class in the template — never write component-scoped CSS for utilities.
+3. Component `.scss` files are only for component-specific, non-reusable styles (e.g. `.token-meta` in `chat.component.scss`).
+
+The `styles.scss` already defines layout (`.flex`, `.flex-col`, `.items-center`), spacing (`.p-2`, `.p-4`, `.gap-2`), colors (`.bg-main`, `.bg-sidebar`, `.bg-overlay`), positioning (`.fixed`, `.inset-0`, `.z-50`), typography (`.text-sm`, `.text-xs`, `.font-mono`), and button patterns (`.btn`, `.btn-ghost`, `.btn-primary`). Check there before adding new classes.
+
+Avoid inline styles except for one-off values (e.g. a specific pixel width) that don't warrant a utility class.
+
 # Domain Glossary
 
 ## Workspace

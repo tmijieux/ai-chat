@@ -1,5 +1,6 @@
 import subprocess
 from .base import BaseTool, tool_error
+from agent.file_utils import file_in_directory, resolve_workspace_path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -8,7 +9,7 @@ if TYPE_CHECKING:
 
 class ListDirectoryTool(BaseTool):
     name = "list_directory"
-    description = "List files and directories within a specific path. Use this to understand the project structure, file hierarchy, and permissions."
+    description = "List files and directories within a specific path. Use this to understand the project structure, file hierarchy, and permissions. Requires a workspace directory to be configured in conversation settings."
     parameters = {
         "type": "object",
         "properties": {
@@ -36,14 +37,18 @@ class ListDirectoryTool(BaseTool):
         if working_directory is None:
             return tool_error(self.name, "No workspace configured — file tools are disabled.")
 
-        path = args.get("path", "")
+        path = args.get("path", ".")
         is_recursive = args.get("recursive", False)
         maximum_depth = args.get("maximum_depth", 3 if is_recursive else 1)
 
+        absolute_path = resolve_workspace_path(path, working_directory)
+        if not file_in_directory(str(absolute_path), working_directory):
+            return tool_error(self.name, f"Listing outside workspace is forbidden. Workspace: {working_directory}")
+
         exe = "c:\\Program Files\\Git\\usr\\bin\\find.exe"
-        cmd = [exe, path, "-maxdepth", str(maximum_depth)]
+        cmd = [exe, str(absolute_path), "-maxdepth", str(maximum_depth)]
         proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if proc.returncode == 0:
-            return {"tool": self.name, "path": path, "status": "success", "content": proc.stdout.decode()}
+            return {"tool": self.name, "path": str(absolute_path), "status": "success", "content": proc.stdout.decode()}
         else:
             return tool_error(self.name, proc.stderr.decode())

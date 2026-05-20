@@ -108,85 +108,153 @@
         }
         
         @for (msg of messagesWithMeta(); track msg.id) {
-            <div class="flex w-800px mx-auto"
-                 [class]="msg.kind === 'user' ? 'justify-end'
-                         : msg.kind === 'tool_confirm' || msg.kind === 'tool_result' ? 'justify-center'
-                         : 'justify-start'">
+            <div class="msg-row w-800px mx-auto" [class.has-siblings]="(msg.sibling_count ?? 1) > 1">
 
-                <!-- User message -->
-                @if (msg.kind === 'user') {
-                    <div class="flex flex-col items-end gap-1">
-                        <div class="max-w-3xl p-4 shadow-md bg-user-bubble">{{ msg.content }}</div>
-                        @if (msg.token_meta) {
-                            <ng-container *ngTemplateOutlet="tokenTooltip; context: { meta: msg.token_meta }"></ng-container>
-                        }
+                <!-- Sibling navigator (above message) -->
+                @if ((msg.sibling_count ?? 1) > 1) {
+                    <div class="sibling-nav" [class.justify-end]="msg.kind === 'user'" [class.justify-start]="msg.kind !== 'user'">
+                        <button [disabled]="!msg.prev_sibling_id" (click)="msg.prev_sibling_id && onNavigateSibling(msg.prev_sibling_id)">←</button>
+                        <span>{{ msg.sibling_index }} / {{ msg.sibling_count }}</span>
+                        <button [disabled]="!msg.next_sibling_id" (click)="msg.next_sibling_id && onNavigateSibling(msg.next_sibling_id)">→</button>
                     </div>
                 }
 
-                <!-- Assistant message (non-agentic streaming or DB-loaded) -->
-                @if (msg.kind === 'assistant') {
-                    <div class="flex flex-col max-w-3xl gap-2">
-                        @if (msg.thinking) {
-                            <!-- Streaming: thinking with no content yet = still in thinking phase -->
-                            <ng-container *ngTemplateOutlet="thinkingBlock; context: { text: msg.thinking, active: msg.streaming && !msg.content }"></ng-container>
-                        }
-                        @if (msg.content) {
-                            <div class="p-4 bg-assistant-bubble shadow-md rounded-lg">{{ msg.content }}</div>
-                        } @else if (msg.streaming) {
-                            <div class="p-4 bg-assistant-bubble shadow-md rounded-lg">...</div>
-                        }
-                        @if (msg.token_meta) {
-                            <ng-container *ngTemplateOutlet="tokenTooltip; context: { meta: msg.token_meta }"></ng-container>
-                        }
-                    </div>
-                }
+                <!-- Message content row -->
+                <div class="flex"
+                     [class]="msg.kind === 'user' ? 'justify-end'
+                             : msg.kind === 'tool_confirm' || msg.kind === 'tool_result' ? 'justify-center'
+                             : 'justify-start'">
 
-                <!-- Live streaming thinking block (agent run only) -->
-                @if (msg.kind === 'thinking') {
-                    <ng-container *ngTemplateOutlet="thinkingBlock; context: { text: msg.content, active: !msg.done }"></ng-container>
-                }
-
-                <!-- Tool confirmation card -->
-                @if (msg.kind === 'tool_confirm') {
-                    <div class="w-full max-w-2xl border border-amber-400 bg-amber-50 rounded-lg p-4 shadow-md">
-                        <div class="flex items-center gap-2 mb-2">
-                            <span class="font-semibold text-amber-800">Tool request:</span>
-                            <code class="bg-amber-100 px-2 py-0.5 rounded text-amber-900 text-sm">{{ msg.tool_name }}</code>
-                            @if (msg.confirmed === true) {
-                                <span class="ml-auto text-green-600 text-sm font-medium">Approved</span>
+                    <!-- User message -->
+                    @if (msg.kind === 'user') {
+                        <div class="flex flex-col items-end gap-1">
+                            @if (editingMessageId() === msg.id) {
+                                <div class="flex flex-col gap-2 max-w-3xl w-full">
+                                    <textarea class="field" rows="4"
+                                        [value]="editContent()"
+                                        (input)="editContent.set($any($event.target).value)"
+                                        (keydown)="onEditKeydown($event, msg.id)"
+                                        autofocus></textarea>
+                                    <div class="flex gap-2 justify-end">
+                                        <button class="btn btn-ghost text-xs" (click)="cancelEdit()">Cancel</button>
+                                        <button class="btn btn-primary text-xs" (click)="submitEdit(msg.id)">Send</button>
+                                    </div>
+                                </div>
+                            } @else {
+                                <div class="max-w-3xl p-4 shadow-md bg-user-bubble">{{ msg.content }}</div>
                             }
-                            @if (msg.confirmed === false) {
-                                <span class="ml-auto text-red-600 text-sm font-medium">Rejected</span>
+                            @if (msg.token_meta) {
+                                <ng-container *ngTemplateOutlet="tokenTooltip; context: { meta: msg.token_meta }"></ng-container>
                             }
                         </div>
-                        <pre class="text-xs bg-white border border-amber-200 rounded p-2 overflow-auto max-h-40 whitespace-pre-wrap">{{ msg.preview }}</pre>
-                        @if (msg.confirmed === null) {
-                            <div class="flex gap-2 mt-3">
-                                <button (click)="confirmTool(msg.tool_id, true)"
-                                    class="px-4 py-1.5 bg-green-600 hover:bg-green-700 text-white text-sm rounded transition-all">
-                                    Approve
-                                </button>
-                                <button (click)="confirmTool(msg.tool_id, false)"
-                                    class="px-4 py-1.5 bg-red-500 hover:bg-red-600 text-white text-sm rounded transition-all">
-                                    Reject
-                                </button>
-                            </div>
-                        }
-                    </div>
-                }
+                    }
 
-                <!-- Tool result (collapsible) -->
-                @if (msg.kind === 'tool_result') {
-                    <div class="flex flex-col w-full max-w-2xl gap-1">
-                        <details class="border border-gray-300 bg-gray-50 rounded-lg shadow-sm overflow-hidden">
-                            <summary class="cursor-pointer p-4 text-sm text-gray-600 font-medium select-none">
-                                Tool result@if (msg.tool_name) {: <code class="bg-gray-200 px-1 rounded">{{ msg.tool_name }}</code>}
-                            </summary>
-                            <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-200">{{ msg.content }}</pre>
-                        </details>
-                        @if (msg.token_meta) {
-                            <ng-container *ngTemplateOutlet="tokenTooltip; context: { meta: msg.token_meta }"></ng-container>
+                    <!-- Assistant message (non-agentic streaming or DB-loaded) -->
+                    @if (msg.kind === 'assistant') {
+                        <div class="flex flex-col max-w-3xl gap-2">
+                            @if (msg.thinking) {
+                                <ng-container *ngTemplateOutlet="thinkingBlock; context: { text: msg.thinking, active: msg.streaming && !msg.content }"></ng-container>
+                            }
+                            @if (msg.content) {
+                                <div class="p-4 bg-assistant-bubble shadow-md rounded-lg">{{ msg.content }}</div>
+                            } @else if (msg.streaming) {
+                                <div class="p-4 bg-assistant-bubble shadow-md rounded-lg">...</div>
+                            }
+                            @if (msg.token_meta) {
+                                <ng-container *ngTemplateOutlet="tokenTooltip; context: { meta: msg.token_meta }"></ng-container>
+                            }
+                        </div>
+                    }
+
+                    <!-- Live streaming thinking block (agent run only) -->
+                    @if (msg.kind === 'thinking') {
+                        <ng-container *ngTemplateOutlet="thinkingBlock; context: { text: msg.content, active: !msg.done }"></ng-container>
+                    }
+
+                    <!-- Tool confirmation card -->
+                    @if (msg.kind === 'tool_confirm') {
+                        <div class="w-full max-w-2xl border border-amber-400 bg-amber-50 rounded-lg p-4 shadow-md">
+                            <div class="flex items-center gap-2 mb-2">
+                                <span class="font-semibold text-amber-800">Tool request:</span>
+                                <code class="bg-amber-100 px-2 py-0.5 rounded text-amber-900 text-sm">{{ msg.tool_name }}</code>
+                                @if (msg.confirmed === true) {
+                                    <span class="ml-auto text-green-600 text-sm font-medium">Approved</span>
+                                }
+                                @if (msg.confirmed === false) {
+                                    <span class="ml-auto text-red-600 text-sm font-medium">Rejected</span>
+                                }
+                            </div>
+                            <pre class="text-xs bg-white border border-amber-200 rounded p-2 overflow-auto max-h-40 whitespace-pre-wrap">{{ msg.preview }}</pre>
+                            @if (msg.confirmed === null) {
+                                @if (rejectingToolId() === msg.tool_id) {
+                                    <div class="mt-3 flex flex-col gap-2">
+                                        <textarea
+                                            class="w-full bg-white border border-amber-300 rounded px-3 py-2 text-sm text-gray-800 resize-none"
+                                            rows="2"
+                                            placeholder="Reason for rejection (optional)…"
+                                            [value]="rejectReason()"
+                                            (input)="rejectReason.set($any($event.target).value)"
+                                        ></textarea>
+                                        <div class="flex gap-2">
+                                            <button (click)="sendRejection(msg.tool_id)"
+                                                class="px-4 py-1.5 bg-red-500 hover:bg-red-600 text-white text-sm rounded transition-all">
+                                                Send rejection
+                                            </button>
+                                            <button (click)="rejectingToolId.set(null)"
+                                                class="px-4 py-1.5 text-gray-600 hover:text-gray-800 text-sm rounded transition-all">
+                                                Cancel
+                                            </button>
+                                        </div>
+                                    </div>
+                                } @else {
+                                    <div class="flex gap-2 mt-3">
+                                        <button (click)="confirmTool(msg.tool_id, true)"
+                                            class="px-4 py-1.5 bg-green-600 hover:bg-green-700 text-white text-sm rounded transition-all">
+                                            Approve
+                                        </button>
+                                        <button (click)="startReject(msg.tool_id)"
+                                            class="px-4 py-1.5 bg-red-500 hover:bg-red-600 text-white text-sm rounded transition-all">
+                                            Reject
+                                        </button>
+                                    </div>
+                                }
+                            }
+                        </div>
+                    }
+
+                    <!-- Tool result (collapsible) -->
+                    @if (msg.kind === 'tool_result') {
+                        <div class="flex flex-col w-full max-w-2xl gap-1">
+                            <details class="border border-gray-300 bg-gray-50 rounded-lg shadow-sm overflow-hidden">
+                                <summary class="cursor-pointer p-4 text-sm text-gray-600 font-medium select-none">
+                                    Tool result@if (msg.tool_name) {: <code class="bg-gray-200 px-1 rounded">{{ msg.tool_name }}</code>}
+                                </summary>
+                                <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-200">{{ msg.content }}</pre>
+                            </details>
+                            @if (msg.token_meta) {
+                                <ng-container *ngTemplateOutlet="tokenTooltip; context: { meta: msg.token_meta }"></ng-container>
+                            }
+                        </div>
+                    }
+                </div>
+
+                <!-- Action buttons (revealed on .msg-row hover, hidden for tool_confirm) -->
+                @if (msg.kind !== 'tool_confirm') {
+                    <div class="msg-row-actions">
+                        @if (msg.kind === 'user' && editingMessageId() !== msg.id) {
+                            <button class="msg-action-btn" title="Edit" (click)="startEdit(msg.id, msg.content)">✎</button>
                         }
+                        <div class="p-relative">
+                            <button class="msg-action-btn" title="More actions" (click)="toggleMenu(msg.id, $event)">⋮</button>
+                            @if (openMenuId() === msg.id) {
+                                <div class="msg-menu">
+                                    @if ($any(msg).has_children) {
+                                        <button (click)="onDeleteMessage(msg.id, false)">Delete message</button>
+                                    }
+                                    <button class="danger" (click)="onDeleteMessage(msg.id, true)">Delete branch</button>
+                                </div>
+                            }
+                        </div>
                     </div>
                 }
             </div>

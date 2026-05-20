@@ -105,7 +105,17 @@ export class ChatService {
   private _agentEventSub: Subscription | null = null
 
   constructor() {
-    this.api.get_system_prompts().subscribe(p => this._prompts.set(p))
+    this.api.get_system_prompts().subscribe(p => {
+      this._prompts.set(p)
+      // Patch pending new-chat settings with the default prompt if none is selected yet
+      const current = this._conversationSettings()
+      if (current !== null && current.active_prompt_id === null) {
+        const defaultId = p.find(prompt => prompt.is_default === 1)?.id ?? null
+        if (defaultId !== null) {
+          this._conversationSettings.set({ ...current, active_prompt_id: defaultId })
+        }
+      }
+    })
     this.api.get_agent_tools().subscribe(tools => {
       const names = tools.map((t: AgentToolMeta) => t.name)
       this._allToolNames.set(names)
@@ -128,11 +138,13 @@ export class ChatService {
     this._promptTokens.set(0)
     this._conversation = undefined
     this._conversationId.set(undefined)
+    const defaultPromptId = this._prompts().find(p => p.is_default === 1)?.id ?? null
+    const lastWorkingDir = this._conversationSettings()?.working_directory ?? null
     this._conversationSettings.set({
       agentic_mode: true,
-      active_prompt_id: null,
+      active_prompt_id: defaultPromptId,
       active_tool_names: this._allToolNames(),
-      working_directory: null,
+      working_directory: lastWorkingDir,
     })
   }
 
@@ -152,7 +164,8 @@ export class ChatService {
       this._conversationSettings.set(
         conversation.settings ? JSON.parse(conversation.settings) : null,
       )
-      this._promptTokens.set(0)
+      const lastWithTokens = [...dbMessages].reverse().find(m => m.token_count != null)
+      this._promptTokens.set(lastWithTokens?.token_count ?? 0)
     })
   }
 
@@ -161,85 +174,60 @@ export class ChatService {
   // -------------------------------------------------------------------------
 
   sendMessage(input: string): void {
-    this._isLoading.set(true)
-
-    // Build the Ollama payload from current messages + the new user message
-    const baseMessages = this._toOllamaMessages(this._messages())
     const ollamaMessages: MessageForQuery[] = [
-      ...this._prependSystemPrompt(baseMessages),
+      ...this._prependSystemPrompt(this._toOllamaMessages(this._messages())),
       { role: 'user', content: input },
     ]
 
     const userMsg: DisplayMessage = { kind: 'user', id: crypto.randomUUID(), content: input }
-    const loadingMsg: DisplayMessage = {
-      kind: 'assistant',
-      id: 'streaming',
-      content: '',
-      streaming: true,
-    }
-    this._messages.update((msgs) => [...msgs, userMsg, loadingMsg])
+    this._messages.update((msgs) => [...msgs, userMsg])
 
-    // Save user message to DB, then start streaming
     const persist = !this._conversation
       ? this._createConversation(userMsg)
       : this._addUserMessageToDb(userMsg)
 
-    persist.then(() => {
-      this.api
-        .generate_chat_response(ollamaMessages)
-        .pipe(
-          tap((response) => {
-            if (response.type !== 3) return
-            const chunks: ApiResponse[] = (response.partialText ?? '')
-              .split('\n')
-              .filter((line) => line.endsWith('}'))
-              .map((line) => JSON.parse(line))
+    persist.then(() => this._streamNonAgenticResponse(ollamaMessages))
+  }
 
-            const thinking = chunks.map((c) => c.message.thinking ?? '').join('')
-            const content = chunks.map((c) => c.message.content).join('')
+  async editUserMessage(msgId: string, newContent: string): Promise<void> {
+    const convId = this._conversationId()
+    if (!convId) return
 
-            this._messages.update((msgs) =>
-              msgs.map((m) =>
-                m.id === 'streaming' && m.kind === 'assistant'
-                  ? { ...m, content, thinking: thinking || undefined }
-                  : m,
-              ),
-            )
+    const { id: newMsgId } = await firstValueFrom(this.api.branch_message(msgId, newContent))
+    await this._reloadFromDb()
 
-            const lastChunk = chunks[chunks.length - 1]
-            if (lastChunk?.done) {
-              this._isLoading.set(false)
-              if (this._conversation) {
-                const conv = this._conversation
-                const finalId = crypto.randomUUID()
-                // Replace the ephemeral 'streaming' id with a real one
-                this._messages.update((msgs) =>
-                  msgs.map((m) =>
-                    m.id === 'streaming' && m.kind === 'assistant'
-                      ? { ...m, id: finalId, streaming: false }
-                      : m,
-                  ),
-                )
-                ;(async () => {
-                  const savedMsg: Message = {
-                    id: finalId,
-                    role: 'assistant',
-                    content,
-                    thinking: thinking || undefined,
-                  }
-                  await firstValueFrom(this.api.post_message(conv.id, savedMsg))
-                  await this._computeTokenCountForLastMessage()
-                })()
-              }
-            }
-          }),
-          catchError((err) => {
-            this._isLoading.set(false)
-            return throwError(() => err)
-          }),
-        )
-        .subscribe()
-    })
+    const settings = this._conversationSettings()
+    if (settings?.agentic_mode) {
+      this._subscribeToAgentEvents()
+      this.agentSvc.start(newContent, convId, newMsgId)
+    } else {
+      const ollamaMessages = this._prependSystemPrompt(this._toOllamaMessages(this._messages()))
+      this._streamNonAgenticResponse(ollamaMessages)
+    }
+  }
+
+  async deleteMessage(msgId: string, subtree: boolean): Promise<void> {
+    const convId = this._conversationId()
+    if (!convId) return
+    await firstValueFrom(this.api.delete_message(convId, msgId, subtree))
+    await this._reloadFromDb()
+    const msgs = this._messages()
+    const last = [...msgs].reverse().find(m =>
+      (m.kind === 'user' || m.kind === 'assistant' || m.kind === 'tool_result') && m.token_count != null
+    )
+    const tokenCount = last && (last.kind === 'user' || last.kind === 'assistant' || last.kind === 'tool_result')
+      ? last.token_count
+      : null
+    this._promptTokens.set(tokenCount ?? 0)
+  }
+
+  async navigateSibling(siblingId: string): Promise<void> {
+    const convId = this._conversationId()
+    if (!convId) return
+    const { messages } = await firstValueFrom(this.api.set_active_branch(convId, siblingId))
+    this._messages.set(this._fromDbMessages(messages))
+    const last = [...messages].reverse().find(m => m.token_count != null)
+    this._promptTokens.set(last?.token_count ?? 0)
   }
 
   // -------------------------------------------------------------------------
@@ -262,8 +250,8 @@ export class ChatService {
     })
   }
 
-  confirmTool(toolId: string, approved: boolean): void {
-    this.agentSvc.confirm(toolId, approved)
+  confirmTool(toolId: string, approved: boolean, reason?: string): void {
+    this.agentSvc.confirm(toolId, approved, reason)
     this._messages.update((msgs) =>
       msgs.map((m) =>
         m.kind === 'tool_confirm' && m.tool_id === toolId ? { ...m, confirmed: approved } : m,
@@ -293,8 +281,13 @@ export class ChatService {
     await firstValueFrom(this.api.put_conversation_settings(id, updated))
   }
 
-  updateConversationSettings(settings: ConversationSettings): void {
+  updateConversationSettings(settings: ConversationSettings): Observable<unknown> {
     this._conversationSettings.set(settings)
+    const id = this._conversationId()
+    if (!id) return new Observable(s => s.complete())
+    return this.api.put_conversation_settings(id, settings).pipe(
+      tap(() => this.conversations.refresh()),
+    )
   }
 
   reloadPrompts(): void {
@@ -305,8 +298,72 @@ export class ChatService {
     await firstValueFrom(this.api.delete_conversation(conv.id))
     this.conversations.refresh()
     if (conv.id === this._conversation?.id) {
-      this.selectConversation(undefined)
+      this.startNewChat()
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Private: non-agentic streaming
+  // -------------------------------------------------------------------------
+
+  private _streamNonAgenticResponse(ollamaMessages: MessageForQuery[]): void {
+    this._isLoading.set(true)
+    const loadingMsg: DisplayMessage = { kind: 'assistant', id: 'streaming', content: '', streaming: true }
+    this._messages.update((msgs) => [...msgs, loadingMsg])
+
+    this.api
+      .generate_chat_response(ollamaMessages)
+      .pipe(
+        tap((response) => {
+          if (response.type !== 3) return
+          const chunks: ApiResponse[] = (response.partialText ?? '')
+            .split('\n')
+            .filter((line) => line.endsWith('}'))
+            .map((line) => JSON.parse(line))
+
+          const thinking = chunks.map((c) => c.message.thinking ?? '').join('')
+          const content = chunks.map((c) => c.message.content).join('')
+
+          this._messages.update((msgs) =>
+            msgs.map((m) =>
+              m.id === 'streaming' && m.kind === 'assistant'
+                ? { ...m, content, thinking: thinking || undefined }
+                : m,
+            ),
+          )
+
+          const lastChunk = chunks[chunks.length - 1]
+          if (lastChunk?.done) {
+            this._isLoading.set(false)
+            if (this._conversation) {
+              const conv = this._conversation
+              const finalId = crypto.randomUUID()
+              this._messages.update((msgs) =>
+                msgs.map((m) =>
+                  m.id === 'streaming' && m.kind === 'assistant'
+                    ? { ...m, id: finalId, streaming: false }
+                    : m,
+                ),
+              )
+              ;(async () => {
+                const savedMsg: Message = {
+                  id: finalId,
+                  role: 'assistant',
+                  content,
+                  thinking: thinking || undefined,
+                }
+                await firstValueFrom(this.api.post_message(conv.id, savedMsg))
+                await this._computeTokenCountForLastMessage()
+              })()
+            }
+          }
+        }),
+        catchError((err) => {
+          this._isLoading.set(false)
+          return throwError(() => err)
+        }),
+      )
+      .subscribe()
   }
 
   // -------------------------------------------------------------------------
@@ -511,8 +568,15 @@ export class ChatService {
   private _fromDbMessages(dbMessages: Message[]): DisplayMessage[] {
     const result: DisplayMessage[] = []
     for (const m of dbMessages) {
+      const siblingMeta = {
+        sibling_count: m.sibling_count,
+        sibling_index: m.sibling_index,
+        prev_sibling_id: m.prev_sibling_id,
+        next_sibling_id: m.next_sibling_id,
+        has_children: m.has_children,
+      }
       if (m.role === 'user') {
-        result.push({ kind: 'user', id: m.id, content: m.content, token_count: m.token_count })
+        result.push({ kind: 'user', id: m.id, content: m.content, token_count: m.token_count, ...siblingMeta })
       } else if (m.role === 'assistant') {
         if (m.content) {
           result.push({
@@ -521,10 +585,11 @@ export class ChatService {
             content: m.content,
             thinking: m.thinking ?? undefined,
             token_count: m.token_count,
+            ...siblingMeta,
           })
         } else if (m.thinking) {
           // Thinking-only message (no content) — show as a collapsed thinking block
-          result.push({ kind: 'thinking', id: m.id, content: m.thinking, done: true })
+          result.push({ kind: 'thinking', id: m.id, content: m.thinking, done: true, ...siblingMeta })
         }
       } else if (m.role === 'tool') {
         result.push({
@@ -533,6 +598,7 @@ export class ChatService {
           tool_name: '',
           content: m.content,
           token_count: m.token_count,
+          ...siblingMeta,
         })
       }
     }
@@ -564,13 +630,14 @@ export class ChatService {
     const conversation = await firstValueFrom(this.api.post_conversation(title))
     this._conversation = conversation
     this._conversationId.set(conversation.id)
-    this.conversations.refresh()
 
     // Persist whatever the user configured before sending (tools, prompt, agentic mode)
     const pendingSettings = this._conversationSettings()
     if (pendingSettings) {
       await firstValueFrom(this.api.put_conversation_settings(conversation.id, pendingSettings))
     }
+
+    this.conversations.refresh()
 
     await firstValueFrom(
       this.api.post_message(conversation.id, {

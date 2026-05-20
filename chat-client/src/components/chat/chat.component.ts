@@ -1,4 +1,4 @@
-import { Component, computed, inject, model, OnDestroy, signal } from '@angular/core'
+import { Component, computed, HostListener, inject, model, OnDestroy, signal } from '@angular/core'
 import { CommonModule } from '@angular/common'
 import { FormsModule } from '@angular/forms'
 import { ChatService } from '../../services/chat.service'
@@ -26,6 +26,20 @@ export class ChatComponent implements OnDestroy {
 
   readonly currentInput = model('')
   readonly drawerOpen = signal(false)
+  readonly rejectingToolId = signal<string | null>(null)
+  readonly rejectReason = signal('')
+
+  // Edit state
+  readonly editingMessageId = signal<string | null>(null)
+  readonly editContent = signal('')
+
+  // Action menu state
+  readonly openMenuId = signal<string | null>(null)
+
+  @HostListener('document:click')
+  closeMenu(): void {
+    this.openMenuId.set(null)
+  }
 
   readonly activePrompt = computed(() => {
     const settings = this.chatSvc.currentConversationSettings()
@@ -99,8 +113,19 @@ export class ChatComponent implements OnDestroy {
     }
   }
 
-  confirmTool(toolId: string, approved: boolean): void {
-    this.chatSvc.confirmTool(toolId, approved)
+  startReject(toolId: string): void {
+    this.rejectingToolId.set(toolId)
+    this.rejectReason.set('')
+  }
+
+  sendRejection(toolId: string): void {
+    const reason = this.rejectReason().trim() || undefined
+    this.rejectingToolId.set(null)
+    this.confirmTool(toolId, false, reason)
+  }
+
+  confirmTool(toolId: string, approved: boolean, reason?: string): void {
+    this.chatSvc.confirmTool(toolId, approved, reason)
   }
 
   abortAgent(): void {
@@ -122,6 +147,57 @@ export class ChatComponent implements OnDestroy {
   }
 
   onSettingsChanged(settings: ConversationSettings): void {
-    this.chatSvc.updateConversationSettings(settings)
+    this.chatSvc.updateConversationSettings(settings).subscribe()
+  }
+
+  // -------------------------------------------------------------------------
+  // Edit
+  // -------------------------------------------------------------------------
+
+  startEdit(msgId: string, content: string): void {
+    this.editingMessageId.set(msgId)
+    this.editContent.set(content)
+  }
+
+  cancelEdit(): void {
+    this.editingMessageId.set(null)
+    this.editContent.set('')
+  }
+
+  async submitEdit(msgId: string): Promise<void> {
+    const content = this.editContent().trim()
+    if (!content) return
+    this.cancelEdit()
+    await this.chatSvc.editUserMessage(msgId, content)
+  }
+
+  onEditKeydown(event: KeyboardEvent, msgId: string): void {
+    if (event.key === 'Escape') { this.cancelEdit(); return }
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      this.submitEdit(msgId)
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Action menu
+  // -------------------------------------------------------------------------
+
+  toggleMenu(msgId: string, event: Event): void {
+    event.stopPropagation()
+    this.openMenuId.set(this.openMenuId() === msgId ? null : msgId)
+  }
+
+  async onDeleteMessage(msgId: string, subtree: boolean): Promise<void> {
+    this.openMenuId.set(null)
+    await this.chatSvc.deleteMessage(msgId, subtree)
+  }
+
+  // -------------------------------------------------------------------------
+  // Sibling navigation
+  // -------------------------------------------------------------------------
+
+  async onNavigateSibling(siblingId: string): Promise<void> {
+    await this.chatSvc.navigateSibling(siblingId)
   }
 }

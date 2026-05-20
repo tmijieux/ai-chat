@@ -99,4 +99,32 @@ export class ApiService {
   get_agent_tools() {
     return this.http.get<AgentToolMeta[]>(`${BASE_URL}/agent/tools`)
   }
+
+  branch_message(msgId: string, content: string) {
+    return this.http.put<{ id: string; parent_id: string | null }>(
+      `${BASE_URL}/messages/${msgId}/branch`,
+      { content },
+    )
+  }
+
+  delete_message(convId: string, msgId: string, subtree: boolean) {
+    return this.http.delete<{ deleted: string[] }>(
+      `${BASE_URL}/conversations/${convId}/messages/${msgId}`,
+      { params: { subtree: String(subtree) } },
+    )
+  }
+
+  set_active_branch(convId: string, messageId: string) {
+    return this.http.put<{ active_message_id: string; messages: Message[] }>(
+      `${BASE_URL}/conversations/${convId}/active-branch`,
+      { message_id: messageId },
+    )
+  }
+
+  browse_directory(path?: string | null) {
+    return this.http.get<{ path: string; parent: string | null; entries: { name: string; path: string }[] }>(
+      `${BASE_URL}/utils/browse-directory`,
+      path ? { params: { path } } : undefined,
+    )
+  }
 }

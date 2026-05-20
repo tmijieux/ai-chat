@@ -1,5 +1,14 @@
 from pathlib import Path
 
+
+def resolve_workspace_path(path: str, working_directory: str) -> Path:
+    """Resolve path relative to working_directory if not absolute, then normalise."""
+    p = Path(path)
+    if not p.is_absolute():
+        p = Path(working_directory) / p
+    return p.resolve()
+
+
 def file_in_directory(file_path_str: str, directory_path_str: str) -> bool:
     """
     Check if a file is within a given directory.

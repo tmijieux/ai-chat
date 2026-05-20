@@ -21,12 +21,16 @@ export class AgentService {
   /** Raw event stream. ChatService subscribes to accumulate DisplayMessages. */
   public readonly events$: Observable<AgentEvent> = this._events$.asObservable()
 
-  start(userMessage: string, conversationId?: string): void {
+  start(userMessage: string, conversationId?: string, userMessageId?: string): void {
     this._running.set(true)
     this.ws = new WebSocket(WS_URL)
 
     this.ws.onopen = () => {
-      this.ws!.send(JSON.stringify({ message: userMessage, conversation_id: conversationId ?? null }))
+      this.ws!.send(JSON.stringify({
+        message: userMessage,
+        conversation_id: conversationId ?? null,
+        user_message_id: userMessageId ?? null,
+      }))
     }
 
     this.ws.onmessage = (ev) => {

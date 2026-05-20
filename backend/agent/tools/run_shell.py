@@ -8,7 +8,7 @@ if TYPE_CHECKING:
 
 class RunShellTool(BaseTool):
     name = "run_shell"
-    description = "Execute a shell command (bash). For running npm, git, python scripts, etc. Requires user confirmation."
+    description = "Execute a shell command (bash). For running npm, git, python scripts, etc. Requires user confirmation. Requires a workspace directory to be configured in conversation settings (sets the shell CWD)."
     parameters = {
         "type": "object",
         "properties": {

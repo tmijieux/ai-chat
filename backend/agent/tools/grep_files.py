@@ -1,6 +1,7 @@
 import re
 from pathlib import Path
 from .base import BaseTool, tool_error
+from agent.file_utils import file_in_directory, resolve_workspace_path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -9,7 +10,7 @@ if TYPE_CHECKING:
 
 class GrepFilesTool(BaseTool):
     name = "grep_files"
-    description = "Search file contents with a regex pattern. Returns matching lines with file path and line numbers. Prefer this over reading whole files when looking for a symbol, function, or string."
+    description = "Search file contents with a regex pattern. Returns matching lines with file path and line numbers. Prefer this over reading whole files when looking for a symbol, function, or string. Requires a workspace directory to be configured in conversation settings."
     parameters = {
         "type": "object",
         "properties": {
@@ -46,7 +47,7 @@ class GrepFilesTool(BaseTool):
             return tool_error(self.name, "No workspace configured — file tools are disabled.")
 
         pattern = args.get("pattern", "")
-        path = args.get("path", working_directory)
+        path = args.get("path", ".")
         glob_pattern = args.get("glob", "**/*")
         case_insensitive = args.get("case_insensitive", False)
         max_matches = args.get("max_matches", 50)
@@ -60,10 +61,13 @@ class GrepFilesTool(BaseTool):
         except re.error as e:
             return tool_error(self.name, f"Invalid regex: {e}")
 
+        absolute_path = resolve_workspace_path(path, working_directory)
+        if not file_in_directory(str(absolute_path), working_directory):
+            return tool_error(self.name, f"Searching outside workspace is forbidden. Workspace: {working_directory}")
+
         matches = []
-        root = Path(path)
         try:
-            for file_path in root.glob(glob_pattern):
+            for file_path in absolute_path.glob(glob_pattern):
                 if not file_path.is_file():
                     continue
                 try:

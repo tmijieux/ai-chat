@@ -1,0 +1,50 @@
+<div class="fixed inset-0 bg-overlay z-modal flex items-center justify-center" (click)="cancelled.emit()">
+  <div class="bg-panel rounded shadow-2xl w-540px max-h-70vh flex flex-col overflow-hidden" (click)="$event.stopPropagation()">
+
+    <!-- Header -->
+    <div class="flex items-center justify-between px-4 py-3 border-bottom">
+      <span class="font-semibold text-sm">Select Folder</span>
+      <button class="btn btn-ghost p-2" (click)="cancelled.emit()">×</button>
+    </div>
+
+    <!-- Current path -->
+    <div class="px-4 py-2 bg-panel-dark border-bottom font-mono text-xs text-muted truncate" title="{{ currentPath() }}">
+      {{ currentPath() || '…' }}
+    </div>
+
+    <!-- Entry list -->
+    <div class="overflow-y-auto flex-grow p-2">
+      @if (loading()) {
+        <div class="text-muted text-sm p-4" style="text-align:center">Loading…</div>
+      } @else if (error()) {
+        <div class="text-sm p-4" style="text-align:center; color:#f87171">{{ error() }}</div>
+      } @else {
+        @if (parent()) {
+          <button class="btn w-full flex items-center gap-2 bg-panel-hover" style="text-align:left" (click)="browse(parent())">
+            <span class="text-muted">↑</span>
+            <span class="text-muted text-sm">..</span>
+          </button>
+        }
+        @for (entry of entries(); track entry.path) {
+          <button class="btn w-full flex items-center gap-2 bg-panel-hover" style="text-align:left" (click)="browse(entry.path)">
+            <span style="color:#f59e0b; flex-shrink:0">📁</span>
+            <span class="text-sm truncate">{{ entry.name }}</span>
+          </button>
+        }
+        @if (!parent() && entries().length === 0) {
+          <div class="text-muted text-sm p-4" style="text-align:center">No subdirectories</div>
+        }
+      }
+    </div>
+
+    <!-- Footer -->
+    <div class="flex items-center justify-between gap-2 px-4 py-3 border-top">
+      <span class="font-mono text-xs text-muted truncate flex-grow" title="{{ currentPath() }}">{{ currentPath() }}</span>
+      <div class="flex gap-2 flex-shrink-0">
+        <button class="btn btn-ghost" (click)="cancelled.emit()">Cancel</button>
+        <button class="btn btn-primary" [disabled]="loading()" (click)="select()">Select this folder</button>
+      </div>
+    </div>
+
+  </div>
+</div>

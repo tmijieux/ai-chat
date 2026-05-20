@@ -125,7 +125,7 @@ Client can send: `{"type":"confirm","tool_id":"...","approved":bool}` or `{"type
 - **Zoneless** change detection (`provideZonelessChangeDetection()`)
 - Standalone components, no NgModules
 - RxJS `BehaviorSubject` + Angular `signal` for state
-- TailwindCSS v4 for styling
+- Custom utility CSS in `chat-client/src/styles.scss` (Tailwind-like naming, no Tailwind dependency — see CONTEXT.md for conventions)
 
 ### Key state in `chat.service.ts`
 - `history$` (BehaviorSubject) — current conversation message list (active branch)

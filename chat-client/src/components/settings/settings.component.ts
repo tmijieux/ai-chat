@@ -20,7 +20,7 @@ const CATEGORIES: SystemPromptCategory[] = [
   templateUrl: './settings.component.html',
   styleUrl: './settings.component.scss',
   host: {
-    class: 'bg-main h-full w-full flex flex-col',
+    class: 'h-full w-full flex flex-col bg-panel-dark',
   },
 })
 export class SettingsComponent implements OnInit {
@@ -33,6 +33,7 @@ export class SettingsComponent implements OnInit {
   editingId = signal<string | null>(null)
   showCreateForm = signal(false)
   deleteConfirmId = signal<string | null>(null)
+  saving = signal(false)
 
   createForm = signal<PromptForm>({ name: '', category: 'general', content: '', is_default: false })
   editForm = signal<PromptForm>({ name: '', category: 'general', content: '', is_default: false })
@@ -58,7 +59,9 @@ export class SettingsComponent implements OnInit {
   saveCreate() {
     const f = this.createForm()
     if (!f.name.trim() || !f.content.trim()) return
+    this.saving.set(true)
     this.api.create_system_prompt(f).subscribe(() => {
+      this.saving.set(false)
       this.showCreateForm.set(false)
       this.loadPrompts()
     })
@@ -77,7 +80,9 @@ export class SettingsComponent implements OnInit {
   saveEdit(id: string) {
     const f = this.editForm()
     if (!f.name.trim() || !f.content.trim()) return
+    this.saving.set(true)
     this.api.update_system_prompt(id, f).subscribe(() => {
+      this.saving.set(false)
       this.editingId.set(null)
       this.loadPrompts()
     })

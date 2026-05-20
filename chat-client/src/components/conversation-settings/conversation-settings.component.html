@@ -1,18 +1,19 @@
-<div class="fixed inset-0 z-40" (click)="closed.emit()"></div>
+<div class="fixed inset-0 z-40 bg-black-40" (click)="closed.emit()"></div>
 
-<aside class="fixed right-0 top-0 h-full w-80 z-50 flex flex-col shadow-2xl bg-sidebar border-l border-gray-700">
-  <div class="flex items-center justify-between p-4 border-b border-gray-700 bg-gray-800">
-    <h2 class="font-semibold text-white">Conversation Settings</h2>
-    <button class="text-gray-400 hover:text-white text-xl leading-none" (click)="closed.emit()">×</button>
+<aside class="fixed top-0 right-0 h-full w-80 z-50 flex flex-col bg-sidebar border-l">
+  <div class="flex items-center justify-between p-4 border-bottom">
+    <h2 class="font-semibold">Conversation Settings</h2>
+    <button class="btn btn-ghost" style="font-size:1.25rem; padding:0.25rem 0.5rem" (click)="closed.emit()">×</button>
   </div>
 
-  <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-6 bg-gray-800">
+  <div class="overflow-y-auto flex-grow p-4 flex flex-col bg-sidebar" style="gap:1.5rem">
 
     <!-- Active System Prompt -->
     <section>
-      <h3 class="text-gray-400 text-xs font-semibold uppercase tracking-wide mb-2">System Prompt</h3>
+      <h3 class="text-xs font-semibold text-muted" style="text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem">System Prompt</h3>
       <select
-        class="w-full bg-gray-700 text-white rounded px-3 py-2 text-sm border border-gray-600"
+        class="w-full rounded px-3 py-2 text-sm"
+        style="background:#1e3a5f; border:1px solid #334155; color:white"
         [ngModel]="settings().active_prompt_id ?? ''"
         (ngModelChange)="setPrompt($event)"
       >
@@ -27,23 +28,34 @@
 
     <!-- Tools -->
     <section>
-      <h3 class="text-gray-400 text-xs font-semibold uppercase tracking-wide mb-2">Tools</h3>
+      <h3 class="text-xs font-semibold text-muted" style="text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem">Tools</h3>
       @if (tools().length === 0) {
-        <p class="text-gray-500 text-sm">Loading…</p>
+        <p class="text-sm text-muted">Loading…</p>
+      }
+      @if (tools().length > 0) {
+        <label class="flex items-center gap-2 cursor-pointer mb-1" style="padding:0.375rem; border-radius:0.5rem; border-bottom:1px solid #334155; padding-bottom:0.5rem">
+          <input
+            type="checkbox"
+            style="accent-color:#6366f1; width:1rem; height:1rem"
+            [checked]="allToolsEnabled()"
+            (change)="toggleAllTools()"
+          />
+          <span class="text-sm font-semibold">{{ allToolsEnabled() ? 'Deselect all' : 'Select all' }}</span>
+        </label>
       }
       <div class="flex flex-col gap-2">
         @for (tool of tools(); track tool.name) {
-          <label class="flex items-start gap-3 cursor-pointer p-2 rounded hover:bg-gray-700">
+          <label class="flex items-start gap-2" style="cursor:pointer; padding:0.375rem; border-radius:0.5rem">
             <input
               type="checkbox"
-              class="mt-0.5 accent-indigo-500"
+              style="margin-top:0.125rem; accent-color:#6366f1; width:1rem; height:1rem"
               [checked]="isToolEnabled(tool.name)"
               (change)="toggleTool(tool.name, $any($event.target).checked)"
             />
             <div>
-              <div class="text-sm text-white">{{ tool.name }}</div>
+              <div class="text-sm">{{ tool.name }}</div>
               @if (tool.requires_confirmation) {
-                <div class="text-xs text-yellow-400">requires confirmation</div>
+                <div class="text-xs" style="color:#fbbf24">requires confirmation</div>
               }
             </div>
           </label>
@@ -53,26 +65,40 @@
 
     <!-- Workspace -->
     <section>
-      <h3 class="text-gray-400 text-xs font-semibold uppercase tracking-wide mb-2">Workspace Directory</h3>
+      <h3 class="text-xs font-semibold text-muted" style="text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem">Workspace Directory</h3>
       <div class="flex gap-2">
         <input
-          class="flex-1 bg-gray-700 text-white rounded px-3 py-2 text-sm border border-gray-600 placeholder-gray-500"
+          class="flex-grow rounded px-3 py-2 text-sm"
+          style="background:#1e3a5f; border:1px solid #334155; color:white; min-width:0"
           placeholder="No workspace (file tools disabled)"
           [value]="settings().working_directory ?? ''"
           (change)="setWorkingDirectory($any($event.target).value)"
         />
+        <button
+          class="btn"
+          style="background:#334155; color:white; flex-shrink:0"
+          title="Browse for folder"
+          (click)="pickerOpen.set(true)"
+        >Browse</button>
         @if (settings().working_directory !== null) {
           <button
-            class="text-gray-400 hover:text-red-400 px-2 text-sm"
+            class="btn btn-ghost flex-shrink-0"
             title="Clear workspace"
             (click)="setWorkingDirectory('')"
           >✕</button>
         }
       </div>
-      <p class="text-gray-500 text-xs mt-1">
+      <p class="text-xs text-muted" style="margin-top:0.25rem">
         File tools and shell are disabled when empty.
       </p>
     </section>
 
   </div>
 </aside>
+
+@if (pickerOpen()) {
+  <app-directory-picker
+    (selected)="onDirectorySelected($event)"
+    (cancelled)="pickerOpen.set(false)"
+  />
+}

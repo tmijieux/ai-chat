@@ -1,7 +1,6 @@
-import os
 from pathlib import Path
 from .base import BaseTool, tool_error
-from agent.file_utils import file_in_directory
+from agent.file_utils import file_in_directory, resolve_workspace_path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -10,7 +9,7 @@ if TYPE_CHECKING:
 
 class WriteFileTool(BaseTool):
     name = "write_file"
-    description = "Create a new file or overwrite an existing file. Requires user confirmation. Only use when creating a brand-new file or doing a full rewrite. Prefer edit_file to make targeted edits."
+    description = "Create a new file or overwrite an existing file. Requires user confirmation. Only use when creating a brand-new file or doing a full rewrite. Prefer edit_file to make targeted edits. Requires a workspace directory to be configured in conversation settings."
     parameters = {
         "type": "object",
         "properties": {
@@ -45,8 +44,8 @@ class WriteFileTool(BaseTool):
         content = args.get("content", "")
         append = args.get("append", False)
 
-        real_path = os.path.realpath(path)
-        if not file_in_directory(real_path, working_directory):
+        absolute_path = resolve_workspace_path(path, working_directory)
+        if not file_in_directory(str(absolute_path), working_directory):
             return tool_error(self.name, f"Writing outside workspace is forbidden. Workspace: {working_directory}")
 
         preview = self.validate(args)
@@ -55,9 +54,10 @@ class WriteFileTool(BaseTool):
             return tool_error(self.name, "User aborted the file write", user_message=user_msg)
 
         try:
+            absolute_path.parent.mkdir(parents=True, exist_ok=True)
             mode = "ab" if append else "wb"
-            with open(Path(path), mode=mode) as f:
+            with open(absolute_path, mode=mode) as f:
                 f.write(content.encode())
-            return {"tool": self.name, "status": "success", "path": path}
+            return {"tool": self.name, "status": "success", "path": str(absolute_path)}
         except Exception as e:
             return tool_error(self.name, f"Unexpected error: {e}")

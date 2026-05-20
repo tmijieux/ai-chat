@@ -17,6 +17,11 @@ export type Message = {
   loading?: boolean
   token_count?: number | null
   created_at?: string
+  sibling_count?: number
+  sibling_index?: number
+  prev_sibling_id?: string | null
+  next_sibling_id?: string | null
+  has_children?: boolean
 }
 
 export type ApiDone =
@@ -134,14 +139,22 @@ export type TokenMeta = {
   token_pct: number
 }
 
+type SiblingMeta = {
+  sibling_count?: number
+  sibling_index?: number
+  prev_sibling_id?: string | null
+  next_sibling_id?: string | null
+  has_children?: boolean
+}
+
 export type DisplayMessage =
-  | {
+  | ({
       kind: 'user'
       id: string
       content: string
       token_count?: number | null
-    }
-  | {
+    } & SiblingMeta)
+  | ({
       kind: 'assistant'
       id: string
       content: string
@@ -149,14 +162,14 @@ export type DisplayMessage =
       /** True while the HTTP stream is still open (non-agentic mode). */
       streaming?: boolean
       token_count?: number | null
-    }
-  | {
+    } & SiblingMeta)
+  | ({
       kind: 'thinking'
       id: string
       content: string
       /** False while still streaming; true once the block is complete. */
       done: boolean
-    }
+    } & SiblingMeta)
   | {
       kind: 'tool_confirm'
       id: string
@@ -167,18 +180,23 @@ export type DisplayMessage =
       /** null = awaiting response, true/false = confirmed/rejected */
       confirmed: boolean | null
     }
-  | {
+  | ({
       kind: 'tool_result'
       id: string
       tool_name: string
       content: string
       token_count?: number | null
-    }
+    } & SiblingMeta)
 
 /**
- * DisplayMessage enriched with token contribution metadata.
+ * DisplayMessage enriched with token contribution metadata and sibling navigation.
  * Computed in the component from the raw DisplayMessage array — not stored in the signal.
  */
 export type DisplayMessageWithMeta = DisplayMessage & {
   token_meta?: TokenMeta
+  sibling_count?: number
+  sibling_index?: number
+  prev_sibling_id?: string | null
+  next_sibling_id?: string | null
+  has_children?: boolean
 }
