@@ -20,6 +20,7 @@ class RunShellTool(BaseTool):
         "required": ["command"],
     }
     requires_confirmation = True
+    measured_delta = 316
 
     def validate(self, args: dict) -> str:
         return f"SHELL: {args.get('command', '')}"

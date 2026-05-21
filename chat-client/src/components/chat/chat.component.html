@@ -1,312 +1,429 @@
 <!-- Token tooltip template -->
 <ng-template #tokenTooltip let-meta="meta">
-    <div class="token-meta">
-        ⓘ
-        <div class="token-tooltip">
-            <div>Context: {{ meta.token_count | number:'1.0-0' }} / 16 384 ({{ meta.token_pct }}%)</div>
-            @if (meta.token_contribution != null) {
-                <div>This message: ~{{ meta.token_contribution | number:'1.0-0' }} tokens</div>
-            }
-        </div>
+  <div class="token-meta">
+    ⓘ
+    <div class="token-tooltip">
+      <div>Context: {{ meta.token_count | number: '1.0-0' }} / 16 384 ({{ meta.token_pct }}%)</div>
+      @if (meta.token_contribution != null) {
+        <div>This message: ~{{ meta.token_contribution | number: '1.0-0' }} tokens</div>
+      }
     </div>
+  </div>
 </ng-template>
 
 <!-- Thinking block template: active = still streaming -->
 <ng-template #thinkingBlock let-text="text" let-active="active">
-    @if (active) {
-        <div class="p-4 bg-thinking-bubble rounded-lg shadow-md text-xs italic overflow-hidden">{{ text }}</div>
-    } @else {
-        <details class="bg-thinking-bubble rounded-lg shadow-sm overflow-hidden">
-            <summary class="cursor-pointer p-4 text-xs font-medium select-none opacity-70 italic">Thinking...</summary>
-            <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-700 opacity-80">{{ text }}</pre>
-        </details>
-    }
+  @if (active) {
+    <div class="p-4 bg-thinking-bubble rounded-lg shadow-md text-xs italic overflow-hidden">
+      {{ text }}
+    </div>
+  } @else {
+    <details class="bg-thinking-bubble rounded-lg shadow-sm overflow-hidden">
+      <summary class="cursor-pointer p-4 text-xs font-medium select-none opacity-70 italic">
+        Thinking...
+      </summary>
+      <pre
+        class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-700 opacity-80"
+        >{{ text }}</pre
+      >
+    </details>
+  }
 </ng-template>
 
 <!-- =========================
-   LEFT SIDEBAR
+   LEFT SIDEBAR: new chat + conversation list
    ========================= -->
-<div class="w-64 flex flex-col shadow-2xl bg-sidebar slate-200">
+<aside class="w-64 flex flex-col shadow-2xl bg-sidebar slate-200">
+  <div class="p-6 border-b border-gray-700 bg-gray-800">
+    <h1 class="text-2xl font-extrabold tracking-wide text-white">AI Chat</h1>
+    <p class="text-sm text-gray-400 mt-1">Context Token Counter</p>
+  </div>
 
-    <div class="p-6 border-b border-gray-700 bg-gray-800">
-        <h1 class="text-2xl font-extrabold tracking-wide text-white">AI Chat</h1>
-        <p class="text-sm text-gray-400 mt-1">Context Token Counter</p>
+  <div class="flex-grow overflow-y-auto p-4 space-y-2">
+    <div
+      class="cursor-pointer p-2 hover:bg-gray-700 rounded transition-all"
+      (click)="startNewChat()"
+    >
+      + New Chat
     </div>
-
-    <div class="flex-grow overflow-y-auto p-4 space-y-2">
-        <div class="cursor-pointer p-2 hover:bg-gray-700 rounded transition-all" (click)="startNewChat()">
-            + New Chat
-        </div>
-        @for (conv of conversations$ | async; track conv.id) {
-            <div class="p-2 cursor-pointer hover:bg-gray-700 rounded transition-all flex row items-center justify-between"
-                (click)="selectConversation(conv)">
-                {{ conv.title }}
-                <div class="px-1 p-relative"
-                     (click)="conv.menuOpened = !conv.menuOpened; $event.stopPropagation()"
-                     (clickOutside)="conv.menuOpened=false">
-                    ⋮
-                    @if (conv.menuOpened) {
-                        <div class="p-absolute top-100 right-0 bg-grey p-2" (click)="deleteConversation(conv)">
-                            Supprimer
-                        </div>
-                    }
-                </div>
+    @for (conv of conversations$ | async; track conv.id) {
+      <div
+        class="p-2 cursor-pointer hover:bg-gray-700 rounded transition-all flex row items-center justify-between"
+        (click)="selectConversation(conv)"
+      >
+        {{ conv.title }}
+        <div
+          class="px-1 p-relative"
+          (click)="conv.menuOpened = !conv.menuOpened; $event.stopPropagation()"
+          (clickOutside)="conv.menuOpened = false"
+        >
+          ⋮
+          @if (conv.menuOpened) {
+            <div class="p-absolute top-100 right-0 bg-grey p-2" (click)="deleteConversation(conv)">
+              Supprimer
             </div>
-        }
-    </div>
+          }
+        </div>
+      </div>
+    }
+  </div>
 
-    <div class="p-4 border-t border-gray-700 bg-gray-800">
-        <button class="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-sm transition-all" [routerLink]="['/settings']">
-            ⚙️ Settings
-        </button>
-    </div>
-</div>
+  <div class="p-4 border-t border-gray-700 bg-gray-800">
+    <button
+      class="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-sm transition-all"
+      [routerLink]="['/settings']"
+    >
+      ⚙️ Settings
+    </button>
+  </div>
+</aside>
 
 <!-- =========================
    MAIN CHAT AREA
    ========================= -->
-<div class="flex flex-col flex-grow bg-main h-full">
-
-    <!-- Token status bar -->
-    <div class="p-2 border-b bg-gray-100 flex justify-between items-center gap-4">
-        <span class="font-medium text-gray-700">Context Tokens:
-            <span class="font-bold text-indigo-600">{{ chatSvc.promptTokens() }} / 16,384</span>
-        </span>
-        <div class="flex items-center gap-3">
-            <label class="flex items-center gap-2 cursor-pointer select-none text-sm">
-                <span class="text-gray-600">Agentic mode</span>
-                <input type="checkbox"
-                       [checked]="chatSvc.currentConversationSettings()?.agentic_mode ?? false"
-                       (change)="chatSvc.setAgenticMode($any($event.target).checked)"
-                       class="w-4 h-4 accent-indigo-600" />
-            </label>
-            <button
-                class="text-gray-500 hover:text-indigo-600 text-lg leading-none transition-colors cursor-pointer"
-                title="Conversation settings"
-                (click)="drawerOpen.set(!drawerOpen())"
-            >⚙</button>
-        </div>
+<main class="flex flex-col flex-grow bg-main h-full">
+  <!-- Token status bar -->
+  <div class="p-2 border-b bg-gray-100 flex justify-between items-center gap-4">
+    <span class="font-medium text-gray-700"
+      >Context Tokens:
+      <span class="font-bold text-indigo-600">{{ chatSvc.promptTokens() }} / 16,384</span>
+    </span>
+    <div class="flex items-center gap-3">
+      <label class="flex items-center gap-2 cursor-pointer select-none text-sm">
+        <span class="text-gray-600">Agentic mode</span>
+        <input
+          type="checkbox"
+          [checked]="chatSvc.currentConversationSettings().agentic_mode"
+          (change)="chatSvc.setAgenticMode($any($event.target).checked)"
+          class="w-4 h-4 accent-indigo-600"
+        />
+      </label>
+      <button
+        class="text-gray-500 hover:text-indigo-600 text-lg leading-none transition-colors cursor-pointer"
+        title="Conversation settings"
+        (click)="drawerOpen.set(!drawerOpen())"
+      >
+        ⚙
+      </button>
     </div>
+  </div>
 
-    <!-- Single message list -->
-    <div class="flex-grow v-scroll p-6 space-y-6">
-
-        <!-- Active prompt bubble — scrolls with messages -->
-        @let prompt = activePrompt();
-        @if (!!prompt) {
-            <div class="flex w-800px mx-auto">
-                <details class="bg-thinking-bubble rounded-lg shadow-sm overflow-hidden w-full max-w-3xl">
-                    <summary class="cursor-pointer p-4 text-xs font-medium select-none opacity-70 italic">
-                        System prompt: {{ prompt.name }}
-                        @if (prompt.token_count !== null) {
-                            <span class="opacity-60">(~{{ prompt.token_count }} tokens)</span>
-                        }
-                    </summary>
-                    <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-700 opacity-80">{{ activePrompt()!.content }}</pre>
-                </details>
-            </div>
-        }
-        
-        @for (msg of messagesWithMeta(); track msg.id) {
-            <div class="msg-row w-800px mx-auto" [class.has-siblings]="(msg.sibling_count ?? 1) > 1">
-
-                <!-- Sibling navigator (above message) -->
-                @if ((msg.sibling_count ?? 1) > 1) {
-                    <div class="sibling-nav" [class.justify-end]="msg.kind === 'user'" [class.justify-start]="msg.kind !== 'user'">
-                        <button [disabled]="!msg.prev_sibling_id" (click)="msg.prev_sibling_id && onNavigateSibling(msg.prev_sibling_id)">←</button>
-                        <span>{{ msg.sibling_index }} / {{ msg.sibling_count }}</span>
-                        <button [disabled]="!msg.next_sibling_id" (click)="msg.next_sibling_id && onNavigateSibling(msg.next_sibling_id)">→</button>
-                    </div>
-                }
-
-                <!-- Message content row -->
-                <div class="flex"
-                     [class]="msg.kind === 'user' ? 'justify-end'
-                             : msg.kind === 'tool_confirm' || msg.kind === 'tool_result' ? 'justify-center'
-                             : 'justify-start'">
-
-                    <!-- User message -->
-                    @if (msg.kind === 'user') {
-                        <div class="flex flex-col items-end gap-1">
-                            @if (editingMessageId() === msg.id) {
-                                <div class="flex flex-col gap-2 max-w-3xl w-full">
-                                    <textarea class="field" rows="4"
-                                        [value]="editContent()"
-                                        (input)="editContent.set($any($event.target).value)"
-                                        (keydown)="onEditKeydown($event, msg.id)"
-                                        autofocus></textarea>
-                                    <div class="flex gap-2 justify-end">
-                                        <button class="btn btn-ghost text-xs" (click)="cancelEdit()">Cancel</button>
-                                        <button class="btn btn-primary text-xs" (click)="submitEdit(msg.id)">Send</button>
-                                    </div>
-                                </div>
-                            } @else {
-                                <div class="max-w-3xl p-4 shadow-md bg-user-bubble">{{ msg.content }}</div>
-                            }
-                            @if (msg.token_meta) {
-                                <ng-container *ngTemplateOutlet="tokenTooltip; context: { meta: msg.token_meta }"></ng-container>
-                            }
-                        </div>
-                    }
-
-                    <!-- Assistant message (non-agentic streaming or DB-loaded) -->
-                    @if (msg.kind === 'assistant') {
-                        <div class="flex flex-col max-w-3xl gap-2">
-                            @if (msg.thinking) {
-                                <ng-container *ngTemplateOutlet="thinkingBlock; context: { text: msg.thinking, active: msg.streaming && !msg.content }"></ng-container>
-                            }
-                            @if (msg.content) {
-                                <div class="p-4 bg-assistant-bubble shadow-md rounded-lg">{{ msg.content }}</div>
-                            } @else if (msg.streaming) {
-                                <div class="p-4 bg-assistant-bubble shadow-md rounded-lg">...</div>
-                            }
-                            @if (msg.token_meta) {
-                                <ng-container *ngTemplateOutlet="tokenTooltip; context: { meta: msg.token_meta }"></ng-container>
-                            }
-                        </div>
-                    }
-
-                    <!-- Live streaming thinking block (agent run only) -->
-                    @if (msg.kind === 'thinking') {
-                        <ng-container *ngTemplateOutlet="thinkingBlock; context: { text: msg.content, active: !msg.done }"></ng-container>
-                    }
-
-                    <!-- Tool confirmation card -->
-                    @if (msg.kind === 'tool_confirm') {
-                        <div class="w-full max-w-2xl border border-amber-400 bg-amber-50 rounded-lg p-4 shadow-md">
-                            <div class="flex items-center gap-2 mb-2">
-                                <span class="font-semibold text-amber-800">Tool request:</span>
-                                <code class="bg-amber-100 px-2 py-0.5 rounded text-amber-900 text-sm">{{ msg.tool_name }}</code>
-                                @if (msg.confirmed === true) {
-                                    <span class="ml-auto text-green-600 text-sm font-medium">Approved</span>
-                                }
-                                @if (msg.confirmed === false) {
-                                    <span class="ml-auto text-red-600 text-sm font-medium">Rejected</span>
-                                }
-                            </div>
-                            <pre class="text-xs bg-white border border-amber-200 rounded p-2 overflow-auto max-h-40 whitespace-pre-wrap">{{ msg.preview }}</pre>
-                            @if (msg.confirmed === null) {
-                                @if (rejectingToolId() === msg.tool_id) {
-                                    <div class="mt-3 flex flex-col gap-2">
-                                        <textarea
-                                            class="w-full bg-white border border-amber-300 rounded px-3 py-2 text-sm text-gray-800 resize-none"
-                                            rows="2"
-                                            placeholder="Reason for rejection (optional)…"
-                                            [value]="rejectReason()"
-                                            (input)="rejectReason.set($any($event.target).value)"
-                                        ></textarea>
-                                        <div class="flex gap-2">
-                                            <button (click)="sendRejection(msg.tool_id)"
-                                                class="px-4 py-1.5 bg-red-500 hover:bg-red-600 text-white text-sm rounded transition-all">
-                                                Send rejection
-                                            </button>
-                                            <button (click)="rejectingToolId.set(null)"
-                                                class="px-4 py-1.5 text-gray-600 hover:text-gray-800 text-sm rounded transition-all">
-                                                Cancel
-                                            </button>
-                                        </div>
-                                    </div>
-                                } @else {
-                                    <div class="flex gap-2 mt-3">
-                                        <button (click)="confirmTool(msg.tool_id, true)"
-                                            class="px-4 py-1.5 bg-green-600 hover:bg-green-700 text-white text-sm rounded transition-all">
-                                            Approve
-                                        </button>
-                                        <button (click)="startReject(msg.tool_id)"
-                                            class="px-4 py-1.5 bg-red-500 hover:bg-red-600 text-white text-sm rounded transition-all">
-                                            Reject
-                                        </button>
-                                    </div>
-                                }
-                            }
-                        </div>
-                    }
-
-                    <!-- Tool result (collapsible) -->
-                    @if (msg.kind === 'tool_result') {
-                        <div class="flex flex-col w-full max-w-2xl gap-1">
-                            <details class="border border-gray-300 bg-gray-50 rounded-lg shadow-sm overflow-hidden">
-                                <summary class="cursor-pointer p-4 text-sm text-gray-600 font-medium select-none">
-                                    Tool result@if (msg.tool_name) {: <code class="bg-gray-200 px-1 rounded">{{ msg.tool_name }}</code>}
-                                </summary>
-                                <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-200">{{ msg.content }}</pre>
-                            </details>
-                            @if (msg.token_meta) {
-                                <ng-container *ngTemplateOutlet="tokenTooltip; context: { meta: msg.token_meta }"></ng-container>
-                            }
-                        </div>
-                    }
-                </div>
-
-                <!-- Action buttons (revealed on .msg-row hover, hidden for tool_confirm) -->
-                @if (msg.kind !== 'tool_confirm') {
-                    <div class="msg-row-actions">
-                        @if (msg.kind === 'user' && editingMessageId() !== msg.id) {
-                            <button class="msg-action-btn" title="Edit" (click)="startEdit(msg.id, msg.content)">✎</button>
-                        }
-                        <div class="p-relative">
-                            <button class="msg-action-btn" title="More actions" (click)="toggleMenu(msg.id, $event)">⋮</button>
-                            @if (openMenuId() === msg.id) {
-                                <div class="msg-menu">
-                                    @if ($any(msg).has_children) {
-                                        <button (click)="onDeleteMessage(msg.id, false)">Delete message</button>
-                                    }
-                                    <button class="danger" (click)="onDeleteMessage(msg.id, true)">Delete branch</button>
-                                </div>
-                            }
-                        </div>
-                    </div>
-                }
-            </div>
-        }
-
-        <!-- Agent streaming phase indicator -->
-        @if (chatSvc.phase() === 'thinking') {
-            <div class="flex justify-start w-800px mx-auto">
-                <div class="p-4 bg-thinking-bubble rounded-lg shadow-md text-xs italic animate-pulse">Thinking...</div>
-            </div>
-        }
-        @if (chatSvc.phase() === 'responding') {
-            <div class="flex justify-start w-800px mx-auto">
-                <div class="flex items-center gap-2 px-3 py-1 text-xs opacity-50">
-                    <span class="animate-pulse">●</span> responding
-                </div>
-            </div>
-        }
-    </div>
-
-    <!-- Input area -->
-    <div class="p-6 border-t bg-white">
-        <div class="flex items-end gap-3">
-            <textarea
-                [(ngModel)]="currentInput"
-                (keydown.enter)="sendMessage($event)"
-                placeholder="Message the AI... (Shift+Enter for newline)"
-                rows="1"
-                class="flex-grow resize-none p-3 border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                [disabled]="chatSvc.isLoading() || chatSvc.agentRunning()"></textarea>
-            @if (chatSvc.agentRunning()) {
-                <button (click)="abortAgent()"
-                    class="send-button bg-red-500 hover:bg-red-600 text-white px-6 py-3 rounded-lg transition-all">
-                    Stop
-                </button>
-            } @else {
-                <button (click)="sendMessage(null)"
-                    [disabled]="!currentInput().trim() || chatSvc.isLoading()"
-                    class="send-button bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-lg disabled:bg-gray-300 transition-all">
-                    {{ chatSvc.isLoading() ? '...' : 'Send' }}
-                </button>
+  <div class="flex-grow v-scroll p-6 space-y-6">
+    <!-- system prompt bubble -->
+    @let prompt = activePrompt();
+    @if (!!prompt) {
+      <div class="flex w-800px mx-auto">
+        <details class="bg-thinking-bubble rounded-lg shadow-sm overflow-hidden w-full max-w-3xl">
+          <summary class="cursor-pointer p-4 text-xs font-medium select-none opacity-70 italic">
+            System prompt: {{ prompt.name }}
+            @if (prompt.token_count !== null) {
+              <span class="opacity-60">(~{{ prompt.token_count }} tokens)</span>
             }
+            @let toolTok = activeToolsTokenCount();
+            @if (toolTok !== null) {
+              <span class="opacity-60"> + tools (~{{ toolTok }} tokens)</span>
+            }
+          </summary>
+          <pre
+            class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-700 opacity-80"
+            >{{ prompt.content }}</pre
+          >
+        </details>
+      </div>
+    }
+
+    <!-- messages list-->
+    @for (msg of messagesWithMeta(); track msg.id) {
+      <div class="msg-row w-800px mx-auto" [class.has-siblings]="(msg.sibling_count ?? 1) > 1">
+        <!-- Sibling navigator (above message) -->
+        @if ((msg.sibling_count ?? 1) > 1) {
+          <div
+            class="sibling-nav"
+            [class.justify-end]="msg.kind === 'user'"
+            [class.justify-start]="msg.kind !== 'user'"
+          >
+            <button
+              [disabled]="!msg.prev_sibling_id"
+              (click)="msg.prev_sibling_id && onNavigateSibling(msg.prev_sibling_id)"
+            >
+              ←
+            </button>
+            <span>{{ msg.sibling_index }} / {{ msg.sibling_count }}</span>
+            <button
+              [disabled]="!msg.next_sibling_id"
+              (click)="msg.next_sibling_id && onNavigateSibling(msg.next_sibling_id)"
+            >
+              →
+            </button>
+          </div>
+        }
+
+        <!-- Message content row -->
+        <div
+          class="flex"
+          [class]="
+            msg.kind === 'user'
+              ? 'justify-end'
+              : msg.kind === 'tool_confirm' || msg.kind === 'tool_result'
+                ? 'justify-center'
+                : 'justify-start'
+          "
+        >
+          <!-- User message -->
+          @if (msg.kind === 'user') {
+            <div class="flex flex-col items-end gap-1">
+              @if (editingMessageId() === msg.id) {
+                <div class="flex flex-col gap-2 max-w-3xl w-full">
+                  <textarea
+                    class="field"
+                    rows="4"
+                    [value]="editContent()"
+                    (input)="editContent.set($any($event.target).value)"
+                    (keydown)="onEditKeydown($event, msg.id)"
+                    autofocus
+                  ></textarea>
+                  <div class="flex gap-2 justify-end">
+                    <button class="btn btn-ghost text-xs" (click)="cancelEdit()">Cancel</button>
+                    <button class="btn btn-primary text-xs" (click)="submitEdit(msg.id)">
+                      Send
+                    </button>
+                  </div>
+                </div>
+              } @else {
+                <div class="max-w-3xl p-4 shadow-md bg-user-bubble">{{ msg.content }}</div>
+              }
+              @if (msg.token_meta) {
+                <ng-container
+                  *ngTemplateOutlet="tokenTooltip; context: { meta: msg.token_meta }"
+                ></ng-container>
+              }
+            </div>
+          }
+
+          <!-- Assistant message (non-agentic streaming or DB-loaded) -->
+          @if (msg.kind === 'assistant') {
+            <div class="flex flex-col max-w-3xl gap-2">
+              @if (msg.thinking) {
+                <ng-container
+                  *ngTemplateOutlet="
+                    thinkingBlock;
+                    context: { text: msg.thinking, active: msg.streaming && !msg.content }
+                  "
+                ></ng-container>
+              }
+              @if (msg.content) {
+                <div class="p-4 bg-assistant-bubble shadow-md rounded-lg prose-bubble">
+                  @if (isRaw(msg.id)) {
+                    <pre class="whitespace-pre-wrap text-sm m-0">{{ msg.content }}</pre>
+                  } @else {
+                    <markdown [data]="msg.content" />
+                  }
+                </div>
+              } @else if (msg.streaming) {
+                <div class="p-4 bg-assistant-bubble shadow-md rounded-lg">...</div>
+              }
+              @if (msg.token_meta) {
+                <ng-container
+                  *ngTemplateOutlet="tokenTooltip; context: { meta: msg.token_meta }"
+                ></ng-container>
+              }
+            </div>
+          }
+
+          <!-- Live streaming thinking block (agent run only) -->
+          @if (msg.kind === 'thinking') {
+            <ng-container
+              *ngTemplateOutlet="thinkingBlock; context: { text: msg.content, active: !msg.done }"
+            ></ng-container>
+          }
+
+          <!-- Tool confirmation card -->
+          @if (msg.kind === 'tool_confirm') {
+            <div
+              class="w-full max-w-2xl border border-amber-400 bg-amber-50 rounded-lg p-4 shadow-md"
+            >
+              <div class="flex items-center gap-2 mb-2">
+                <span class="font-semibold text-amber-800">Tool request:</span>
+                <code class="bg-amber-100 px-2 py-0.5 rounded text-amber-900 text-sm">{{
+                  msg.tool_name
+                }}</code>
+                @if (msg.confirmed === true) {
+                  <span class="ml-auto text-green-600 text-sm font-medium">Approved</span>
+                }
+                @if (msg.confirmed === false) {
+                  <span class="ml-auto text-red-600 text-sm font-medium">Rejected</span>
+                }
+              </div>
+              <pre
+                class="text-xs bg-white border border-amber-200 rounded p-2 overflow-auto max-h-40 whitespace-pre-wrap"
+                >{{ msg.preview }}</pre
+              >
+              @if (msg.confirmed === null) {
+                @if (rejectingToolId() === msg.tool_id) {
+                  <div class="mt-3 flex flex-col gap-2">
+                    <textarea
+                      class="w-full bg-white border border-amber-300 rounded px-3 py-2 text-sm text-gray-800 resize-none"
+                      rows="2"
+                      placeholder="Reason for rejection (optional)…"
+                      [value]="rejectReason()"
+                      (input)="rejectReason.set($any($event.target).value)"
+                    ></textarea>
+                    <div class="flex gap-2">
+                      <button
+                        (click)="sendRejection(msg.tool_id)"
+                        class="px-4 py-1.5 bg-red-500 hover:bg-red-600 text-white text-sm rounded transition-all"
+                      >
+                        Send rejection
+                      </button>
+                      <button
+                        (click)="rejectingToolId.set(null)"
+                        class="px-4 py-1.5 text-gray-600 hover:text-gray-800 text-sm rounded transition-all"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                } @else {
+                  <div class="flex gap-2 mt-3">
+                    <button
+                      (click)="confirmTool(msg.tool_id, true)"
+                      class="px-4 py-1.5 bg-green-600 hover:bg-green-700 text-white text-sm rounded transition-all"
+                    >
+                      Approve
+                    </button>
+                    <button
+                      (click)="startReject(msg.tool_id)"
+                      class="px-4 py-1.5 bg-red-500 hover:bg-red-600 text-white text-sm rounded transition-all"
+                    >
+                      Reject
+                    </button>
+                  </div>
+                }
+              }
+            </div>
+          }
+
+          <!-- Tool result (collapsible) -->
+          @if (msg.kind === 'tool_result') {
+            <div class="flex flex-col w-full max-w-2xl gap-1">
+              <details
+                class="border border-gray-300 bg-gray-50 rounded-lg shadow-sm overflow-hidden"
+              >
+                <summary class="cursor-pointer p-4 text-sm text-gray-600 font-medium select-none">
+                  Tool result
+                  @if (msg.tool_name) {
+                    : <code class="bg-gray-200 px-1 rounded">{{ msg.tool_name }}</code>
+                  }
+                </summary>
+                <pre
+                  class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-200"
+                  >{{ msg.content }}</pre
+                >
+              </details>
+              @if (msg.token_meta) {
+                <ng-container
+                  *ngTemplateOutlet="tokenTooltip; context: { meta: msg.token_meta }"
+                ></ng-container>
+              }
+            </div>
+          }
         </div>
+
+        <!-- Action buttons (revealed on .msg-row hover, hidden for tool_confirm) -->
+        @if (msg.kind !== 'tool_confirm') {
+          <div class="msg-row-actions">
+            @if (msg.kind === 'user' && editingMessageId() !== msg.id) {
+              <button class="msg-action-btn" title="Edit" (click)="startEdit(msg.id, msg.content)">
+                ✎
+              </button>
+            }
+            @if (msg.kind === 'assistant') {
+              <button
+                class="msg-action-btn"
+                [title]="isRaw(msg.id) ? 'Show formatted' : 'Show raw markdown'"
+                (click)="toggleRaw(msg.id)"
+              >
+                {{ isRaw(msg.id) ? '◈' : '¶' }}
+              </button>
+            }
+            <div class="p-relative">
+              <button
+                class="msg-action-btn"
+                title="More actions"
+                (click)="toggleMenu(msg.id, $event)"
+              >
+                ⋮
+              </button>
+              @if (openMenuId() === msg.id) {
+                <div class="msg-menu">
+                  <button (click)="onDeleteMessage(msg.id, false)">Delete message</button>
+                  @if (msg.has_children) {
+                    <button class="danger" (click)="onDeleteMessage(msg.id, true)">
+                      Delete branch
+                    </button>
+                  }
+                </div>
+              }
+            </div>
+          </div>
+        }
+      </div>
+    }
+
+    <!-- Agent streaming phase indicator -->
+    @if (chatSvc.phase() === 'thinking') {
+      <div class="flex justify-start w-800px mx-auto">
+        <div class="p-4 bg-thinking-bubble rounded-lg shadow-md text-xs italic animate-pulse">
+          Thinking...
+        </div>
+      </div>
+    }
+    @if (chatSvc.phase() === 'responding') {
+      <div class="flex justify-start w-800px mx-auto">
+        <div class="flex items-center gap-2 px-3 py-1 text-xs opacity-50">
+          <span class="animate-pulse">●</span> responding
+        </div>
+      </div>
+    }
+  </div>
+
+  <!-- Input area -->
+  <div class="p-6 border-t bg-white">
+    <div class="flex items-end gap-3">
+      <textarea
+        [(ngModel)]="currentInput"
+        (keydown.enter)="sendMessage($event)"
+        placeholder="Message the AI... (Shift+Enter for newline)"
+        rows="1"
+        class="flex-grow resize-none p-3 border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        [disabled]="chatSvc.isLoading() || chatSvc.agentRunning()"
+      ></textarea>
+      @if (chatSvc.agentRunning()) {
+        <button
+          (click)="abortAgent()"
+          class="send-button bg-red-500 hover:bg-red-600 text-white px-6 py-3 rounded-lg transition-all"
+        >
+          Stop
+        </button>
+      } @else {
+        <button
+          (click)="sendMessage(null)"
+          [disabled]="!currentInput().trim() || chatSvc.isLoading()"
+          class="send-button bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-lg disabled:bg-gray-300 transition-all"
+        >
+          {{ chatSvc.isLoading() ? '...' : 'Send' }}
+        </button>
+      }
     </div>
-</div>
+  </div>
+</main>
 
 <!-- Per-conversation settings drawer -->
 @if (drawerOpen()) {
-    <app-conversation-settings
-        [conversationId]="chatSvc.currentConversationId()"
-        [settings]="chatSvc.currentConversationSettings()!"
-        (closed)="drawerOpen.set(false)"
-        (settingsChanged)="onSettingsChanged($event)"
-    />
+  <app-conversation-settings
+    [conversationId]="chatSvc.currentConversationId()"
+    [settings]="chatSvc.currentConversationSettings()"
+    (closed)="drawerOpen.set(false)"
+    (settingsChanged)="onSettingsChanged($event)"
+  />
 }

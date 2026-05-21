@@ -1,8 +1,8 @@
 import { Component, inject, input, output, OnInit, signal, computed } from '@angular/core'
 import { FormsModule } from '@angular/forms'
 import { ApiService } from '../../services/api.service'
+import { ChatService } from '../../services/chat.service'
 import {
-  AgentToolMeta,
   ConversationSettings,
   SystemPromptTemplate,
 } from '../../types/message-types'
@@ -20,14 +20,15 @@ export class ConversationSettingsComponent implements OnInit {
   readonly settingsChanged = output<ConversationSettings>()
 
   private api = inject(ApiService)
+  private chatSvc = inject(ChatService)
 
   readonly prompts = signal<SystemPromptTemplate[]>([])
-  readonly tools = signal<AgentToolMeta[]>([])
+  readonly tools = this.chatSvc.allTools
+  readonly frameworkOverhead = this.chatSvc.toolFrameworkOverhead
   readonly pickerOpen = signal(false)
 
   ngOnInit() {
     this.api.get_system_prompts().subscribe((p) => this.prompts.set(p))
-    this.api.get_agent_tools().subscribe((t) => this.tools.set(t))
   }
 
   isToolEnabled(toolName: string): boolean {

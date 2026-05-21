@@ -29,6 +29,7 @@ class WriteFileTool(BaseTool):
         "required": ["file_path", "content"],
     }
     requires_confirmation = True
+    measured_delta = 360
 
     def validate(self, args: dict) -> str:
         path = args.get("file_path", "")

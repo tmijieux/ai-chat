@@ -33,6 +33,7 @@ class EditFileTool(BaseTool):
         "required": ["file_path", "old_string", "new_string"],
     }
     requires_confirmation = True
+    measured_delta = 413
 
     def validate(self, args: dict) -> str:
         path = args.get("file_path", "")

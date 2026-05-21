@@ -27,6 +27,7 @@ class SummarizeSubtaskTool(BaseTool):
         "required": ["task", "content"],
     }
     requires_confirmation = False
+    measured_delta = 336
 
     def validate(self, args: dict) -> str:
         return f"SUMMARIZE for: {args.get('task', '')}"

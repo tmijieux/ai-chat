@@ -1,4 +1,4 @@
-import { Component, ElementRef, inject, OnDestroy, OnInit, output, signal } from '@angular/core'
+import { Component, ElementRef, inject, input, OnDestroy, OnInit, output, signal } from '@angular/core'
 import { ApiService } from '../../services/api.service'
 
 type DirEntry = { name: string; path: string }
@@ -10,6 +10,7 @@ type DirEntry = { name: string; path: string }
   styleUrl: './directory-picker.component.scss',
 })
 export class DirectoryPickerComponent implements OnInit, OnDestroy {
+  readonly initialPath = input<string | null>(null)
   readonly selected = output<string>()
   readonly cancelled = output<void>()
 
@@ -24,7 +25,7 @@ export class DirectoryPickerComponent implements OnInit, OnDestroy {
 
   ngOnInit() {
     document.body.appendChild(this.el.nativeElement)
-    this.browse(null)
+    this.browse(this.initialPath())
   }
 
   ngOnDestroy() {

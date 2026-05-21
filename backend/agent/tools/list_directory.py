@@ -29,6 +29,7 @@ class ListDirectoryTool(BaseTool):
         "required": ["path"],
     }
     requires_confirmation = False
+    measured_delta = 375
 
     def validate(self, args: dict) -> str:
         return f"LIST {args.get('path', '')}"

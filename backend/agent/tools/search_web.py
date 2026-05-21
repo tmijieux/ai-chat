@@ -19,6 +19,7 @@ class SearchWebTool(BaseTool):
         "required": ["query"],
     }
     requires_confirmation = False
+    measured_delta = 282
 
     def validate(self, args: dict) -> str:
         return f"SEARCH: {args.get('query', '')}"

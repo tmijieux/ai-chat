@@ -4,6 +4,7 @@ import { catchError, shareReplay, switchMap, tap } from 'rxjs/operators'
 import { throwError } from 'rxjs'
 import {
   AgentToolMeta,
+  AgentToolsResponse,
   ApiResponse,
   Conversation,
   ConversationSettings,
@@ -85,12 +86,14 @@ export class ChatService {
   private _conversationId = signal<string | undefined>(undefined)
   public readonly currentConversationId = this._conversationId.asReadonly()
 
-  private _conversationSettings = signal<ConversationSettings | null>({
+  private readonly DEFAULT_SETTINGS: ConversationSettings = {
     agentic_mode: true,
     active_prompt_id: null,
     active_tool_names: [],
     working_directory: null,
-  })
+  }
+
+  private _conversationSettings = signal<ConversationSettings>(this.DEFAULT_SETTINGS)
   public readonly currentConversationSettings = this._conversationSettings.asReadonly()
 
   private _prompts = signal<SystemPromptTemplate[]>([])
@@ -101,6 +104,14 @@ export class ChatService {
   /** Names of all registered agent tools — loaded once on startup. */
   public readonly allToolNames = this._allToolNames.asReadonly()
 
+  private _allTools = signal<AgentToolMeta[]>([])
+  /** Full tool metadata including token_count — loaded once on startup. */
+  public readonly allTools = this._allTools.asReadonly()
+
+  private _toolFrameworkOverhead = signal<number>(0)
+  /** Fixed token overhead for the tool-calling framework (independent of which tools are active). */
+  public readonly toolFrameworkOverhead = this._toolFrameworkOverhead.asReadonly()
+
   // Active subscription to agentSvc.events$ — replaced on each new agent run
   private _agentEventSub: Subscription | null = null
 
@@ -108,21 +119,21 @@ export class ChatService {
     this.api.get_system_prompts().subscribe(p => {
       this._prompts.set(p)
       // Patch pending new-chat settings with the default prompt if none is selected yet
-      const current = this._conversationSettings()
-      if (current !== null && current.active_prompt_id === null) {
+      if (this._conversationId() === undefined) {
         const defaultId = p.find(prompt => prompt.is_default === 1)?.id ?? null
         if (defaultId !== null) {
-          this._conversationSettings.set({ ...current, active_prompt_id: defaultId })
+          this._conversationSettings.set({ ...this._conversationSettings(), active_prompt_id: defaultId })
         }
       }
     })
-    this.api.get_agent_tools().subscribe(tools => {
-      const names = tools.map((t: AgentToolMeta) => t.name)
+    this.api.get_agent_tools().subscribe((response: AgentToolsResponse) => {
+      const names = response.tools.map((t) => t.name)
       this._allToolNames.set(names)
+      this._allTools.set(response.tools)
+      this._toolFrameworkOverhead.set(response.framework_overhead)
       // Patch the pending new-chat settings so tools are enabled by default
-      const current = this._conversationSettings()
-      if (current !== null && current.active_tool_names.length === 0) {
-        this._conversationSettings.set({ ...current, active_tool_names: names })
+      if (this._conversationId() === undefined) {
+        this._conversationSettings.set({ ...this._conversationSettings(), active_tool_names: names })
       }
     })
   }
@@ -139,7 +150,7 @@ export class ChatService {
     this._conversation = undefined
     this._conversationId.set(undefined)
     const defaultPromptId = this._prompts().find(p => p.is_default === 1)?.id ?? null
-    const lastWorkingDir = this._conversationSettings()?.working_directory ?? null
+    const lastWorkingDir = this._conversationSettings().working_directory
     this._conversationSettings.set({
       agentic_mode: true,
       active_prompt_id: defaultPromptId,
@@ -154,7 +165,7 @@ export class ChatService {
       this._messages.set([])
       this._conversation = undefined
       this._conversationId.set(undefined)
-      this._conversationSettings.set(null)
+      this._conversationSettings.set(this.DEFAULT_SETTINGS)
       return
     }
     this.api.get_conversation_messages(conversation.id).subscribe((dbMessages) => {
@@ -162,7 +173,7 @@ export class ChatService {
       this._conversation = conversation
       this._conversationId.set(conversation.id)
       this._conversationSettings.set(
-        conversation.settings ? JSON.parse(conversation.settings) : null,
+        conversation.settings ? JSON.parse(conversation.settings) : this.DEFAULT_SETTINGS,
       )
       const lastWithTokens = [...dbMessages].reverse().find(m => m.token_count != null)
       this._promptTokens.set(lastWithTokens?.token_count ?? 0)
@@ -268,12 +279,7 @@ export class ChatService {
   // -------------------------------------------------------------------------
 
   async setAgenticMode(enabled: boolean): Promise<void> {
-    const current = this._conversationSettings() ?? {
-      agentic_mode: true,
-      active_prompt_id: null,
-      active_tool_names: [],
-      working_directory: null,
-    }
+    const current = this._conversationSettings()
     const updated = { ...current, agentic_mode: enabled }
     this._conversationSettings.set(updated)
     const id = this._conversationId()
@@ -684,7 +690,7 @@ export class ChatService {
   }
 
   private _prependSystemPrompt(messages: MessageForQuery[]): MessageForQuery[] {
-    const promptId = this._conversationSettings()?.active_prompt_id
+    const promptId = this._conversationSettings().active_prompt_id
     if (promptId === null || promptId === undefined) return messages
     const prompt = this._prompts().find(p => p.id === promptId)
     if (!prompt) return messages

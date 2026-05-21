@@ -4,7 +4,12 @@
       "WebFetch(domain:github.com)",
       "Bash(Get-ChildItem *)",
       "Bash(npx tsc *)",
-      "Bash(python -m py_compile main.py)"
+      "Bash(python -m py_compile main.py)",
+      "WebFetch(domain:www.npmjs.com)",
+      "Bash(npm install *)",
+      "Bash(npx ng *)",
+      "Bash(python -m agent.count_tool_tokens)",
+      "Bash(venv/Scripts/python -m agent.count_tool_tokens)"
     ]
   }
 }

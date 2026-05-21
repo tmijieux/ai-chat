@@ -82,6 +82,12 @@ export type AgentToolMeta = {
   name: string
   description: string
   requires_confirmation: boolean
+  token_count: number
+}
+
+export type AgentToolsResponse = {
+  framework_overhead: number
+  tools: AgentToolMeta[]
 }
 
 /** Flat node returned by GET /api/conversations/{id}/tree */
@@ -170,7 +176,7 @@ export type DisplayMessage =
       /** False while still streaming; true once the block is complete. */
       done: boolean
     } & SiblingMeta)
-  | {
+  | ({
       kind: 'tool_confirm'
       id: string
       tool_id: string
@@ -179,7 +185,7 @@ export type DisplayMessage =
       preview: string
       /** null = awaiting response, true/false = confirmed/rejected */
       confirmed: boolean | null
-    }
+    } & SiblingMeta)
   | ({
       kind: 'tool_result'
       id: string

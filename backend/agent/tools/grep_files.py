@@ -38,6 +38,7 @@ class GrepFilesTool(BaseTool):
         "required": ["pattern"],
     }
     requires_confirmation = False
+    measured_delta = 446
 
     def validate(self, args: dict) -> str:
         return f"GREP '{args.get('pattern', '')}' in {args.get('path', '.')}"

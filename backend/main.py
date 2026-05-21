@@ -643,14 +643,19 @@ async def browse_directory(path: str | None = None):
 
 @app.get("/api/agent/tools")
 async def list_agent_tools():
-    return [
-        {
-            "name": t.name,
-            "description": t.description,
-            "requires_confirmation": t.requires_confirmation,
-        }
-        for t in TOOL_REGISTRY.values()
-    ]
+    from agent.tools.base import TOOL_FRAMEWORK_OVERHEAD
+    return {
+        "framework_overhead": TOOL_FRAMEWORK_OVERHEAD,
+        "tools": [
+            {
+                "name": t.name,
+                "description": t.description,
+                "requires_confirmation": t.requires_confirmation,
+                "token_count": t.token_count,
+            }
+            for t in TOOL_REGISTRY.values()
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------

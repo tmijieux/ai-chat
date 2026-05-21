@@ -1,6 +1,7 @@
 import { inject, Injectable } from '@angular/core'
 import {
   AgentToolMeta,
+  AgentToolsResponse,
   Conversation,
   ConversationSettings,
   Message,
@@ -97,7 +98,7 @@ export class ApiService {
   }
 
   get_agent_tools() {
-    return this.http.get<AgentToolMeta[]>(`${BASE_URL}/agent/tools`)
+    return this.http.get<AgentToolsResponse>(`${BASE_URL}/agent/tools`)
   }
 
   branch_message(msgId: string, content: string) {

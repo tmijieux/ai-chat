@@ -11,11 +11,18 @@ import {
 } from '../../types/message-types'
 import { ActivatedRoute, RouterLink } from '@angular/router'
 import { ConversationSettingsComponent } from '../conversation-settings/conversation-settings.component'
+import { MarkdownComponent } from 'ngx-markdown'
 
 @Component({
   selector: 'app-chat',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, ConversationSettingsComponent],
+  imports: [
+    CommonModule,
+    FormsModule,
+    RouterLink,
+    ConversationSettingsComponent,
+    MarkdownComponent,
+  ],
   templateUrl: './chat.component.html',
   styleUrls: ['./chat.component.scss'],
   host: { class: 'flex h-full' },
@@ -36,6 +43,19 @@ export class ChatComponent implements OnDestroy {
   // Action menu state
   readonly openMenuId = signal<string | null>(null)
 
+  // Raw markdown toggle
+  private rawModeIds = signal(new Set<string>())
+
+  isRaw(msgId: string): boolean {
+    return this.rawModeIds().has(msgId)
+  }
+
+  toggleRaw(msgId: string): void {
+    const s = new Set(this.rawModeIds())
+    s.has(msgId) ? s.delete(msgId) : s.add(msgId)
+    this.rawModeIds.set(s)
+  }
+
   @HostListener('document:click')
   closeMenu(): void {
     this.openMenuId.set(null)
@@ -43,10 +63,20 @@ export class ChatComponent implements OnDestroy {
 
   readonly activePrompt = computed(() => {
     const settings = this.chatSvc.currentConversationSettings()
-    if (settings?.active_prompt_id === null || settings?.active_prompt_id === undefined) {
+    if (settings.active_prompt_id === null || settings.active_prompt_id === undefined) {
       return null
     }
     return this.chatSvc.prompts().find((p) => p.id === settings.active_prompt_id) ?? null
+  })
+
+  readonly activeToolsTokenCount = computed(() => {
+    const activeNames = new Set(this.chatSvc.currentConversationSettings().active_tool_names)
+    if (activeNames.size === 0) return null
+    const toolTokens = this.chatSvc
+      .allTools()
+      .filter((t) => activeNames.has(t.name))
+      .reduce((sum, t) => sum + t.token_count, 0)
+    return this.chatSvc.toolFrameworkOverhead() + toolTokens
   })
 
   // Enrich each message with token contribution metadata for the tooltip display.
@@ -172,7 +202,10 @@ export class ChatComponent implements OnDestroy {
   }
 
   onEditKeydown(event: KeyboardEvent, msgId: string): void {
-    if (event.key === 'Escape') { this.cancelEdit(); return }
+    if (event.key === 'Escape') {
+      this.cancelEdit()
+      return
+    }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
       this.submitEdit(msgId)

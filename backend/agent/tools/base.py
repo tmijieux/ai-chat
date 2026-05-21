@@ -17,11 +17,24 @@ def tool_error(tool_name: str, error: str, user_message: str | None = None, **ex
     return result
 
 
+# Fixed token overhead Ollama adds when any tools are present (measured empirically).
+TOOL_FRAMEWORK_OVERHEAD = 223
+
+# Per-tool: each tool stores its raw measured delta (with 1 tool enabled).
+# Actual per-tool cost = measured_delta - TOOL_FRAMEWORK_OVERHEAD.
+# Total tool tokens = TOOL_FRAMEWORK_OVERHEAD + sum(t.token_count for enabled tools)
+
+
 class BaseTool(ABC):
     name: str
     description: str
     parameters: dict
     requires_confirmation: bool = False
+    measured_delta: int  # raw prompt_eval_count delta vs no-tools baseline (1 tool enabled)
+
+    @property
+    def token_count(self) -> int:
+        return self.measured_delta - TOOL_FRAMEWORK_OVERHEAD
 
     def to_ollama_schema(self) -> dict:
         return {"name": self.name, "description": self.description, "parameters": self.parameters}

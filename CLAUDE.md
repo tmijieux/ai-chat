@@ -17,11 +17,21 @@ A local AI chat app using Ollama, with an Angular frontend and FastAPI backend. 
 │   ├── requirements.txt
 │   └── agent/
 │       ├── agent.py               # Tool-calling agent loop (Ollama-backed, AgentSession)
-│       ├── system_prompt.py       # Agent system role and constraints
-│       ├── tools_definition.py    # JSON schema for all agent tools (TOOLS list)
-│       ├── tool_implementation.py # Tool execution handlers
 │       ├── file_utils.py          # Path security checks
-│       └── count_token.py         # Token counting: fires 1-token Ollama call, reads prompt_eval_count
+│       ├── count_token.py         # Token counting: fires 1-token Ollama call, reads prompt_eval_count
+│       ├── count_tool_tokens.py   # Dev script: measures per-tool token cost via Ollama (see below)
+│       └── tools/
+│           ├── __init__.py        # TOOL_REGISTRY dict + get_ollama_tool_list()
+│           ├── base.py            # BaseTool ABC, tool_error(), TOOL_FRAMEWORK_OVERHEAD
+│           ├── list_directory.py  # ListDirectoryTool  (measured_delta=375)
+│           ├── glob_files.py      # GlobFilesTool      (measured_delta=344)
+│           ├── grep_files.py      # GrepFilesTool      (measured_delta=446)
+│           ├── read_file.py       # ReadFileTool       (measured_delta=343)
+│           ├── write_file.py      # WriteFileTool      (measured_delta=360, confirm)
+│           ├── edit_file.py       # EditFileTool       (measured_delta=413, confirm)
+│           ├── run_shell.py       # RunShellTool       (measured_delta=316, confirm)
+│           ├── search_web.py      # SearchWebTool      (measured_delta=282)
+│           └── summarize_subtask.py # SummarizeSubtaskTool (measured_delta=336)
 │
 ├── chat-client/                   # Angular 20 frontend
 │   └── src/
@@ -182,6 +192,25 @@ File operations are validated against the working directory (`file_utils.py`) to
 
 ### Agent loop (`agent.py`)
 `AgentSession` manages bidirectional comms (outbound queue + confirm futures). `chat_with_tools` does one Ollama call, streams thinking/content, executes tool calls, feeds results back. `run_agent` loops until no tool calls are emitted, then emits `done`.
+
+### Tool token cost (`count_tool_tokens.py`)
+
+Every tool class carries a `measured_delta` field — the empirically measured `prompt_eval_count` increase when that tool is included (1 tool, dummy message, no system prompt).
+
+**Formula:**
+```
+total_tool_tokens = TOOL_FRAMEWORK_OVERHEAD + sum(t.token_count for enabled tools)
+t.token_count     = t.measured_delta - TOOL_FRAMEWORK_OVERHEAD
+TOOL_FRAMEWORK_OVERHEAD = 223   # defined in tools/base.py
+```
+
+**When to re-run:** any time you add a new tool or change an existing tool's `name`, `description`, or `parameters`. Run from `backend/`:
+```bash
+python -m agent.count_tool_tokens
+```
+The script prints each tool's total count and delta, then verifies `token_count` matches the measured value. Copy the printed `measured_delta` back into the tool class.
+
+**Rule:** always update `measured_delta` in the tool class after modifying its schema.
 
 ## Known Gaps / TODOs
 

@@ -25,6 +25,7 @@ class ReadFileTool(BaseTool):
         "required": ["file_path"],
     }
     requires_confirmation = False
+    measured_delta = 343
 
     def validate(self, args: dict) -> str:
         return f"READ {args.get('file_path', '')}"
