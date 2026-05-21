@@ -62,12 +62,18 @@ export class ChatService {
 
   /** Current streaming phase, derived from the last message in the list. */
   public readonly phase = computed<'thinking' | 'responding' | null>(() => {
-    if (!this.agentSvc.running()) return null
+    if (!this.agentSvc.running()) {
+      return null
+    }
     const msgs = this._messages()
     const last = msgs[msgs.length - 1]
-    if (!last) return null
-    if (last.kind === 'thinking' && !last.done) return 'thinking'
-    if (last.kind === 'assistant' && last.streaming) return 'responding'
+    if (!last) {
+      return null
+    } else if (last.kind === 'thinking' && !last.done) {
+      return 'thinking'
+    } else if (last.kind === 'assistant' && last.streaming) {
+      return 'responding'
+    }
     return null
   })
 
@@ -116,13 +122,16 @@ export class ChatService {
   private _agentEventSub: Subscription | null = null
 
   constructor() {
-    this.api.get_system_prompts().subscribe(p => {
+    this.api.get_system_prompts().subscribe((p) => {
       this._prompts.set(p)
       // Patch pending new-chat settings with the default prompt if none is selected yet
       if (this._conversationId() === undefined) {
-        const defaultId = p.find(prompt => prompt.is_default === 1)?.id ?? null
+        const defaultId = p.find((prompt) => prompt.is_default === 1)?.id ?? null
         if (defaultId !== null) {
-          this._conversationSettings.set({ ...this._conversationSettings(), active_prompt_id: defaultId })
+          this._conversationSettings.set({
+            ...this._conversationSettings(),
+            active_prompt_id: defaultId,
+          })
         }
       }
     })
@@ -133,7 +142,10 @@ export class ChatService {
       this._toolFrameworkOverhead.set(response.framework_overhead)
       // Patch the pending new-chat settings so tools are enabled by default
       if (this._conversationId() === undefined) {
-        this._conversationSettings.set({ ...this._conversationSettings(), active_tool_names: names })
+        this._conversationSettings.set({
+          ...this._conversationSettings(),
+          active_tool_names: names,
+        })
       }
     })
   }
@@ -149,7 +161,7 @@ export class ChatService {
     this._promptTokens.set(0)
     this._conversation = undefined
     this._conversationId.set(undefined)
-    const defaultPromptId = this._prompts().find(p => p.is_default === 1)?.id ?? null
+    const defaultPromptId = this._prompts().find((p) => p.is_default === 1)?.id ?? null
     const lastWorkingDir = this._conversationSettings().working_directory
     this._conversationSettings.set({
       agentic_mode: true,
@@ -175,7 +187,7 @@ export class ChatService {
       this._conversationSettings.set(
         conversation.settings ? JSON.parse(conversation.settings) : this.DEFAULT_SETTINGS,
       )
-      const lastWithTokens = [...dbMessages].reverse().find(m => m.token_count != null)
+      const lastWithTokens = [...dbMessages].reverse().find((m) => m.token_count != null)
       this._promptTokens.set(lastWithTokens?.token_count ?? 0)
     })
   }
@@ -202,7 +214,9 @@ export class ChatService {
 
   async editUserMessage(msgId: string, newContent: string): Promise<void> {
     const convId = this._conversationId()
-    if (!convId) return
+    if (!convId) {
+      return
+    }
 
     const { id: newMsgId } = await firstValueFrom(this.api.branch_message(msgId, newContent))
     await this._reloadFromDb()
@@ -219,25 +233,34 @@ export class ChatService {
 
   async deleteMessage(msgId: string, subtree: boolean): Promise<void> {
     const convId = this._conversationId()
-    if (!convId) return
+    if (!convId) {
+      return
+    }
     await firstValueFrom(this.api.delete_message(convId, msgId, subtree))
     await this._reloadFromDb()
     const msgs = this._messages()
-    const last = [...msgs].reverse().find(m =>
-      (m.kind === 'user' || m.kind === 'assistant' || m.kind === 'tool_result') && m.token_count != null
-    )
-    const tokenCount = last && (last.kind === 'user' || last.kind === 'assistant' || last.kind === 'tool_result')
-      ? last.token_count
-      : null
+    const last = [...msgs]
+      .reverse()
+      .find(
+        (m) =>
+          (m.kind === 'user' || m.kind === 'assistant' || m.kind === 'tool_result') &&
+          m.token_count != null,
+      )
+    const tokenCount =
+      last && (last.kind === 'user' || last.kind === 'assistant' || last.kind === 'tool_result')
+        ? last.token_count
+        : null
     this._promptTokens.set(tokenCount ?? 0)
   }
 
   async navigateSibling(siblingId: string): Promise<void> {
     const convId = this._conversationId()
-    if (!convId) return
+    if (!convId) {
+      return
+    }
     const { messages } = await firstValueFrom(this.api.set_active_branch(convId, siblingId))
     this._messages.set(this._fromDbMessages(messages))
-    const last = [...messages].reverse().find(m => m.token_count != null)
+    const last = [...messages].reverse().find((m) => m.token_count != null)
     this._promptTokens.set(last?.token_count ?? 0)
   }
 
@@ -283,21 +306,25 @@ export class ChatService {
     const updated = { ...current, agentic_mode: enabled }
     this._conversationSettings.set(updated)
     const id = this._conversationId()
-    if (!id) return
+    if (!id) {
+      return
+    }
     await firstValueFrom(this.api.put_conversation_settings(id, updated))
   }
 
   updateConversationSettings(settings: ConversationSettings): Observable<unknown> {
     this._conversationSettings.set(settings)
     const id = this._conversationId()
-    if (!id) return new Observable(s => s.complete())
-    return this.api.put_conversation_settings(id, settings).pipe(
-      tap(() => this.conversations.refresh()),
-    )
+    if (!id) {
+      return new Observable((s) => s.complete())
+    }
+    return this.api
+      .put_conversation_settings(id, settings)
+      .pipe(tap(() => this.conversations.refresh()))
   }
 
   reloadPrompts(): void {
-    this.api.get_system_prompts().subscribe(p => this._prompts.set(p))
+    this.api.get_system_prompts().subscribe((p) => this._prompts.set(p))
   }
 
   async deleteConversation(conv: Conversation): Promise<void> {
@@ -314,14 +341,21 @@ export class ChatService {
 
   private _streamNonAgenticResponse(ollamaMessages: MessageForQuery[]): void {
     this._isLoading.set(true)
-    const loadingMsg: DisplayMessage = { kind: 'assistant', id: 'streaming', content: '', streaming: true }
+    const loadingMsg: DisplayMessage = {
+      kind: 'assistant',
+      id: 'streaming',
+      content: '',
+      streaming: true,
+    }
     this._messages.update((msgs) => [...msgs, loadingMsg])
 
     this.api
       .generate_chat_response(ollamaMessages)
       .pipe(
         tap((response) => {
-          if (response.type !== 3) return
+          if (response.type !== 3) {
+            return
+          }
           const chunks: ApiResponse[] = (response.partialText ?? '')
             .split('\n')
             .filter((line) => line.endsWith('}'))
@@ -379,56 +413,105 @@ export class ChatService {
   private _subscribeToAgentEvents(): void {
     this._agentEventSub?.unsubscribe()
 
-    // Track streaming block IDs so we can append to them as chunks arrive
-    let thinkingId: string | null = null
-    let contentId: string | null = null
+    const conv = this._conversation!
 
-    // prompt_tokens from each iteration_end, in order — used to assign token_counts when saving
-    const iterationPromptTokens: number[] = []
-    // Maps tool_result message id → the iteration index it belongs to (i.e. how many
-    // iteration_ends had fired before this tool_result was received)
-    const toolResultIterations = new Map<string, number>()
+    let idOfCurrentlyStreamingThinkingMessage: string | null = null
+    let pendingThinkingContent = ''
 
-    this._agentEventSub = this.agentSvc.events$.subscribe(async (event) => {
+    let idOfCurrentlyStreamingAssistantMessage: string | null = null
+    let pendingContentText = ''
+
+    // tool_result IDs saved this iteration, awaiting token_count from the next iteration_end
+    let pendingToolResultIds: string[] = []
+
+    let saveQueue: Promise<void> = Promise.resolve()
+    const enqueue = (fn: () => Promise<unknown>) => {
+      saveQueue = saveQueue.then(() => fn()).then(() => {}).catch((err) => console.error('Save error:', err))
+    }
+
+    const saveAssistant = (id: string, content: string, thinking: string) => {
+      enqueue(() => firstValueFrom(this.api.post_message(conv.id, {
+        id,
+        role: 'assistant',
+        content,
+        thinking: thinking || undefined,
+      })))
+    }
+
+    const markThinkingMessageAsDoneAndClearIt = () => {
+      if (!idOfCurrentlyStreamingThinkingMessage) return
+      this._messages.update((msgs) =>
+        msgs.map((m) =>
+          m.id === idOfCurrentlyStreamingThinkingMessage && m.kind === 'thinking'
+            ? { ...m, done: true }
+            : m,
+        ),
+      )
+      idOfCurrentlyStreamingThinkingMessage = null
+    }
+
+    const stopStreamingTheAssistantMessageSaveItAndClearIt = () => {
+      if (!idOfCurrentlyStreamingAssistantMessage) return
+      this._messages.update((msgs) =>
+        msgs.map((m) =>
+          m.id === idOfCurrentlyStreamingAssistantMessage && m.kind === 'assistant'
+            ? { ...m, streaming: false }
+            : m,
+        ),
+      )
+      const id = idOfCurrentlyStreamingAssistantMessage,
+        content = pendingContentText,
+        thinking = pendingThinkingContent
+      idOfCurrentlyStreamingAssistantMessage = null
+      pendingContentText = ''
+      pendingThinkingContent = ''
+      saveAssistant(id, content, thinking)
+    }
+
+    this._agentEventSub = this.agentSvc.events$.subscribe((event) => {
       if (event.type === 'thinking' && event.content) {
-        if (thinkingId) {
+        pendingThinkingContent += event.content
+        if (idOfCurrentlyStreamingThinkingMessage) {
           this._messages.update((msgs) =>
             msgs.map((m) =>
-              m.id === thinkingId && m.kind === 'thinking'
+              m.id === idOfCurrentlyStreamingThinkingMessage && m.kind === 'thinking'
                 ? { ...m, content: m.content + event.content }
                 : m,
             ),
           )
         } else {
-          thinkingId = crypto.randomUUID()
+          idOfCurrentlyStreamingThinkingMessage = crypto.randomUUID()
           this._messages.update((msgs) => [
             ...msgs,
-            { kind: 'thinking', id: thinkingId!, content: event.content!, done: false },
+            {
+              kind: 'thinking',
+              id: idOfCurrentlyStreamingThinkingMessage!,
+              content: event.content!,
+              done: false,
+            },
           ])
         }
       } else if (event.type === 'content' && event.content) {
-        if (contentId) {
+        pendingContentText += event.content
+        if (idOfCurrentlyStreamingAssistantMessage) {
           this._messages.update((msgs) =>
             msgs.map((m) =>
-              m.id === contentId && m.kind === 'assistant'
+              m.id === idOfCurrentlyStreamingAssistantMessage && m.kind === 'assistant'
                 ? { ...m, content: m.content + event.content }
                 : m,
             ),
           )
         } else {
-          contentId = crypto.randomUUID()
-          if (thinkingId) {
-            // Thinking block is done — mark it so the template collapses it
-            this._messages.update((msgs) =>
-              msgs.map((m) =>
-                m.id === thinkingId && m.kind === 'thinking' ? { ...m, done: true } : m,
-              ),
-            )
-            thinkingId = null
-          }
+          idOfCurrentlyStreamingAssistantMessage = crypto.randomUUID()
+          markThinkingMessageAsDoneAndClearIt()
           this._messages.update((msgs) => [
             ...msgs,
-            { kind: 'assistant', id: contentId!, content: event.content!, streaming: true },
+            {
+              kind: 'assistant',
+              id: idOfCurrentlyStreamingAssistantMessage!,
+              content: event.content!,
+              streaming: true,
+            },
           ])
         }
       } else if (event.type === 'tool_confirm') {
@@ -445,123 +528,60 @@ export class ChatService {
           },
         ])
       } else if (event.type === 'tool_result') {
-        // Seal any open streaming blocks before showing the result
-        if (thinkingId) {
-          this._messages.update((msgs) =>
-            msgs.map((m) =>
-              m.id === thinkingId && m.kind === 'thinking' ? { ...m, done: true } : m,
-            ),
-          )
-          thinkingId = null
-        }
-        if (contentId) {
-          this._messages.update((msgs) =>
-            msgs.map((m) =>
-              m.id === contentId && m.kind === 'assistant' ? { ...m, streaming: false } : m,
-            ),
-          )
-          contentId = null
-        }
+        markThinkingMessageAsDoneAndClearIt()
         const resultId = `result-${event.tool_id}`
-        toolResultIterations.set(resultId, iterationPromptTokens.length)
+        const resultContent = event.content ?? ''
         this._messages.update((msgs) => [
           ...msgs,
           {
             kind: 'tool_result',
             id: resultId,
             tool_name: event.tool_name ?? '',
-            content: event.content ?? '',
+            content: resultContent,
           },
         ])
+        stopStreamingTheAssistantMessageSaveItAndClearIt()
+        if (pendingThinkingContent) {
+          const thinking = pendingThinkingContent
+          pendingThinkingContent = ''
+          saveAssistant(crypto.randomUUID(), '', thinking)
+        }
+        enqueue(() => firstValueFrom(this.api.post_message(conv.id, {
+          id: resultId,
+          role: 'tool',
+          content: resultContent,
+        })))
+        pendingToolResultIds.push(resultId)
       } else if (event.type === 'iteration_end') {
-        iterationPromptTokens.push(event.prompt_tokens ?? 0)
-        this._promptTokens.set(event.prompt_tokens ?? 0)
-        // Seal open streaming blocks at iteration boundary
-        if (thinkingId) {
-          this._messages.update((msgs) =>
-            msgs.map((m) =>
-              m.id === thinkingId && m.kind === 'thinking' ? { ...m, done: true } : m,
-            ),
-          )
-          thinkingId = null
+        const tokens = event.prompt_tokens ?? 0
+        this._promptTokens.set(tokens)
+        markThinkingMessageAsDoneAndClearIt()
+        stopStreamingTheAssistantMessageSaveItAndClearIt()
+        for (const id of pendingToolResultIds) {
+          const capturedId = id
+          enqueue(() => firstValueFrom(this.api.patch_message_token_count(capturedId, tokens)).then(() => {
+            this._messages.update((msgs) =>
+              msgs.map((m) =>
+                m.id === capturedId && m.kind === 'tool_result' ? { ...m, token_count: tokens } : m,
+              ),
+            )
+          }))
         }
-        if (contentId) {
-          this._messages.update((msgs) =>
-            msgs.map((m) =>
-              m.id === contentId && m.kind === 'assistant' ? { ...m, streaming: false } : m,
-            ),
-          )
-          contentId = null
-        }
+        pendingToolResultIds = []
       } else if (event.type === 'done' || event.type === 'error') {
-        await this._saveAgentMessages(iterationPromptTokens, toolResultIterations)
-        await this._reloadFromDb()
-        await this._computeTokenCountForLastMessage()
+        this._messages.update((msgs) => msgs.filter((m) => m.kind !== 'tool_confirm'))
+        enqueue(() => this._computeTokenCountForLastMessage())
         this._agentEventSub?.unsubscribe()
         this._agentEventSub = null
       }
     })
   }
 
-  // -------------------------------------------------------------------------
-  // Private: persist agent run to DB then reload
-  // -------------------------------------------------------------------------
-
-  private async _saveAgentMessages(
-    iterationPromptTokens: number[],
-    toolResultIterations: Map<string, number>,
-  ): Promise<void> {
-    if (!this._conversation) return
-    const conv = this._conversation
-    let pendingThinking: string | undefined
-
-    for (const msg of this._messages()) {
-      if (msg.kind === 'user') continue // already saved by startAgentRun
-      if (msg.kind === 'tool_confirm') continue // UI-only, not persisted
-
-      if (msg.kind === 'thinking') {
-        pendingThinking = msg.content
-      } else if (msg.kind === 'assistant' && msg.content) {
-        const dbMsg: Message = {
-          id: msg.id,
-          role: 'assistant',
-          content: msg.content,
-          thinking: pendingThinking,
-        }
-        await firstValueFrom(this.api.post_message(conv.id, dbMsg))
-        pendingThinking = undefined
-      } else if (msg.kind === 'tool_result') {
-        if (pendingThinking !== undefined) {
-          // Thinking block that was never paired with a content block — save as empty-content assistant
-          const dbMsg: Message = {
-            id: crypto.randomUUID(),
-            role: 'assistant',
-            content: '',
-            thinking: pendingThinking,
-          }
-          await firstValueFrom(this.api.post_message(conv.id, dbMsg))
-          pendingThinking = undefined
-        }
-        // token_count for a tool_result = prompt_tokens of the iteration that consumed it as input
-        const iterIdx = toolResultIterations.get(msg.id) ?? 0
-        const tokenCount =
-          iterIdx + 1 < iterationPromptTokens.length
-            ? iterationPromptTokens[iterIdx + 1]
-            : undefined
-        const dbMsg: Message = {
-          id: msg.id,
-          role: 'tool',
-          content: msg.content,
-          token_count: tokenCount,
-        }
-        await firstValueFrom(this.api.post_message(conv.id, dbMsg))
-      }
-    }
-  }
-
   private async _reloadFromDb(): Promise<void> {
     const id = this._conversationId()
-    if (!id) return
+    if (!id) {
+      return
+    }
     const dbMessages = await firstValueFrom(this.api.get_conversation_messages(id))
     this._messages.set(this._fromDbMessages(dbMessages))
   }
@@ -582,7 +602,13 @@ export class ChatService {
         has_children: m.has_children,
       }
       if (m.role === 'user') {
-        result.push({ kind: 'user', id: m.id, content: m.content, token_count: m.token_count, ...siblingMeta })
+        result.push({
+          kind: 'user',
+          id: m.id,
+          content: m.content,
+          token_count: m.token_count,
+          ...siblingMeta,
+        })
       } else if (m.role === 'assistant') {
         if (m.content) {
           result.push({
@@ -595,7 +621,13 @@ export class ChatService {
           })
         } else if (m.thinking) {
           // Thinking-only message (no content) — show as a collapsed thinking block
-          result.push({ kind: 'thinking', id: m.id, content: m.thinking, done: true, ...siblingMeta })
+          result.push({
+            kind: 'thinking',
+            id: m.id,
+            content: m.thinking,
+            done: true,
+            ...siblingMeta,
+          })
         }
       } else if (m.role === 'tool') {
         result.push({
@@ -669,7 +701,9 @@ export class ChatService {
 
   private async _computeTokenCountForLastMessage(): Promise<void> {
     const id = this._conversationId()
-    if (!id) return
+    if (!id) {
+      return
+    }
     const result = await firstValueFrom(this.api.compute_conversation_token_count(id))
     this._promptTokens.set(result.token_count)
     this._messages.update((msgs) => {
@@ -691,9 +725,13 @@ export class ChatService {
 
   private _prependSystemPrompt(messages: MessageForQuery[]): MessageForQuery[] {
     const promptId = this._conversationSettings().active_prompt_id
-    if (promptId === null || promptId === undefined) return messages
-    const prompt = this._prompts().find(p => p.id === promptId)
-    if (!prompt) return messages
+    if (promptId === null || promptId === undefined) {
+      return messages
+    }
+    const prompt = this._prompts().find((p) => p.id === promptId)
+    if (!prompt) {
+      return messages
+    }
     return [{ role: 'system', content: prompt.content }, ...messages]
   }
 

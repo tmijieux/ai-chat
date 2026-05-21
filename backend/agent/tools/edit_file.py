@@ -85,6 +85,6 @@ class EditFileTool(BaseTool):
                 idx = current_content.find(old_string)
                 new_content = current_content[:idx] + new_string + current_content[idx + len(old_string):]
             absolute_path.write_text(new_content, encoding="utf-8")
-            return {"tool": self.name, "status": "success", "path": str(absolute_path), "message": f"Edited {absolute_path}"}
+            return {"tool": self.name, "status": "success", "path": str(absolute_path), "message": f"Edition succeed"}
         except Exception as e:
             return tool_error(self.name, f"Unexpected error: {e}")

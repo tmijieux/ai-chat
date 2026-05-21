@@ -87,6 +87,9 @@ class GrepFilesTool(BaseTool):
 
         return {
             "tool": self.name,
+            "pattern": pattern,
+            "path": path,
+            "glob_pattern": glob_pattern,
             "status": "success",
             "matches": matches,
             "total": len(matches),

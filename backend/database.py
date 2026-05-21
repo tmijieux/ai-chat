@@ -1,5 +1,6 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy import event
 import sqlalchemy.ext.asyncio
 async_sessionmaker = sqlalchemy.ext.asyncio.async_sessionmaker
 
@@ -8,10 +9,14 @@ SQLALCHEMY_DATABASE_URL = "sqlite+aiosqlite:///./chat_db.sqlite"
 
 # Asynchronous engine setup
 engine = create_async_engine(
-    SQLALCHEMY_DATABASE_URL, 
-    echo=True, # Set to True to see generated SQL
-    connect_args={"check_same_thread": False}
+    SQLALCHEMY_DATABASE_URL,
+    echo=True,
+    connect_args={"check_same_thread": False, "timeout": 30},
 )
+
+@event.listens_for(engine.sync_engine, "connect")
+def set_wal_mode(dbapi_connection, connection_record):
+    dbapi_connection.execute("PRAGMA journal_mode=WAL")
 
 # --- 2. Base Definition (The core fix) ---
 class Base(DeclarativeBase):

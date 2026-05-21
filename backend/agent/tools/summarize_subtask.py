@@ -39,14 +39,18 @@ class SummarizeSubtaskTool(BaseTool):
         if not task or not content:
             return tool_error(self.name, "Both 'task' and 'content' are required")
 
-        prompt = f"Task: {task}\n\nContent:\n{content}\n\nProvide a concise summary focused on the task above."
+        
+        system_prompt = f"Task: {task}\nProvide a concise summary of the user message focused on the task above."
         try:
             async with aiohttp.ClientSession() as http:
                 async with http.post(
                     OLLAMA_CHAT_URL,
                     json={
                         "model": MODEL_NAME,
-                        "messages": [{"role": "user", "content": prompt}],
+                        "messages": [
+                            {"role":"system", "content": system_prompt},
+                            {"role": "user", "content": content},
+                        ],
                         "stream": False,
                         "options": {"temperature": 0.1},
                     },

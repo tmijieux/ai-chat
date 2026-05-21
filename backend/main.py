@@ -82,7 +82,7 @@ async def _seed_prompts(sess: AsyncSession) -> None:
             continue
         token_count_value = None
         try:
-            token_count_value = await count_token([{"role": "system", "content": content}])
+            token_count_value = await count_token([{"role": "system", "content": content}], tool_names=[])
         except Exception:
             pass
         sess.add(
@@ -389,7 +389,7 @@ async def add_message(
 
     parent_id = message.parent_id if message.parent_id is not None else conv.active_message_id
 
-    msg_id = str(uuid.uuid4())
+    msg_id = message.id
     sess.add(
         db.Message(
             id=msg_id,
@@ -405,6 +405,18 @@ async def add_message(
     conv.active_message_id = msg_id
     await sess.flush()
     return {"id": msg_id, "parent_id": parent_id}
+
+
+@app.patch("/api/messages/{id}/token-count")
+async def update_message_token_count(
+    id: str, body: ld.UpdateTokenCount, sess: AsyncSession = Depends(get_db_session)
+):
+    msg = (await sess.scalars(select(db.Message).where(db.Message.id == id))).first()
+    if msg is None:
+        raise HTTPException(404)
+    msg.token_count = body.token_count
+    await sess.flush()
+    return {"ok": True}
 
 
 @app.put("/api/messages/{id}/branch")

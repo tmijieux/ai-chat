@@ -44,8 +44,8 @@ class RunShellTool(BaseTool):
                 text=True, cwd=working_directory,
             )
             if proc.returncode == 0:
-                return {"tool": self.name, "status": "success", "output": proc.stdout}
+                return {"tool": self.name, "status": "success", "command": command, "output": proc.stdout}
             else:
-                return {"tool": self.name, "status": "error", "error": {"message": proc.stderr}}
+                return {"tool": self.name, "status": "error", "command": command, "error": {"message": proc.stderr}}
         except Exception as e:
             return tool_error(self.name, f"Unexpected error: {e}")

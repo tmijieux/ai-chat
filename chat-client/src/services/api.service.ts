@@ -101,6 +101,10 @@ export class ApiService {
     return this.http.get<AgentToolsResponse>(`${BASE_URL}/agent/tools`)
   }
 
+  patch_message_token_count(msgId: string, tokenCount: number) {
+    return this.http.patch(`${BASE_URL}/messages/${msgId}/token-count`, { token_count: tokenCount })
+  }
+
   branch_message(msgId: string, content: string) {
     return this.http.put<{ id: string; parent_id: string | null }>(
       `${BASE_URL}/messages/${msgId}/branch`,

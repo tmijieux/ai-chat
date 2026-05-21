@@ -46,6 +46,6 @@ class GlobFilesTool(BaseTool):
 
         try:
             files = [str(p) for p in absolute_path.glob(pattern) if p.is_file()]
-            return {"tool": self.name, "status": "success", "files": files, "total": len(files)}
+            return {"tool": self.name, "pattern": pattern, "path": path, "status": "success", "files": files, "file_count": len(files)}
         except Exception as e:
             return tool_error(self.name, f"Error during glob: {e}")

@@ -8,11 +8,16 @@ class Message(BaseModel):
 
 
 class NewMessage(BaseModel):
+    id: str
     role: str
     content: str
     thinking: str | None = None
     parent_id: str | None = None
     token_count: int | None = None
+
+
+class UpdateTokenCount(BaseModel):
+    token_count: int
 
 
 class Conversation(BaseModel):
