@@ -223,7 +223,7 @@ export class ChatService {
 
     const settings = this._conversationSettings()
     if (settings?.agentic_mode) {
-      this._subscribeToAgentEvents()
+      this._subscribeToAgentEvents(newMsgId)
       this.agentSvc.start(newContent, convId, newMsgId)
     } else {
       const ollamaMessages = this._prependSystemPrompt(this._toOllamaMessages(this._messages()))
@@ -279,7 +279,7 @@ export class ChatService {
 
     persist.then(() => {
       const convId = this._conversationId()
-      this._subscribeToAgentEvents()
+      this._subscribeToAgentEvents(userMsg.id)
       this.agentSvc.start(input, convId)
     })
   }
@@ -410,7 +410,7 @@ export class ChatService {
   // Private: agent event accumulation
   // -------------------------------------------------------------------------
 
-  private _subscribeToAgentEvents(): void {
+  private _subscribeToAgentEvents(userMessageId: string): void {
     this._agentEventSub?.unsubscribe()
 
     const conv = this._conversation!
@@ -421,8 +421,11 @@ export class ChatService {
     let idOfCurrentlyStreamingAssistantMessage: string | null = null
     let pendingContentText = ''
 
-    // tool_result IDs saved this iteration, awaiting token_count from the next iteration_end
-    let pendingToolResultIds: string[] = []
+    // The prompt_token count reported by Ollama in iteration_end is the number of tokens in the
+    // messages sent to that iteration — which includes the tool results from the previous iteration.
+    // We therefore patch tool result IDs from the previous iteration when the next iteration_end arrives.
+    let toolResultIdsFromCurrentIteration: string[] = []
+    let toolResultIdsFromPreviousIteration: string[] = [userMessageId]
 
     let saveQueue: Promise<void> = Promise.resolve()
     const enqueue = (fn: () => Promise<unknown>) => {
@@ -551,26 +554,30 @@ export class ChatService {
           role: 'tool',
           content: resultContent,
         })))
-        pendingToolResultIds.push(resultId)
+        toolResultIdsFromCurrentIteration.push(resultId)
       } else if (event.type === 'iteration_end') {
         const tokens = event.prompt_tokens ?? 0
         this._promptTokens.set(tokens)
         markThinkingMessageAsDoneAndClearIt()
         stopStreamingTheAssistantMessageSaveItAndClearIt()
-        for (const id of pendingToolResultIds) {
+        for (const id of toolResultIdsFromPreviousIteration) {
           const capturedId = id
           enqueue(() => firstValueFrom(this.api.patch_message_token_count(capturedId, tokens)).then(() => {
             this._messages.update((msgs) =>
               msgs.map((m) =>
-                m.id === capturedId && m.kind === 'tool_result' ? { ...m, token_count: tokens } : m,
+                m.id === capturedId ? { ...m, token_count: tokens } : m,
               ),
             )
           }))
         }
-        pendingToolResultIds = []
+        toolResultIdsFromPreviousIteration = toolResultIdsFromCurrentIteration
+        toolResultIdsFromCurrentIteration = []
       } else if (event.type === 'done' || event.type === 'error') {
         this._messages.update((msgs) => msgs.filter((m) => m.kind !== 'tool_confirm'))
         enqueue(() => this._computeTokenCountForLastMessage())
+        // Reload from DB to get has_children and sibling metadata, which are only computed
+        // server-side and are not available on display messages created during the agent run.
+        enqueue(() => this._reloadFromDb())
         this._agentEventSub?.unsubscribe()
         this._agentEventSub = null
       }

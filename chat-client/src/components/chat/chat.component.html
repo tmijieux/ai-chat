@@ -52,15 +52,11 @@
         (click)="selectConversation(conv)"
       >
         {{ conv.title }}
-        <div
-          class="px-1 p-relative"
-          (click)="conv.menuOpened = !conv.menuOpened; $event.stopPropagation()"
-          (clickOutside)="conv.menuOpened = false"
-        >
-          ⋮
-          @if (conv.menuOpened) {
-            <div class="p-absolute top-100 right-0 bg-grey p-2" (click)="deleteConversation(conv)">
-              Supprimer
+        <div class="p-relative">
+          <button class="msg-action-btn" (click)="toggleConvMenu(conv.id, $event)">⋮</button>
+          @if (openConvMenuId() === conv.id) {
+            <div class="msg-menu">
+              <button class="danger" (click)="deleteConversation(conv)">Supprimer</button>
             </div>
           }
         </div>
@@ -86,7 +82,7 @@
   <div class="p-2 border-b bg-gray-100 flex justify-between items-center gap-4">
     <span class="font-medium text-gray-700"
       >Context Tokens:
-      <span class="font-bold text-indigo-600">{{ chatSvc.promptTokens() }} / 16,384</span>
+      <span class="font-bold text-indigo-600">{{ chatSvc.promptTokens() }} / 16,384 ({{ (chatSvc.promptTokens() / 16384 * 100).toFixed(1) }}%)</span>
     </span>
     <div class="flex items-center gap-3">
       <label class="flex items-center gap-2 cursor-pointer select-none text-sm">

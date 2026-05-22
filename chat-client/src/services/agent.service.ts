@@ -1,9 +1,7 @@
 import { Injectable, signal } from '@angular/core'
 import { Observable, Subject } from 'rxjs'
 import { AgentEvent } from '../types/message-types'
-import { BASE_URL } from './api.service'
-
-const WS_URL = BASE_URL.replace('http://', 'ws://').replace('https://', 'wss://').replace('/api', '') + '/api/agent/ws'
+const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/agent/ws'
 
 /**
  * Pure WebSocket transport for the agent loop.

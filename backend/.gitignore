@@ -1,2 +1,4 @@
 __pycache__
 chat_db.sqlite
+chat_db.sqlite-wal
+chat_db.sqlite-shm

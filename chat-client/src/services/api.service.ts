@@ -10,7 +10,7 @@ import {
 } from '../types/message-types'
 import { HttpClient } from '@angular/common/http'
 
-export const BASE_URL = 'http://localhost:8000/api'
+export const BASE_URL = '/api'
 
 @Injectable({
   providedIn: 'root',

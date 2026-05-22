@@ -6,7 +6,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, Depends, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
+
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, delete
 from database import init_db, get_db_session, AsyncSession
@@ -110,13 +110,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="LLM Chat Backend", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:4200", "http://localhost:4200/*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
 
 
 # ---------------------------------------------------------------------------
@@ -816,28 +810,14 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
         session = AgentSession()
         agent_task = asyncio.create_task(run_agent(session, messages, tools, working_directory))
 
-        async def send_events_with_token_update() -> None:
-            iteration = 0
+        async def send_events_to_websocket() -> None:
             while True:
                 event = await session.outbound.get()
                 await websocket.send_json(event)
-
-                if event["type"] == "iteration_end":
-                    iteration += 1
-                    if iteration == 1 and last_user_msg_id:
-                        user_msg = (
-                            await sess.scalars(
-                                select(db.Message).where(db.Message.id == last_user_msg_id)
-                            )
-                        ).first()
-                        if user_msg:
-                            user_msg.token_count = event.get("prompt_tokens", 0)
-                            await sess.flush()
-
                 if event["type"] in ("done", "error"):
                     return
 
-        send_task = asyncio.create_task(send_events_with_token_update())
+        send_task = asyncio.create_task(send_events_to_websocket())
         recv_task = asyncio.create_task(_ws_receive_messages(websocket, session, agent_task))
 
         await send_task

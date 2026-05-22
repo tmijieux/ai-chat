@@ -2,7 +2,6 @@ import { Component, computed, HostListener, inject, model, OnDestroy, signal } f
 import { CommonModule } from '@angular/common'
 import { FormsModule } from '@angular/forms'
 import { ChatService } from '../../services/chat.service'
-import { map } from 'rxjs'
 import {
   Conversation,
   ConversationSettings,
@@ -42,6 +41,7 @@ export class ChatComponent implements OnDestroy {
 
   // Action menu state
   readonly openMenuId = signal<string | null>(null)
+  readonly openConvMenuId = signal<string | null>(null)
 
   // Raw markdown toggle
   private rawModeIds = signal(new Set<string>())
@@ -59,6 +59,12 @@ export class ChatComponent implements OnDestroy {
   @HostListener('document:click')
   closeMenu(): void {
     this.openMenuId.set(null)
+    this.openConvMenuId.set(null)
+  }
+
+  toggleConvMenu(convId: string, event: Event): void {
+    event.stopPropagation()
+    this.openConvMenuId.set(this.openConvMenuId() === convId ? null : convId)
   }
 
   readonly activePrompt = computed(() => {
@@ -82,7 +88,9 @@ export class ChatComponent implements OnDestroy {
   // Enrich each message with token contribution metadata for the tooltip display.
   readonly messagesWithMeta = computed<DisplayMessageWithMeta[]>(() => {
     const msgs = this.chatSvc.messages()
-    let prevTokenCount: number | null = null
+    const promptTokens = this.activePrompt()?.token_count ?? 0
+    const toolsTokens = this.activeToolsTokenCount() ?? 0
+    let prevTokenCount: number | null = promptTokens + toolsTokens
     return msgs.map((msg) => {
       const tokenCount =
         msg.kind === 'user' || msg.kind === 'assistant' || msg.kind === 'tool_result'
@@ -103,9 +111,7 @@ export class ChatComponent implements OnDestroy {
     })
   })
 
-  readonly conversations$ = this.chatSvc.conversations.obs$.pipe(
-    map((conversations) => conversations.map((c) => ({ ...c, menuOpened: false }))),
-  )
+  readonly conversations$ = this.chatSvc.conversations.obs$
 
   constructor() {
     this.route.queryParamMap.subscribe((pm) => {
