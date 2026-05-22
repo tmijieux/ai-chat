@@ -16,6 +16,9 @@ export type Message = {
   thinking_included_in_context?: boolean
   loading?: boolean
   token_count?: number | null
+  token_delta?: number | null
+  context_excluded?: boolean
+  exclusion_reason?: string | null
   created_at?: string
   sibling_count?: number
   sibling_index?: number
@@ -73,7 +76,7 @@ export type SystemPromptTemplate = {
   name: string
   category: SystemPromptCategory
   content: string
-  is_default: number // 1 | 0
+  is_default: boolean
   token_count: number | null
   created_at: string
 }
@@ -136,13 +139,13 @@ export type AgentEvent = {
 // Sources: DB reload (via selectConversation) and live agent event stream.
 // ---------------------------------------------------------------------------
 
-/** Token metadata added to messages that carry a cumulative context size. */
+/** Token metadata added to messages that carry token information. */
 export type TokenMeta = {
-  token_count: number
-  /** Tokens added by this message relative to the previous counted message. */
-  token_contribution: number | null
+  token_count: number | null
+  /** Estimated tokens for this message alone. */
+  token_delta: number | null
   /** token_count as a percentage of the 16 384 context window. */
-  token_pct: number
+  token_pct: number | null
 }
 
 type SiblingMeta = {
@@ -159,6 +162,8 @@ export type DisplayMessage =
       id: string
       content: string
       token_count?: number | null
+      token_delta?: number | null
+      context_excluded?: boolean
     } & SiblingMeta)
   | ({
       kind: 'assistant'
@@ -168,6 +173,8 @@ export type DisplayMessage =
       /** True while the HTTP stream is still open (non-agentic mode). */
       streaming?: boolean
       token_count?: number | null
+      token_delta?: number | null
+      context_excluded?: boolean
     } & SiblingMeta)
   | ({
       kind: 'thinking'
@@ -192,6 +199,8 @@ export type DisplayMessage =
       tool_name: string
       content: string
       token_count?: number | null
+      token_delta?: number | null
+      context_excluded?: boolean
     } & SiblingMeta)
 
 /**

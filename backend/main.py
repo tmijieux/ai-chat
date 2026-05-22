@@ -14,7 +14,7 @@ import loaders as ld
 import tables as db
 import aiohttp
 import asyncio
-from agent.agent import AgentSession, run_agent
+from agent.agent import AgentSession, run_agent, _find_superseded_read_file_indices
 from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
 from agent.count_token import count_token
 
@@ -91,7 +91,7 @@ async def _seed_prompts(sess: AsyncSession) -> None:
                 name=name,
                 category=meta.get("category", "general"),
                 content=content,
-                is_default=1,
+                is_default=True,
                 token_count=token_count_value,
                 created_at=_now(),
             )
@@ -171,10 +171,19 @@ async def _build_inference_context(
         if p is not None:
             messages.append({"role": "system", "content": p.content})
     for m in branch:
+        if m.context_excluded:
+            continue
         if m.content is None or m.content.strip() == "":
             continue
         messages.append({"role": m.role, "content": m.content})
     return messages
+
+
+def _deduplicate_branch_file_reads(branch: list[db.Message]) -> None:
+    pairs = [(m.role, m.content or "") for m in branch]
+    for i in _find_superseded_read_file_indices(pairs):
+        branch[i].context_excluded = True
+        branch[i].exclusion_reason = "file_superseded"
 
 
 def _parse_conv_settings(conv: db.Conversation) -> ld.ConversationSettings:
@@ -194,6 +203,9 @@ def _msg_dict(m: db.Message) -> dict:
         "thinking": m.thinking,
         "created_at": m.created_at,
         "token_count": m.token_count,
+        "token_delta": m.token_delta,
+        "context_excluded": m.context_excluded,
+        "exclusion_reason": m.exclusion_reason,
     }
 
 
@@ -394,6 +406,7 @@ async def add_message(
             created_at=_now(),
             role=message.role,
             token_count=message.token_count,
+            token_delta=message.token_delta,
         )
     )
     conv.active_message_id = msg_id
@@ -408,7 +421,10 @@ async def update_message_token_count(
     msg = (await sess.scalars(select(db.Message).where(db.Message.id == id))).first()
     if msg is None:
         raise HTTPException(404)
-    msg.token_count = body.token_count
+    if body.token_count is not None:
+        msg.token_count = body.token_count
+    if body.token_delta is not None:
+        msg.token_delta = body.token_delta
     await sess.flush()
     return {"ok": True}
 
@@ -563,7 +579,7 @@ async def create_system_prompt(
         name=body.name,
         category=body.category,
         content=body.content,
-        is_default=1 if body.is_default else 0,
+        is_default=body.is_default,
         token_count=token_count_value,
         created_at=_now(),
     )
@@ -599,7 +615,7 @@ async def update_system_prompt(
         p.content = body.content
         p.token_count = await _compute_prompt_token_count(body.content)
     if body.is_default is not None:
-        p.is_default = 1 if body.is_default else 0
+        p.is_default = body.is_default
     return {
         "id": p.id,
         "name": p.name,
@@ -787,6 +803,8 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
                 )
                 all_msgs = list(all_msgs_result.scalars().all())
                 branch = _build_active_branch_path(all_msgs, conv.active_message_id)
+                _deduplicate_branch_file_reads(branch)
+                await sess.flush()
 
         settings = _parse_conv_settings(conv) if conv else ld.ConversationSettings()
         active_tool_names = settings.active_tool_names if (conv and conv.settings is not None) else list(TOOL_REGISTRY.keys())
@@ -796,16 +814,6 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
         messages = await _build_inference_context(branch, settings.active_prompt_id, sess)
         if user_message_id is None:
             messages.append({"role": "user", "content": user_message})
-
-        if user_message_id is not None:
-            last_user_msg_id: str | None = user_message_id
-        else:
-            last_user_msg_id = None
-            if conversation_id and conv and branch:
-                for m in reversed(branch):
-                    if m.role == "user":
-                        last_user_msg_id = m.id
-                        break
 
         session = AgentSession()
         agent_task = asyncio.create_task(run_agent(session, messages, tools, working_directory))

@@ -1,4 +1,4 @@
-from sqlalchemy import Integer, String, ForeignKey, Text
+from sqlalchemy import Integer, String, ForeignKey, Text, Boolean
 from sqlalchemy.orm import mapped_column as column
 from database import Base
 
@@ -25,6 +25,9 @@ class Message(Base):
     thinking = column(Text, nullable=True)
     created_at = column(String, nullable=False)
     token_count = column(Integer, nullable=True)
+    token_delta = column(Integer, nullable=True)
+    context_excluded = column(Boolean, nullable=False, default=False)
+    exclusion_reason = column(String, nullable=True)
 
 
 class SystemPromptTemplate(Base):
@@ -34,6 +37,6 @@ class SystemPromptTemplate(Base):
     # general | code | summarization | context_compaction | state_storage
     category = column(String, nullable=False)
     content = column(Text, nullable=False)
-    is_default = column(Integer, nullable=False, default=0)  # 1=true 0=false
+    is_default = column(Boolean, nullable=False, default=False)
     token_count = column(Integer, nullable=True)
     created_at = column(String, nullable=False)

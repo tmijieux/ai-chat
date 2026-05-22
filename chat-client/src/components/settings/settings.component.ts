@@ -87,7 +87,7 @@ export class SettingsComponent implements OnInit {
       name: p.name,
       category: p.category,
       content: p.content,
-      is_default: p.is_default === 1,
+      is_default: p.is_default,
     })
     this.editingId.set(p.id)
     this.showCreateForm.set(false)

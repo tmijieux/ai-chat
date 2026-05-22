@@ -86,7 +86,7 @@
             <div class="flex items-center gap-2 flex-wrap">
               <span class="font-semibold">{{ p.name }}</span>
               <span class="badge badge-neutral">{{ p.category }}</span>
-              @if (p.is_default === 1) {
+              @if (p.is_default) {
                 <span class="badge badge-accent">default</span>
               }
               @if (p.token_count !== null) {

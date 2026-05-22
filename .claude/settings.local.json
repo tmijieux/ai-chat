@@ -9,7 +9,8 @@
       "Bash(npm install *)",
       "Bash(npx ng *)",
       "Bash(python -m agent.count_tool_tokens)",
-      "Bash(venv/Scripts/python -m agent.count_tool_tokens)"
+      "Bash(venv/Scripts/python -m agent.count_tool_tokens)",
+      "Bash(sqlite3 chat_db.sqlite ' *)"
     ]
   }
 }

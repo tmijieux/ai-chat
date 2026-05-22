@@ -3,9 +3,11 @@
   <div class="token-meta">
     ⓘ
     <div class="token-tooltip">
-      <div>Context: {{ meta.token_count | number: '1.0-0' }} / 16 384 ({{ meta.token_pct }}%)</div>
-      @if (meta.token_contribution != null) {
-        <div>This message: ~{{ meta.token_contribution | number: '1.0-0' }} tokens</div>
+      @if (meta.token_count != null) {
+        <div>Context: {{ meta.token_count | number: '1.0-0' }} / 16 384 ({{ meta.token_pct }}%)</div>
+      }
+      @if (meta.token_delta != null) {
+        <div>This message: ~{{ meta.token_delta | number: '1.0-0' }} tokens</div>
       }
     </div>
   </div>
@@ -56,7 +58,7 @@
           <button class="msg-action-btn" (click)="toggleConvMenu(conv.id, $event)">⋮</button>
           @if (openConvMenuId() === conv.id) {
             <div class="msg-menu">
-              <button class="danger" (click)="deleteConversation(conv)">Supprimer</button>
+              <button class="danger" (click)="deleteConversation(conv); $event.stopPropagation()">Supprimer</button>
             </div>
           }
         </div>
@@ -309,6 +311,9 @@
                   Tool result
                   @if (msg.tool_name) {
                     : <code class="bg-gray-200 px-1 rounded">{{ msg.tool_name }}</code>
+                  }
+                  @if (msg.context_excluded) {
+                    <span class="ml-2 text-xs text-gray-400 italic">excluded from context</span>
                   }
                 </summary>
                 <pre

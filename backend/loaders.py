@@ -14,10 +14,12 @@ class NewMessage(BaseModel):
     thinking: str | None = None
     parent_id: str | None = None
     token_count: int | None = None
+    token_delta: int | None = None
 
 
 class UpdateTokenCount(BaseModel):
-    token_count: int
+    token_count: int | None = None
+    token_delta: int | None = None
 
 
 class Conversation(BaseModel):

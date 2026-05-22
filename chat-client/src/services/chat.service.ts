@@ -126,7 +126,7 @@ export class ChatService {
       this._prompts.set(p)
       // Patch pending new-chat settings with the default prompt if none is selected yet
       if (this._conversationId() === undefined) {
-        const defaultId = p.find((prompt) => prompt.is_default === 1)?.id ?? null
+        const defaultId = p.find((prompt) => prompt.is_default)?.id ?? null
         if (defaultId !== null) {
           this._conversationSettings.set({
             ...this._conversationSettings(),
@@ -161,7 +161,7 @@ export class ChatService {
     this._promptTokens.set(0)
     this._conversation = undefined
     this._conversationId.set(undefined)
-    const defaultPromptId = this._prompts().find((p) => p.is_default === 1)?.id ?? null
+    const defaultPromptId = this._prompts().find((p) => p.is_default)?.id ?? null
     const lastWorkingDir = this._conversationSettings().working_directory
     this._conversationSettings.set({
       agentic_mode: true,
@@ -280,7 +280,7 @@ export class ChatService {
     persist.then(() => {
       const convId = this._conversationId()
       this._subscribeToAgentEvents(userMsg.id)
-      this.agentSvc.start(input, convId)
+      this.agentSvc.start(input, convId, userMsg.id)
     })
   }
 
@@ -331,6 +331,7 @@ export class ChatService {
     await firstValueFrom(this.api.delete_conversation(conv.id))
     this.conversations.refresh()
     if (conv.id === this._conversation?.id) {
+      console.log('consol')
       this.startNewChat()
     }
   }
@@ -391,6 +392,7 @@ export class ChatService {
                   role: 'assistant',
                   content,
                   thinking: thinking || undefined,
+                  token_delta: Math.floor(content.length / 4),
                 }
                 await firstValueFrom(this.api.post_message(conv.id, savedMsg))
                 await this._computeTokenCountForLastMessage()
@@ -429,16 +431,24 @@ export class ChatService {
 
     let saveQueue: Promise<void> = Promise.resolve()
     const enqueue = (fn: () => Promise<unknown>) => {
-      saveQueue = saveQueue.then(() => fn()).then(() => {}).catch((err) => console.error('Save error:', err))
+      saveQueue = saveQueue
+        .then(() => fn())
+        .then(() => {})
+        .catch((err) => console.error('Save error:', err))
     }
 
     const saveAssistant = (id: string, content: string, thinking: string) => {
-      enqueue(() => firstValueFrom(this.api.post_message(conv.id, {
-        id,
-        role: 'assistant',
-        content,
-        thinking: thinking || undefined,
-      })))
+      enqueue(() =>
+        firstValueFrom(
+          this.api.post_message(conv.id, {
+            id,
+            role: 'assistant',
+            content,
+            thinking: thinking || undefined,
+            token_delta: Math.floor(content.length / 4),
+          }),
+        ),
+      )
     }
 
     const markThinkingMessageAsDoneAndClearIt = () => {
@@ -549,11 +559,16 @@ export class ChatService {
           pendingThinkingContent = ''
           saveAssistant(crypto.randomUUID(), '', thinking)
         }
-        enqueue(() => firstValueFrom(this.api.post_message(conv.id, {
-          id: resultId,
-          role: 'tool',
-          content: resultContent,
-        })))
+        enqueue(() =>
+          firstValueFrom(
+            this.api.post_message(conv.id, {
+              id: resultId,
+              role: 'tool',
+              content: resultContent,
+              token_delta: Math.floor(resultContent.length / 4),
+            }),
+          ),
+        )
         toolResultIdsFromCurrentIteration.push(resultId)
       } else if (event.type === 'iteration_end') {
         const tokens = event.prompt_tokens ?? 0
@@ -562,13 +577,13 @@ export class ChatService {
         stopStreamingTheAssistantMessageSaveItAndClearIt()
         for (const id of toolResultIdsFromPreviousIteration) {
           const capturedId = id
-          enqueue(() => firstValueFrom(this.api.patch_message_token_count(capturedId, tokens)).then(() => {
-            this._messages.update((msgs) =>
-              msgs.map((m) =>
-                m.id === capturedId ? { ...m, token_count: tokens } : m,
-              ),
-            )
-          }))
+          enqueue(() =>
+            firstValueFrom(this.api.patch_message_token_count(capturedId, tokens)).then(() => {
+              this._messages.update((msgs) =>
+                msgs.map((m) => (m.id === capturedId ? { ...m, token_count: tokens } : m)),
+              )
+            }),
+          )
         }
         toolResultIdsFromPreviousIteration = toolResultIdsFromCurrentIteration
         toolResultIdsFromCurrentIteration = []
@@ -614,6 +629,8 @@ export class ChatService {
           id: m.id,
           content: m.content,
           token_count: m.token_count,
+          token_delta: m.token_delta,
+          context_excluded: m.context_excluded,
           ...siblingMeta,
         })
       } else if (m.role === 'assistant') {
@@ -624,6 +641,8 @@ export class ChatService {
             content: m.content,
             thinking: m.thinking ?? undefined,
             token_count: m.token_count,
+            token_delta: m.token_delta,
+            context_excluded: m.context_excluded,
             ...siblingMeta,
           })
         } else if (m.thinking) {
@@ -643,6 +662,8 @@ export class ChatService {
           tool_name: '',
           content: m.content,
           token_count: m.token_count,
+          token_delta: m.token_delta,
+          context_excluded: m.context_excluded,
           ...siblingMeta,
         })
       }
@@ -689,6 +710,7 @@ export class ChatService {
         id: userMsg.id,
         role: 'user',
         content: userMsg.content,
+        token_delta: Math.floor(userMsg.content.length / 4),
       }),
     )
   }
@@ -702,6 +724,7 @@ export class ChatService {
         id: userMsg.id,
         role: 'user',
         content: userMsg.content,
+        token_delta: Math.floor(userMsg.content.length / 4),
       }),
     )
   }
