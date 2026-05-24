@@ -58,10 +58,10 @@ Deletes only one message, re-parenting its direct children to the deleted messag
 The structured JSON dict that every tool's `execute()` returns. Contains at minimum `tool` (tool name) and any relevant paths or identifiers (e.g. `path` for file tools). Serialized to JSON by the framework layer, never by the tool itself. Allows deterministic parsing of tool-role messages by the context manager.
 
 ## Active File
-The file most recently written to via `write_file` or `edit_file` in the current agent session. Identified by parsing tool-role message history. Always kept at full content in context — never compressed.
+**Not yet implemented.** Concept for the planned [[Post-Iteration Sub-Agent]] pipeline: the file most recently written to via `write_file` or `edit_file` in the current agent session, identified by parsing tool-role message history. Will always be kept at full content in context — never compressed.
 
 ## Reference File
-A file read into context but not actively being modified. Identified by parsing tool-role message history. Compressed to API surface (signatures, types, exports) by the post-iteration sub-agent when context pressure requires it.
+**Not yet implemented.** Concept for the planned [[Post-Iteration Sub-Agent]] pipeline: a file read into context but not actively being modified, identified by parsing tool-role message history. Will be compressed to API surface (signatures, types, exports) by the post-iteration sub-agent when context pressure requires it.
 
 ## Known Bugs
 - **`tool_name` lost on reload**: Tool result bubbles show "Tool result: `edit_file`" during a live run but just "Tool result" after reload. Fix: in `_fromDbMessages`, parse `m.content` as JSON and read the `tool` field (already present in every Tool Result Envelope) to populate `tool_name` instead of hardcoding `''`.
@@ -76,7 +76,7 @@ A file read into context but not actively being modified. Identified by parsing 
 A fixed-prompt LLM call fired by the framework after each main agent iteration (not triggered by the main agent). Receives a digest of: tools called, changes made, last user message summary, and reference file contents to compress. Returns a JSON state object (`current_goal`, `current_assumption`, etc.) and API summaries for reference files. Enables context eviction without relying on the main agent to cooperate.
 
 ## Status Bar
-Always-visible top bar in the chat area. Shows token info only: `Context Tokens: N / 16,384 (%)`. The value is the last measured `prompt_eval_count` — always from a real API call, never estimated. Shows 0 on a new chat. The agentic mode toggle has been removed from the status bar (and from the UI entirely — see [[Agentic Mode]]). The only interactive element remaining is the ⚙ button that opens the [[Conversation Settings Drawer]].
+Always-visible top bar in the chat area. Shows token info only: `Context Tokens: N / 16,384 (%)`. The value is the last measured `prompt_eval_count` — always from a real API call, never estimated. Shows 0 on a new chat. The agentic mode toggle is still present next to the ⚙ button (see [[Agentic Mode]] for the removal plan). The ⚙ button opens the [[Conversation Settings Drawer]].
 
 ## Conversation Turn
 The unit of visual grouping in the chat. One top-level bubble per speaker per iteration:
@@ -87,7 +87,7 @@ This grouping is the **target design** (not yet fully implemented). Current stat
 
 ## Sidebar
 Left-side panel, always visible. Contains:
-- App title. Subtitle should communicate "an AI chat app that lets you keep track of your context easily" — not just "Context Token Counter".
+- App title ("AI Chat"). Subtitle should communicate "an AI chat app that lets you keep track of your context easily"
 - "New Chat" entry at the top of the list.
 - Conversation list — click to select, ⋮ menu → Delete.
 - Settings button at the bottom linking to `/settings`.
@@ -137,8 +137,10 @@ Five places in the UI where token information is shown — all intentional, all 
 5. **Settings page / prompt list** — each prompt option label includes `(~N tok)`.
 
 ## Context Eviction
-Framework-level pruning of tool-role messages before the next main iteration. Current implementation: duplicate file reads — evict older reads of the same path, keep only the most recent (partially implemented). Planned: reference file compression via [[Post-Iteration Sub-Agent]].
+Framework-level pruning of tool-role messages before the next main iteration. Current implementation: duplicate file reads — evict older reads of the same path, keep only the most recent (fully implemented: backend deduplication + frontend "excluded from context" label).
 
 Evicted messages remain visible in the UI with an "excluded from context" label. They retain their stored `token_count` so the user can see what was saved. The status bar and downstream deltas reflect the post-eviction reality from the next API call.
+
+Planned but not yet implemented: **reference file compression** — evicting full file reads and replacing them with API surface summaries produced by the [[Post-Iteration Sub-Agent]]. Also not yet implemented: **oversized output summarization** — if a tool result exceeds a token threshold, the framework calls `summarize_subtask` on it before storing in message history.
 
 **Interaction with token counting — known hard problem:** after an eviction or manual deletion, downstream messages have stale stored cumulatives. Design intent: re-estimate their displayed cumulative by walking forward through still-in-context messages and summing their stored deltas (each delta was computed from two actual API measurements at generation time and remains valid). The status bar always shows the last real API measurement regardless. Exact re-estimation logic is still being refined.

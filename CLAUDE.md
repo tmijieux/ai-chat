@@ -162,7 +162,7 @@ Client can send: `{"type":"confirm","tool_id":"...","approved":bool}` or `{"type
 3. Backend `agent_websocket` builds context from DB history, runs `run_agent`.
 4. `iteration_end` from backend → frontend updates `promptTokens`; backend also persists `token_count` on the last DB user message (iteration 1 only).
 5. On `done`, frontend calls `saveAgentMessages()` to persist all agentic messages to DB (content, tool results; skips iteration_end/user); tool result messages get `token_count` from the following iteration's `prompt_tokens`.
-6. Then `countTokensForCurrentConversation()` is called (redundant but harmless).
+
 
 ## Token Counting
 
@@ -216,11 +216,8 @@ The script prints each tool's total count and delta, then verifies `token_count`
 
 ## Known Gaps / TODOs
 
-- `countTokensForCurrentConversation` still fires after agentic runs (line ~65 in `chat.component.ts`) — redundant since per-message token counts are accurate; harmless.
-- `_ws_send_events` helper in `main.py` (line ~530) is unused — superseded by `send_events_with_token_update`; can be deleted.
 - Final assistant message (no tool calls) from the agentic run does not yet get a `token_count` from the `iteration_end` path.
 - Thinking-only assistant messages (content = "") are still saved to DB by `saveAgentMessages` — correctly filtered from Ollama context but add noise.
-- Phase 3 (system prompt & tool library UI) is next — see Project Handoff document.
 
 ## Development
 
