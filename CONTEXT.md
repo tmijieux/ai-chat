@@ -33,6 +33,16 @@ When a tool with `requires_confirmation = true` is called, the backend emits a `
 - **Reject** — opens a textarea for an optional rejection reason; the reason is sent back to the model as part of the tool result so the agent can adjust without the run being aborted.
 The confirmation card disappears from the message list once the agent run is complete.
 
+## Edit File Diff Preview
+**Planned improvement.** The `edit_file` confirmation card currently shows a plain-text `--- OLD --- / --- NEW ---` preview. Target: render a colored unified diff with actual file line numbers — red lines for removals (`-`), green lines for additions (`+`), gray/neutral for unchanged context lines.
+
+Implementation sketch:
+- **Backend** (`edit_file.py:execute()`): after reading `current_content` (which already happens before `request_confirm()`), compute the start line of `old_string` in the file (`current_content[:idx].count('\n') + 1`), then run `difflib.unified_diff` on the before/after file slices to produce diff lines with correct `@@` offsets. Pass a `diff_lines: list[{type, text}]` structure into `request_confirm()` alongside the existing plain-text `preview` (kept as fallback). Note: `validate()` is not the right place — it lacks `working_directory` and doesn't read the file.
+- **Agent event** (`agent.py` / `main.py`): `tool_confirm` WS event gains an optional `diff_lines` field.
+- **Frontend** (`agent.service.ts`): parse `diff_lines` from the event into the `AgentUiMessage`.
+- **Frontend** (`chat.component.html`): when `diff_lines` is present on a `tool_confirm` message, render a colored diff block (monospace, red bg for `-` lines, green bg for `+`, transparent for context) instead of the plain `<pre>`.
+- **Scope**: only `edit_file` needs this; `write_file` and `run_shell` keep their existing plain-text previews.
+
 ## Tool
 A self-contained agent capability implemented as a single Python file in `backend/agent/tools/`. Each tool subclasses a common base class that defines: `name`, `description`, `parameters` (JSON schema), `requires_confirmation`, `validate(args) → preview`, and `execute(args) → result`. The `validate` phase runs before user confirmation; `execute` runs after. All tools are explicitly registered in `backend/agent/tools/__init__.py`.
 

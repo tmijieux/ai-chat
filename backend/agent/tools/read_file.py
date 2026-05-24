@@ -46,6 +46,6 @@ class ReadFileTool(BaseTool):
             if limit and limit > 0:
                 lines = file_content.splitlines()
                 file_content = "\n".join(lines[-limit:])
-            return {"tool": self.name, "status": "success", "path": path, "content": file_content}
+            return {"tool": self.name, "status": "success", "path": path, "file_content": file_content}
         except Exception as e:
             return tool_error(self.name, f"Error reading file: {e}", path=path)

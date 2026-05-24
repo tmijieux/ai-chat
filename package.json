@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "start": "npm run dev",
-    "dev": "concurrently --names backend,frontend --prefix-colors cyan,magenta \"npm run backend\" \"npm run frontend\"",
+    "dev": "concurrently --names backend,frontend --prefix-colors cyan,magenta \"cd backend && venv\\\\Scripts\\\\uvicorn main:app --reload\" \"cd chat-client && npm start\"",
     "backend": "cd backend && venv\\Scripts\\uvicorn main:app --reload",
     "frontend": "cd chat-client && npm start"
   },

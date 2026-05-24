@@ -76,6 +76,48 @@ def _deduplicate_file_reads(messages: list[dict[str, Any]]) -> None:
 
 
 
+def _log_context(messages: list[dict[str, Any]]) -> None:
+    print(f"\n=== CONTEXT ({len(messages)} messages) ===")
+    for m in messages:
+        role = m.get("role", "?")
+        content = m.get("content")
+        if content is None:
+            content = ""
+        if role == "system":
+            print(f"  [system] {content[:120].replace('\n', ' ')}")
+        elif role == "user":
+            print(f"  [user] {content[:200].replace('\n', ' ')}")
+        elif role == "tool":
+            try:
+                j = json.loads(content)
+                tool = j.get("tool", "?")
+                status = j.get("status", "?")
+                path = j.get("path", "")
+                if tool == "read_file":
+                    suffix = " [evicted]" if status == "evicted" else ""
+                    print(f"  [tool] FILE {path}{suffix}")
+                elif tool in ("list_directory", "glob_files", "grep_files"):
+                    location = path if path != "" else j.get("pattern", j.get("query", ""))
+                    print(f"  [tool] DIRECTORY {location}")
+                else:
+                    print(f"  [tool] {tool}: {status}")
+            except (json.JSONDecodeError, ValueError):
+                print(f"  [tool] {content[:80].replace('\n', ' ')}")
+        elif role == "assistant":
+            thinking = m.get("thinking")
+            if thinking is not None and thinking.strip() != "":
+                print(f"  [thinking] {thinking.replace('\n', ' ')[:120]}")
+            tool_calls = m.get("tool_calls")
+            if tool_calls is not None and len(tool_calls) > 0:
+                names = ", ".join(tc.get("function", {}).get("name", "?") for tc in tool_calls)
+                print(f"  [assistant] {len(tool_calls)} tool call(s): {names}")
+            elif content.strip() != "":
+                print(f"  [assistant] {content.replace('\n', ' ')[:120]}")
+        else:
+            print(f"  [{role}] {content[:80].replace('\n', ' ')}")
+    print("=" * 40)
+
+
 async def chat_with_tools(
     messages: list[dict[str, Any]],
     session: AgentSession,
@@ -86,15 +128,23 @@ async def chat_with_tools(
     One iteration of the Ollama call + tool execution loop.
     Returns True when the agent is done (no tool calls were made).
     """
+    def _to_ollama_msg(m: dict) -> dict:
+        msg: dict = {"role": m["role"], "content": m["content"]}
+        if "tool_calls" in m:
+            msg["tool_calls"] = m["tool_calls"]
+        return msg
+    ollama_messages = [_to_ollama_msg(m) for m in messages]
+    _log_context(ollama_messages)
+    #print(json.dumps(ollama_messages, indent=2, ensure_ascii=False))
     async with aiohttp.ClientSession() as http:
         async with http.post(
             OLLAMA_CHAT_URL,
             json={
                 "model": MODEL_NAME,
-                "messages": [{k: v for k, v in m.items() if k not in ("_transient", "thinking")} for m in messages],
+                "messages": ollama_messages,
                 "tools": tools,
                 "stream": True,
-                "options": {"temperature": 0.3},
+                "options": {"temperature": 0.3, "num_ctx": 16384},
             },
         ) as response:
             message: dict[str, Any] = {"role": "assistant", "content": "", "thinking": ""}
@@ -124,6 +174,7 @@ async def chat_with_tools(
                         if "tool_calls" in resp_msg:
                             tool_calls.extend(resp_msg["tool_calls"])
                     if chunk_json.get("done"):
+                        print(f"[tokens] prompt_eval_count={chunk_json.get('prompt_eval_count')} eval_count={chunk_json.get('eval_count')}")
                         await session.emit({
                             "type": "iteration_end",
                             "prompt_tokens": chunk_json.get("prompt_eval_count", 0),
@@ -137,10 +188,13 @@ async def chat_with_tools(
 
     if len(message["content"]) > 0:
         messages[:] = [m for m in messages if not m.get("_transient")]
+        if len(tool_calls) > 0:
+            message["tool_calls"] = tool_calls
         messages.append(message)
     elif len(message["thinking"]) > 0 and len(tool_calls) > 0:
-        #{{\"toolcall\":\"redacted\",\"status\":\"redacted\"}}
-        messages.append({"role": "assistant", "content": f"<think>{message['thinking']}</think>", "_transient": True})
+        messages.append({"role": "assistant", "content": "", "thinking": message["thinking"], "tool_calls": tool_calls})
+        # old code (transient hack):
+        # messages.append({"role": "assistant", "content": f"<think>{message['thinking']}</think>", "_transient": True})
 
 
     if len(tool_calls) > 0:
