@@ -47,8 +47,8 @@ All messages (user, assistant, tool) can be deleted.
 ### Delete menu
 
 `⋮` button on every message, revealed by CSS on message-row hover (no JS). Click opens a dropdown:
-- "Delete branch" — always shown (`subtree=true`)
-- "Delete message" — shown only when the message has children (`subtree=false`); hidden for leaves since it would be identical to "Delete branch"
+- "Delete message" — always shown (`subtree=false`); re-parents children to the deleted message's parent.
+- "Delete branch" — shown only when the message has children (`has_children = true`, `subtree=true`); hidden for leaves since it would be identical to "Delete message".
 
 ### Agent websocket — edit compatibility
 

@@ -78,30 +78,33 @@ export class ChatComponent implements OnDestroy {
   readonly activeToolsTokenCount = computed(() => {
     const activeNames = new Set(this.chatSvc.currentConversationSettings().active_tool_names)
     if (activeNames.size === 0) return null
-    const toolTokens = this.chatSvc
-      .allTools()
-      .filter((t) => activeNames.has(t.name))
-      .reduce((sum, t) => sum + t.token_count, 0)
-    return this.chatSvc.toolFrameworkOverhead() + toolTokens
+    const enabledTools = this.chatSvc.allTools().filter((t) => activeNames.has(t.name))
+    const N = enabledTools.length
+    const toolTokens = enabledTools.reduce((sum, t) => sum + t.token_count, 0)
+    const stackingOverhead = this.chatSvc.stackingOverheadPerAdditionalTool() * (N - 1)
+    return this.chatSvc.toolFrameworkOverhead() + toolTokens + stackingOverhead
   })
 
   // Enrich each message with token metadata for the tooltip display.
   readonly messagesWithMeta = computed<DisplayMessageWithMeta[]>(() => {
     const msgs = this.chatSvc.messages()
+    const promptTokens = this.activePrompt()?.token_count ?? 0
+    const toolsTokens = this.activeToolsTokenCount() ?? 0
+    let prevTokenCount: number | null = promptTokens + toolsTokens
     return msgs.map((msg) => {
       if (msg.kind !== 'user' && msg.kind !== 'assistant' && msg.kind !== 'tool_result') {
         return { ...msg }
       }
       const tokenCount = msg.token_count ?? null
-      const tokenDelta = msg.token_delta ?? null
-      if (tokenCount == null && tokenDelta == null) {
+      if (tokenCount == null) {
         return { ...msg }
       }
       const tokenMeta: TokenMeta = {
         token_count: tokenCount,
-        token_delta: tokenDelta,
-        token_pct: tokenCount != null ? Math.round((tokenCount / 16384) * 100) : null,
+        token_delta: prevTokenCount !== null ? tokenCount - prevTokenCount : null,
+        token_pct: Math.round((tokenCount / 16384) * 100),
       }
+      prevTokenCount = tokenCount
       return { ...msg, token_meta: tokenMeta }
     })
   })

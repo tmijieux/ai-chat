@@ -2,6 +2,8 @@ PLAN THOUROUGHLY even when not asked. Create PRDs and ADR to remember details of
 
 DONT READ catchall.py it currently unused and irrelevant.
 
+ALWAYS READ `CONTEXT.md` at the start of every conversation. It contains the app mission, domain glossary, feature intent, known bugs, and planned changes. Features documented there must not be removed or broken when implementing other features.
+
 # AI Chat Application
 
 A local AI chat app using Ollama, with an Angular frontend and FastAPI backend. Includes an autonomous coding agent subsystem.

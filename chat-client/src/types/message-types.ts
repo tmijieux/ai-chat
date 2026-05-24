@@ -90,6 +90,7 @@ export type AgentToolMeta = {
 
 export type AgentToolsResponse = {
   framework_overhead: number
+  stacking_overhead_per_additional_tool: number
   tools: AgentToolMeta[]
 }
 
@@ -202,6 +203,7 @@ export type DisplayMessage =
       token_delta?: number | null
       context_excluded?: boolean
     } & SiblingMeta)
+  | { kind: 'error'; id: string; message: string }
 
 /**
  * DisplayMessage enriched with token contribution metadata and sibling navigation.

@@ -1,13 +1,12 @@
 """
-One-time script to measure the token cost of each tool individually.
+One-time script to measure the token cost of each tool individually and in context.
 
 Run from the backend/ directory:
     python -m agent.count_tool_tokens
 
 Methodology:
-  - baseline: call Ollama with no tools, empty messages → prompt_eval_count
-  - per tool: call with that single tool, empty messages → prompt_eval_count
-  - delta = per_tool_count - baseline
+  isolated delta:  count_with_1_tool - count_with_0_tools  (original)
+  marginal delta:  count_with_all_tools - count_with_all_tools_minus_1  (accurate for full set)
 """
 
 import asyncio
@@ -78,22 +77,40 @@ async def main():
     print(f"delta 1→2 tools: {minimal_tool_x2 - minimal_tool} tokens")
     print(f"delta 2→3 tools: {minimal_tool_x3 - minimal_tool_x2} tokens\n")
 
-    results = {}
+    # --- isolated delta (1 tool vs no tools) ---
+    isolated = {}
+    print("--- isolated delta (1 tool vs no tools) ---")
     for name, tool in TOOL_REGISTRY.items():
         schema = {"type": "function", "function": tool.to_ollama_schema()}
         count = await _call([schema])
         delta = count - baseline
-        results[name] = delta
-        print(f"  {name}: {count} total, +{delta} delta")
+        isolated[name] = delta
+        print(f"  {name}: {count} total, +{delta} isolated delta")
 
-    print("\n--- verification: measured_delta vs computed token_count ---")
+    # --- marginal delta (all tools minus 1) ---
+    all_schemas = [{"type": "function", "function": t.to_ollama_schema()} for t in TOOL_REGISTRY.values()]
+    full_count = await _call(all_schemas)
+    print(f"\n--- marginal delta (all {len(TOOL_REGISTRY)} tools = {full_count}, removing one at a time) ---")
+    marginal = {}
     for name, tool in TOOL_REGISTRY.items():
-        from agent.tools.base import TOOL_FRAMEWORK_OVERHEAD
-        measured = results[name]
+        without = [s for n, s in zip(TOOL_REGISTRY.keys(), all_schemas) if n != name]
+        count_without = await _call(without)
+        delta = full_count - count_without
+        marginal[name] = delta
+        print(f"  {name}: marginal_delta={delta}")
+
+    print("\n--- verification: measured_delta (isolated) vs current tool_count ---")
+    from agent.tools.base import TOOL_FRAMEWORK_OVERHEAD
+    for name, tool in TOOL_REGISTRY.items():
+        iso = isolated[name]
+        mar = marginal[name]
         computed = tool.token_count
-        expected = measured - TOOL_FRAMEWORK_OVERHEAD
-        match = "OK" if computed == expected else f"MISMATCH (got {computed}, expected {expected})"
-        print(f"  {name}: measured_delta={tool.measured_delta}, token_count={computed} [{match}]")
+        expected_iso = iso - TOOL_FRAMEWORK_OVERHEAD
+        match = "OK" if computed == expected_iso else f"MISMATCH (got {computed}, expected {expected_iso})"
+        print(f"  {name}: isolated={iso}, marginal={mar}, token_count={computed} [{match}]")
+
+    print(f"\n  formula total (OVERHEAD + sum token_count): {TOOL_FRAMEWORK_OVERHEAD + sum(t.token_count for t in TOOL_REGISTRY.values())}")
+    print(f"  actual total (all tools):                   {full_count - baseline}")
 
 
 if __name__ == "__main__":

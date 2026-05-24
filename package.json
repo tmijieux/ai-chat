@@ -1,0 +1,13 @@
+{
+  "name": "my-ai-chat",
+  "private": true,
+  "scripts": {
+    "start": "npm run dev",
+    "dev": "concurrently --names backend,frontend --prefix-colors cyan,magenta \"npm run backend\" \"npm run frontend\"",
+    "backend": "cd backend && venv\\Scripts\\uvicorn main:app --reload",
+    "frontend": "cd chat-client && npm start"
+  },
+  "devDependencies": {
+    "concurrently": "^9"
+  }
+}

@@ -20,9 +20,9 @@ def tool_error(tool_name: str, error: str, user_message: str | None = None, **ex
 # Fixed token overhead Ollama adds when any tools are present (measured empirically).
 TOOL_FRAMEWORK_OVERHEAD = 223
 
-# Per-tool: each tool stores its raw measured delta (with 1 tool enabled).
-# Actual per-tool cost = measured_delta - TOOL_FRAMEWORK_OVERHEAD.
-# Total tool tokens = TOOL_FRAMEWORK_OVERHEAD + sum(t.token_count for enabled tools)
+# Extra tokens each additional tool (2nd, 3rd, ...) adds beyond its schema content.
+# Total tool tokens = TOOL_FRAMEWORK_OVERHEAD + sum(t.token_count) + STACKING_OVERHEAD_PER_ADDITIONAL_TOOL * (N - 1)
+STACKING_OVERHEAD_PER_ADDITIONAL_TOOL = 22
 
 
 class BaseTool(ABC):

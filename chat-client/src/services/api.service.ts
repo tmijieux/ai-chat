@@ -101,8 +101,11 @@ export class ApiService {
     return this.http.get<AgentToolsResponse>(`${BASE_URL}/agent/tools`)
   }
 
-  patch_message_token_count(msgId: string, tokenCount: number) {
-    return this.http.patch(`${BASE_URL}/messages/${msgId}/token-count`, { token_count: tokenCount })
+  patch_message_token_count(msgId: string, tokenCount: number, tokenDelta?: number | null) {
+    return this.http.patch(`${BASE_URL}/messages/${msgId}/token-count`, {
+      token_count: tokenCount,
+      ...(tokenDelta != null ? { token_delta: tokenDelta } : {}),
+    })
   }
 
   branch_message(msgId: string, content: string) {

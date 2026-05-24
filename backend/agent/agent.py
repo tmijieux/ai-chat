@@ -6,7 +6,7 @@ from typing import Any
 
 from .tools import TOOL_REGISTRY, get_ollama_tool_list
 
-OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
+OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"  # kept local; main.py owns the base URL constant
 MODEL_NAME = "qwen3.5:9b"
 
 logger = logging.getLogger(__name__)
@@ -178,5 +178,7 @@ async def run_agent(
         await session.emit({"type": "done"})
     except asyncio.CancelledError:
         await session.emit({"type": "error", "message": "Agent was aborted"})
+    except aiohttp.ClientConnectorError:
+        await session.emit({"type": "error", "message": "Ollama is not running — start Ollama and try again"})
     except Exception as e:
         await session.emit({"type": "error", "message": str(e)})

@@ -10,7 +10,8 @@
       "Bash(npx ng *)",
       "Bash(python -m agent.count_tool_tokens)",
       "Bash(venv/Scripts/python -m agent.count_tool_tokens)",
-      "Bash(sqlite3 chat_db.sqlite ' *)"
+      "Bash(sqlite3 chat_db.sqlite ' *)",
+      "Bash(xargs -I{} git show {} -- chat-client/src/services/chat.service.ts)"
     ]
   }
 }

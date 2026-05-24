@@ -118,6 +118,10 @@ export class ChatService {
   /** Fixed token overhead for the tool-calling framework (independent of which tools are active). */
   public readonly toolFrameworkOverhead = this._toolFrameworkOverhead.asReadonly()
 
+  private _stackingOverheadPerAdditionalTool = signal<number>(0)
+  /** Extra tokens each additional tool (2nd, 3rd, ...) adds beyond its schema content. */
+  public readonly stackingOverheadPerAdditionalTool = this._stackingOverheadPerAdditionalTool.asReadonly()
+
   // Active subscription to agentSvc.events$ — replaced on each new agent run
   private _agentEventSub: Subscription | null = null
 
@@ -140,6 +144,7 @@ export class ChatService {
       this._allToolNames.set(names)
       this._allTools.set(response.tools)
       this._toolFrameworkOverhead.set(response.framework_overhead)
+      this._stackingOverheadPerAdditionalTool.set(response.stacking_overhead_per_additional_tool)
       // Patch the pending new-chat settings so tools are enabled by default
       if (this._conversationId() === undefined) {
         this._conversationSettings.set({
@@ -392,7 +397,6 @@ export class ChatService {
                   role: 'assistant',
                   content,
                   thinking: thinking || undefined,
-                  token_delta: Math.floor(content.length / 4),
                 }
                 await firstValueFrom(this.api.post_message(conv.id, savedMsg))
                 await this._computeTokenCountForLastMessage()
@@ -445,7 +449,6 @@ export class ChatService {
             role: 'assistant',
             content,
             thinking: thinking || undefined,
-            token_delta: Math.floor(content.length / 4),
           }),
         ),
       )
@@ -565,7 +568,6 @@ export class ChatService {
               id: resultId,
               role: 'tool',
               content: resultContent,
-              token_delta: Math.floor(resultContent.length / 4),
             }),
           ),
         )
@@ -577,10 +579,14 @@ export class ChatService {
         stopStreamingTheAssistantMessageSaveItAndClearIt()
         for (const id of toolResultIdsFromPreviousIteration) {
           const capturedId = id
+          const currentMsgs = this._messages()
+          const idx = currentMsgs.findIndex((m) => m.id === capturedId)
+          const prevCount = this._findCumulativeTokenCountOfClosestPrecedingMessageThatHasOne(currentMsgs, idx)
+          const delta = prevCount !== null ? tokens - prevCount : null
           enqueue(() =>
-            firstValueFrom(this.api.patch_message_token_count(capturedId, tokens)).then(() => {
+            firstValueFrom(this.api.patch_message_token_count(capturedId, tokens, delta)).then(() => {
               this._messages.update((msgs) =>
-                msgs.map((m) => (m.id === capturedId ? { ...m, token_count: tokens } : m)),
+                msgs.map((m) => (m.id === capturedId ? { ...m, token_count: tokens, token_delta: delta } : m)),
               )
             }),
           )
@@ -589,7 +595,15 @@ export class ChatService {
         toolResultIdsFromCurrentIteration = []
       } else if (event.type === 'done' || event.type === 'error') {
         this._messages.update((msgs) => msgs.filter((m) => m.kind !== 'tool_confirm'))
-        enqueue(() => this._computeTokenCountForLastMessage())
+        if (event.type === 'error') {
+          const errorText = event.message ?? 'An error occurred'
+          this._messages.update((msgs) => [
+            ...msgs,
+            { kind: 'error', id: crypto.randomUUID(), message: errorText },
+          ])
+        } else {
+          enqueue(() => this._computeTokenCountForLastMessage())
+        }
         // Reload from DB to get has_children and sibling metadata, which are only computed
         // server-side and are not available on display messages created during the agent run.
         enqueue(() => this._reloadFromDb())
@@ -611,6 +625,16 @@ export class ChatService {
   // -------------------------------------------------------------------------
   // Private: type conversions between DisplayMessage and DB Message
   // -------------------------------------------------------------------------
+
+  private _findCumulativeTokenCountOfClosestPrecedingMessageThatHasOne(msgs: DisplayMessage[], idx: number): number | null {
+    for (let i = idx - 1; i >= 0; i--) {
+      const m = msgs[i]
+      if ('token_count' in m && m.token_count != null) {
+        return m.token_count
+      }
+    }
+    return null
+  }
 
   /** Convert DB messages (from GET /messages) into DisplayMessages for rendering. */
   private _fromDbMessages(dbMessages: Message[]): DisplayMessage[] {
@@ -710,7 +734,6 @@ export class ChatService {
         id: userMsg.id,
         role: 'user',
         content: userMsg.content,
-        token_delta: Math.floor(userMsg.content.length / 4),
       }),
     )
   }
@@ -724,7 +747,6 @@ export class ChatService {
         id: userMsg.id,
         role: 'user',
         content: userMsg.content,
-        token_delta: Math.floor(userMsg.content.length / 4),
       }),
     )
   }
@@ -734,20 +756,25 @@ export class ChatService {
     if (!id) {
       return
     }
+    const msgs = this._messages()
+    const lastIdx = msgs.length - 1
+    const last = msgs[lastIdx]
+    if (!last) {
+      return
+    }
+    const prevCount = this._findCumulativeTokenCountOfClosestPrecedingMessageThatHasOne(msgs, lastIdx)
     const result = await firstValueFrom(this.api.compute_conversation_token_count(id))
     this._promptTokens.set(result.token_count)
+    const delta = prevCount !== null ? result.token_count - prevCount : null
+    await firstValueFrom(this.api.patch_message_token_count(last.id, result.token_count, delta))
     this._messages.update((msgs) => {
       const copy = [...msgs]
       const last = copy[copy.length - 1]
       if (!last) {
         return copy
       }
-      if (last.kind === 'user') {
-        copy[copy.length - 1] = { ...last, token_count: result.token_count }
-      } else if (last.kind === 'assistant') {
-        copy[copy.length - 1] = { ...last, token_count: result.token_count }
-      } else if (last.kind === 'tool_result') {
-        copy[copy.length - 1] = { ...last, token_count: result.token_count }
+      if (last.kind === 'user' || last.kind === 'assistant' || last.kind === 'tool_result') {
+        copy[copy.length - 1] = { ...last, token_count: result.token_count, token_delta: delta }
       }
       return copy
     })

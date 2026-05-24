@@ -1,4 +1,4 @@
-import { Component, inject, input, output, OnInit, signal, computed } from '@angular/core'
+import { Component, computed, inject, input, output, OnInit, signal } from '@angular/core'
 import { FormsModule } from '@angular/forms'
 import { ApiService } from '../../services/api.service'
 import { ChatService } from '../../services/chat.service'
@@ -24,7 +24,17 @@ export class ConversationSettingsComponent implements OnInit {
 
   readonly prompts = signal<SystemPromptTemplate[]>([])
   readonly tools = this.chatSvc.allTools
-  readonly frameworkOverhead = this.chatSvc.toolFrameworkOverhead
+  readonly enabledToolsTokenCount = computed(() => {
+    const enabledNames = new Set(this.settings().active_tool_names)
+    const enabledTools = this.chatSvc.allTools().filter((t) => enabledNames.has(t.name))
+    const N = enabledTools.length
+    if (N === 0) {
+      return 0
+    }
+    const toolTokens = enabledTools.reduce((sum, t) => sum + t.token_count, 0)
+    const stackingOverhead = this.chatSvc.stackingOverheadPerAdditionalTool() * (N - 1)
+    return this.chatSvc.toolFrameworkOverhead() + toolTokens + stackingOverhead
+  })
   readonly pickerOpen = signal(false)
 
   ngOnInit() {

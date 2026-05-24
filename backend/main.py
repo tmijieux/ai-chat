@@ -3,6 +3,7 @@ import uuid
 import logging
 import json
 import asyncio
+import subprocess
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, Depends, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
@@ -19,19 +20,67 @@ from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
 from agent.count_token import count_token
 
 MODEL_NAME = "qwen3.5:9b"
+OLLAMA_BASE_URL = "http://localhost:11434"
 
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Ollama lifecycle
+# ---------------------------------------------------------------------------
+
+async def _ensure_ollama_running() -> None:
+    async with aiohttp.ClientSession() as http:
+        try:
+            async with http.get(f"{OLLAMA_BASE_URL}/", timeout=aiohttp.ClientTimeout(total=2)) as r:
+                if r.status == 200:
+                    logger.info("Ollama already running.")
+                    return
+        except Exception:
+            pass
+
+    logger.info("Ollama not detected — launching 'ollama serve' ...")
+    subprocess.Popen(
+        ["ollama", "serve"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    async with aiohttp.ClientSession() as http:
+        for _ in range(60):  # 30 s total
+            await asyncio.sleep(0.5)
+            try:
+                async with http.get(f"{OLLAMA_BASE_URL}/", timeout=aiohttp.ClientTimeout(total=1)) as r:
+                    if r.status == 200:
+                        logger.info("Ollama started successfully.")
+                        return
+            except Exception:
+                pass
+
+    logger.warning("Ollama did not respond within 30 s — continuing without it.")
+
+
+async def check_ollama() -> None:
+    async with aiohttp.ClientSession() as http:
+        try:
+            async with http.get(f"{OLLAMA_BASE_URL}/", timeout=aiohttp.ClientTimeout(total=2)) as r:
+                if r.status == 200:
+                    return
+        except Exception:
+            pass
+    raise HTTPException(status_code=503, detail="Ollama is not running")
+
+
 def disable_sqlalchemy_logging():
-    for name in ["sqlalchemy", "sqlalchemy.engine", "sqlalchemy.engine.Engine"]:
+    for name in ["sqlalchemy", "sqlalchemy.engine", "sqlalchemy.engine.Engine", "aiosqlite"]:
         log = logging.getLogger(name)
         log.disabled = True
         log.propagate = False
 
 
 disable_sqlalchemy_logging()
-logging.basicConfig()
+logging.basicConfig(level=logging.DEBUG)
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +150,7 @@ async def _seed_prompts(sess: AsyncSession) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await _ensure_ollama_running()
     await init_db()
     print("Database initialized successfully.")
     async for sess in get_db_session():
@@ -665,9 +715,10 @@ async def browse_directory(path: str | None = None):
 
 @app.get("/api/agent/tools")
 async def list_agent_tools():
-    from agent.tools.base import TOOL_FRAMEWORK_OVERHEAD
+    from agent.tools.base import TOOL_FRAMEWORK_OVERHEAD, STACKING_OVERHEAD_PER_ADDITIONAL_TOOL
     return {
         "framework_overhead": TOOL_FRAMEWORK_OVERHEAD,
+        "stacking_overhead_per_additional_tool": STACKING_OVERHEAD_PER_ADDITIONAL_TOOL,
         "tools": [
             {
                 "name": t.name,
@@ -689,7 +740,7 @@ async def get_http_session():
         yield httpsess
 
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
+OLLAMA_URL = f"{OLLAMA_BASE_URL}/api/chat"
 
 
 async def chat_endpoint_generator(
@@ -723,6 +774,7 @@ async def chat_endpoint_generator(
 async def chat_endpoint(
     conversation: ld.Conversation,
     http_sess: aiohttp.ClientSession = Depends(get_http_session),
+    _: None = Depends(check_ollama),
 ):
     print(f"--- Received chat request for {len(conversation.messages)} messages ---")
     return StreamingResponse(
@@ -736,7 +788,7 @@ async def chat_endpoint(
 # ---------------------------------------------------------------------------
 
 @app.post("/api/conversations/{id}/count-tokens")
-async def count_conversation_tokens(id: str, sess: AsyncSession = Depends(get_db_session)):
+async def count_conversation_tokens(id: str, sess: AsyncSession = Depends(get_db_session), _: None = Depends(check_ollama)):
     conv = (await sess.scalars(select(db.Conversation).where(db.Conversation.id == id))).first()
     if conv is None:
         raise HTTPException(404)
