@@ -1,3 +1,4 @@
+import os
 import datetime
 import uuid
 import logging
@@ -40,10 +41,12 @@ async def _ensure_ollama_running() -> None:
             pass
 
     logger.info("Ollama not detected — launching 'ollama serve' ...")
+    env = os.environ.copy()
     subprocess.Popen(
         ["ollama", "serve"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        env={**env, "OLLAMA_CONTEXT_LENGTH": "16384", "OLLAMA_KEEP_ALIVE":"60m"},
         start_new_session=True,
     )
 
