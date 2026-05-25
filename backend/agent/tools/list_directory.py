@@ -46,8 +46,10 @@ class ListDirectoryTool(BaseTool):
         if not file_in_directory(str(absolute_path), working_directory):
             return tool_error(self.name, f"Listing outside workspace is forbidden. Workspace: {working_directory}")
 
+        path = absolute_path.relative_to(working_directory)
+
         exe = "c:\\Program Files\\Git\\usr\\bin\\find.exe"
-        cmd = [exe, str(absolute_path), "-maxdepth", str(maximum_depth)]
+        cmd = [exe, str(path), "-maxdepth", str(maximum_depth)]
         proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if proc.returncode == 0:
             return {"tool": self.name, "path": str(absolute_path), "status": "success", "content": proc.stdout.decode()}

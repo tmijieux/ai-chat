@@ -24,7 +24,7 @@ class GrepFilesTool(BaseTool):
             },
             "glob": {
                 "type": "string",
-                "description": "Glob filter for which files to search (e.g. '**/*.py', '**/*.ts'). Default '**/*'.",
+                "description": "Glob filter for which files to search (e.g. '**/*.py', '**/*.ts'). Never use the global wildcard '**/*' because it is too long.",
             },
             "case_insensitive": {
                 "type": "boolean",
@@ -35,7 +35,7 @@ class GrepFilesTool(BaseTool):
                 "description": "Maximum matches to return (default 50). Increase only if you need more.",
             },
         },
-        "required": ["pattern"],
+        "required": ["pattern", "glob"],
     }
     requires_confirmation = False
     measured_delta = 446
