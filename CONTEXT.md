@@ -46,7 +46,7 @@ Flag on `SystemPromptTemplate`. Rules:
 Per-conversation setting (`ConversationSettings.active_prompt_id: string | null`). Points to the active `SystemPromptTemplate` for that conversation. `null` means no system prompt is active.
 
 ## ConversationSettings
-Per-conversation configuration stored as JSON in `Conversation.settings`. Fields: `active_prompt_id`, `active_tool_names`, `agentic_mode`, `working_directory`. `active_tool_names` is the sole authority for tool availability — empty list means no tools, full list means all tools.
+Per-conversation configuration stored as JSON in `Conversation.settings`. Fields: `active_prompt_id`, `active_tool_names`, `working_directory`. `active_tool_names` is the sole authority for tool availability — empty list means no tools, full list means all tools.
 
 ## Tool Confirmation Flow
 When a tool with `requires_confirmation = true` is called, the backend emits a `tool_confirm` event before executing. The frontend renders an amber card showing the tool name and a preview of the operation. The user can:
@@ -151,7 +151,7 @@ During an agentic run, messages are saved to DB **incrementally** via a sequenti
 This means the DB reflects the run state in near-real-time. Do not refactor this into a single batch save at the end — it would delay DB writes and break the token count patching sequence which depends on message IDs already existing in the DB.
 
 ## Agentic Mode
-The only intended mode. The agent runs a tool-calling loop over WebSocket, can call tools, ask for user confirmation on destructive ones, and run multiple iterations. **Planned:** the `agentic_mode` toggle is still present in the UI (`chat.component.html`) and in `ConversationSettings` but is scheduled for removal — the app should always use the agentic path. The non-agentic HTTP streaming code is a candidate for full removal; any logic it shares with the agentic path (DB persistence, token counting, message rendering) must be preserved when doing so.
+The ai chat is agentic and can use tools intended mode. The agent runs a tool-calling loop over WebSocket, can call tools, ask for user confirmation on destructive ones, and run multiple iterations.
 
 ## Token Count (cumulative)
 The `prompt_eval_count` value returned by the Ollama API for a given message. Stored in `Message.token_count`. Represents the total number of tokens in the context at the point that message was sent — system prompt + all prior messages + tools overhead. **Always a measured value, never an estimate.** The status bar always shows the cumulative token count of the last message that has one; it shows 0 on a new chat because no inference has happened yet.

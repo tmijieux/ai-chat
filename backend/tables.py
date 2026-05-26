@@ -7,7 +7,7 @@ class Conversation(Base):
     __tablename__ = "conversations"
     id = column(String, primary_key=True, index=True)
     title = column(String, index=True, nullable=False)
-    # JSON: {active_prompt_id, active_tool_names, agentic_mode, working_directory}
+    # JSON: {active_prompt_id, active_tool_names, working_directory}
     settings = column(Text, nullable=True)
     created_at = column(String, nullable=False)
     # Logical FK to messages.id — not declared as FK to avoid circular constraint on SQLite

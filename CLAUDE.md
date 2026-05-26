@@ -110,7 +110,7 @@ Client can send: `{"type":"confirm","tool_id":"...","approved":bool}` or `{"type
 **Conversation** (`tables.py`)
 - `id`: String PK
 - `title`: String (indexed)
-- `settings`: Text (nullable) — JSON: `{active_prompt_ids, active_tool_names, tools_enabled, agentic_mode}`
+- `settings`: Text (nullable) — JSON: `{active_prompt_ids, active_tool_names, tools_enabled}`
 - `created_at`: String (ISO timestamp)
 - `active_message_id`: String (nullable) — logical FK to `messages.id`
 
@@ -144,7 +144,7 @@ Client can send: `{"type":"confirm","tool_id":"...","approved":bool}` or `{"type
 - `isLoading$` (BehaviorSubject) — whether a non-agentic response is in-flight
 - `contextTokens$` (BehaviorSubject) — latest cumulative token count
 - `_conversationId` (signal) — currently selected conversation ID
-- `_conversationSettings` (signal) — `{agentic_mode, ...}` from DB or pending
+- `_conversationSettings` (signal) — from DB or pending
 
 ### Key state in `agent.service.ts`
 - `messages` (signal) — `AgentUiMessage[]` for the current live agent run

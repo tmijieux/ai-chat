@@ -42,7 +42,6 @@ class BranchNavigation(BaseModel):
 class ConversationSettings(BaseModel):
     active_prompt_id: str | None = None
     active_tool_names: list[str] = []
-    agentic_mode: bool = True
     working_directory: str | None = None
 
 

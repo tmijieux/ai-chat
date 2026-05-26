@@ -82,7 +82,9 @@ export class ChatService {
   // -------------------------------------------------------------------------
 
   conversations = new RefreshableQuery(() => this.api.get_conversations())
-  lastWorkingDirectory = new RefreshableQuery(() => this.api.get_app_setting('last_working_directory'))
+  lastWorkingDirectory = new RefreshableQuery(() =>
+    this.api.get_app_setting('last_working_directory'),
+  )
 
   // -------------------------------------------------------------------------
   // Active conversation metadata
@@ -94,7 +96,6 @@ export class ChatService {
   public readonly currentConversationId = this._conversationId.asReadonly()
 
   private readonly DEFAULT_SETTINGS: ConversationSettings = {
-    agentic_mode: true,
     active_prompt_id: null,
     active_tool_names: [],
     working_directory: null,
@@ -121,7 +122,8 @@ export class ChatService {
 
   private _stackingOverheadPerAdditionalTool = signal<number>(0)
   /** Extra tokens each additional tool (2nd, 3rd, ...) adds beyond its schema content. */
-  public readonly stackingOverheadPerAdditionalTool = this._stackingOverheadPerAdditionalTool.asReadonly()
+  public readonly stackingOverheadPerAdditionalTool =
+    this._stackingOverheadPerAdditionalTool.asReadonly()
 
   // Active subscription to agentSvc.events$ — replaced on each new agent run
   private _agentEventSub: Subscription | null = null
@@ -181,7 +183,6 @@ export class ChatService {
     this._conversationId.set(undefined)
     const defaultPromptId = this._prompts().find((p) => p.is_default)?.id ?? null
     this._conversationSettings.set({
-      agentic_mode: true,
       active_prompt_id: defaultPromptId,
       active_tool_names: this._allToolNames(),
       working_directory: this._lastWorkingDirectory(),
@@ -214,26 +215,6 @@ export class ChatService {
     })
   }
 
-  // -------------------------------------------------------------------------
-  // Non-agentic chat
-  // -------------------------------------------------------------------------
-
-  sendMessage(input: string): void {
-    const ollamaMessages: MessageForQuery[] = [
-      ...this._prependSystemPrompt(this._toOllamaMessages(this._messages())),
-      { role: 'user', content: input },
-    ]
-
-    const userMsg: DisplayMessage = { kind: 'user', id: crypto.randomUUID(), content: input }
-    this._messages.update((msgs) => [...msgs, userMsg])
-
-    const persist = !this._conversation
-      ? this._createConversation(userMsg)
-      : this._addUserMessageToDb(userMsg)
-
-    persist.then(() => this._streamNonAgenticResponse(ollamaMessages))
-  }
-
   async editUserMessage(msgId: string, newContent: string): Promise<void> {
     const convId = this._conversationId()
     if (!convId) {
@@ -244,13 +225,8 @@ export class ChatService {
     await this._reloadFromDb()
 
     const settings = this._conversationSettings()
-    if (settings?.agentic_mode) {
-      this._subscribeToAgentEvents(newMsgId)
-      this.agentSvc.start(newContent, convId, newMsgId)
-    } else {
-      const ollamaMessages = this._prependSystemPrompt(this._toOllamaMessages(this._messages()))
-      this._streamNonAgenticResponse(ollamaMessages)
-    }
+    this._subscribeToAgentEvents(newMsgId)
+    this.agentSvc.start(newContent, convId, newMsgId)
   }
 
   async deleteMessage(msgId: string, subtree: boolean): Promise<void> {
@@ -323,17 +299,6 @@ export class ChatService {
   // Settings / conversation management
   // -------------------------------------------------------------------------
 
-  async setAgenticMode(enabled: boolean): Promise<void> {
-    const current = this._conversationSettings()
-    const updated = { ...current, agentic_mode: enabled }
-    this._conversationSettings.set(updated)
-    const id = this._conversationId()
-    if (!id) {
-      return
-    }
-    await firstValueFrom(this.api.put_conversation_settings(id, updated))
-  }
-
   updateConversationSettings(settings: ConversationSettings): Observable<unknown> {
     this._conversationSettings.set(settings)
     const id = this._conversationId()
@@ -345,14 +310,14 @@ export class ChatService {
       }
       return new Observable((s) => s.complete())
     }
-    return this.api
-      .put_conversation_settings(id, settings)
-      .pipe(tap(() => {
+    return this.api.put_conversation_settings(id, settings).pipe(
+      tap(() => {
         this.conversations.refresh()
         if (settings.working_directory !== null) {
           this.lastWorkingDirectory.refresh()
         }
-      }))
+      }),
+    )
   }
 
   reloadPrompts(): void {
@@ -366,77 +331,6 @@ export class ChatService {
       console.log('consol')
       this.startNewChat()
     }
-  }
-
-  // -------------------------------------------------------------------------
-  // Private: non-agentic streaming
-  // -------------------------------------------------------------------------
-
-  private _streamNonAgenticResponse(ollamaMessages: MessageForQuery[]): void {
-    this._isLoading.set(true)
-    const loadingMsg: DisplayMessage = {
-      kind: 'assistant',
-      id: 'streaming',
-      content: '',
-      streaming: true,
-    }
-    this._messages.update((msgs) => [...msgs, loadingMsg])
-
-    this.api
-      .generate_chat_response(ollamaMessages)
-      .pipe(
-        tap((response) => {
-          if (response.type !== 3) {
-            return
-          }
-          const chunks: ApiResponse[] = (response.partialText ?? '')
-            .split('\n')
-            .filter((line) => line.endsWith('}'))
-            .map((line) => JSON.parse(line))
-
-          const thinking = chunks.map((c) => c.message.thinking ?? '').join('')
-          const content = chunks.map((c) => c.message.content).join('')
-
-          this._messages.update((msgs) =>
-            msgs.map((m) =>
-              m.id === 'streaming' && m.kind === 'assistant'
-                ? { ...m, content, thinking: thinking || undefined }
-                : m,
-            ),
-          )
-
-          const lastChunk = chunks[chunks.length - 1]
-          if (lastChunk?.done) {
-            this._isLoading.set(false)
-            if (this._conversation) {
-              const conv = this._conversation
-              const finalId = crypto.randomUUID()
-              this._messages.update((msgs) =>
-                msgs.map((m) =>
-                  m.id === 'streaming' && m.kind === 'assistant'
-                    ? { ...m, id: finalId, streaming: false }
-                    : m,
-                ),
-              )
-              ;(async () => {
-                const savedMsg: Message = {
-                  id: finalId,
-                  role: 'assistant',
-                  content,
-                  thinking: thinking || undefined,
-                }
-                await firstValueFrom(this.api.post_message(conv.id, savedMsg))
-                await this._computeTokenCountForLastMessage()
-              })()
-            }
-          }
-        }),
-        catchError((err) => {
-          this._isLoading.set(false)
-          return throwError(() => err)
-        }),
-      )
-      .subscribe()
   }
 
   // -------------------------------------------------------------------------
@@ -611,14 +505,21 @@ export class ChatService {
           const capturedId = id
           const currentMsgs = this._messages()
           const idx = currentMsgs.findIndex((m) => m.id === capturedId)
-          const prevCount = this._findCumulativeTokenCountOfClosestPrecedingMessageThatHasOne(currentMsgs, idx)
+          const prevCount = this._findCumulativeTokenCountOfClosestPrecedingMessageThatHasOne(
+            currentMsgs,
+            idx,
+          )
           const delta = prevCount !== null ? tokens - prevCount : null
           enqueue(() =>
-            firstValueFrom(this.api.patch_message_token_count(capturedId, tokens, delta)).then(() => {
-              this._messages.update((msgs) =>
-                msgs.map((m) => (m.id === capturedId ? { ...m, token_count: tokens, token_delta: delta } : m)),
-              )
-            }),
+            firstValueFrom(this.api.patch_message_token_count(capturedId, tokens, delta)).then(
+              () => {
+                this._messages.update((msgs) =>
+                  msgs.map((m) =>
+                    m.id === capturedId ? { ...m, token_count: tokens, token_delta: delta } : m,
+                  ),
+                )
+              },
+            ),
           )
         }
         toolResultIdsFromPreviousIteration = toolResultIdsFromCurrentIteration
@@ -656,7 +557,10 @@ export class ChatService {
   // Private: type conversions between DisplayMessage and DB Message
   // -------------------------------------------------------------------------
 
-  private _findCumulativeTokenCountOfClosestPrecedingMessageThatHasOne(msgs: DisplayMessage[], idx: number): number | null {
+  private _findCumulativeTokenCountOfClosestPrecedingMessageThatHasOne(
+    msgs: DisplayMessage[],
+    idx: number,
+  ): number | null {
     for (let i = idx - 1; i >= 0; i--) {
       const m = msgs[i]
       if ('token_count' in m && m.token_count != null) {
@@ -793,7 +697,10 @@ export class ChatService {
     if (!last) {
       return
     }
-    const prevCount = this._findCumulativeTokenCountOfClosestPrecedingMessageThatHasOne(msgs, lastIdx)
+    const prevCount = this._findCumulativeTokenCountOfClosestPrecedingMessageThatHasOne(
+      msgs,
+      lastIdx,
+    )
     const result = await firstValueFrom(this.api.compute_conversation_token_count(id))
     this._promptTokens.set(result.token_count)
     const delta = prevCount !== null ? result.token_count - prevCount : null

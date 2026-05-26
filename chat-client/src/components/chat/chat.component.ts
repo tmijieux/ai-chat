@@ -142,11 +142,7 @@ export class ChatComponent implements OnDestroy {
     this.currentInput.set('')
 
     const settings = this.chatSvc.currentConversationSettings()
-    if (settings?.agentic_mode) {
-      this.chatSvc.startAgentRun(input)
-    } else {
-      this.chatSvc.sendMessage(input)
-    }
+    this.chatSvc.startAgentRun(input)
   }
 
   startReject(toolId: string): void {

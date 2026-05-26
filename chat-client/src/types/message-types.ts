@@ -52,7 +52,6 @@ export type ConversationHistory = Message[]
 export type ConversationSettings = {
   active_prompt_id: string | null
   active_tool_names: string[]
-  agentic_mode: boolean
   working_directory: string | null
 }
 

@@ -69,15 +69,6 @@
       <span class="font-bold text-indigo-600">{{ chatSvc.promptTokens() }} / 16,384 ({{ (chatSvc.promptTokens() / 16384 * 100).toFixed(1) }}%)</span>
     </span>
     <div class="flex items-center gap-3">
-      <label class="flex items-center gap-2 cursor-pointer select-none text-sm">
-        <span class="text-gray-600">Agentic mode</span>
-        <input
-          type="checkbox"
-          [checked]="chatSvc.currentConversationSettings().agentic_mode"
-          (change)="chatSvc.setAgenticMode($any($event.target).checked)"
-          class="w-4 h-4 accent-indigo-600"
-        />
-      </label>
       <button
         class="text-gray-500 hover:text-indigo-600 text-lg leading-none transition-colors cursor-pointer"
         title="Conversation settings"
