@@ -21,7 +21,7 @@ from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
 from agent.count_token import count_token
 
 MODEL_NAME = "qwen3.5:9b"
-OLLAMA_BASE_URL = "http://localhost:11434"
+OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +37,10 @@ async def _ensure_ollama_running() -> None:
                 if r.status == 200:
                     logger.info("Ollama already running.")
                     return
-        except Exception:
-            pass
+                else:
+                    print("status=", r.status)
+        except Exception as e:
+            logger.exception("ollama detection", exc_info=e)
 
     logger.info("Ollama not detected — launching 'ollama serve' ...")
     env = os.environ.copy()
@@ -259,6 +261,7 @@ def _msg_dict(m: db.Message) -> dict:
         "token_delta": m.token_delta,
         "context_excluded": m.context_excluded,
         "exclusion_reason": m.exclusion_reason,
+        "log_message": m.log_message,
     }
 
 
@@ -347,7 +350,29 @@ async def update_conversation_settings(
     if conv is None:
         raise HTTPException(404)
     conv.settings = json.dumps(body.model_dump())
+    if body.working_directory is not None:
+        await _upsert_app_setting(sess, "last_working_directory", body.working_directory)
     return body
+
+
+@app.get("/api/app-settings/{key}")
+async def get_app_setting(key: str, sess: AsyncSession = Depends(get_db_session)):
+    row = await sess.get(db.AppSettings, key)
+    return {"key": key, "value": row.value if row else None}
+
+
+@app.put("/api/app-settings/{key}")
+async def put_app_setting(key: str, body: ld.AppSettingUpdate, sess: AsyncSession = Depends(get_db_session)):
+    await _upsert_app_setting(sess, key, body.value)
+    return {"key": key, "value": body.value}
+
+
+async def _upsert_app_setting(sess: AsyncSession, key: str, value: str | None) -> None:
+    row = await sess.get(db.AppSettings, key)
+    if row is None:
+        sess.add(db.AppSettings(key=key, value=value))
+    else:
+        row.value = value
 
 
 @app.put("/api/conversations/{id}/active-branch")
@@ -460,6 +485,7 @@ async def add_message(
             role=message.role,
             token_count=message.token_count,
             token_delta=message.token_delta,
+            log_message=message.log_message,
         )
     )
     conv.active_message_id = msg_id

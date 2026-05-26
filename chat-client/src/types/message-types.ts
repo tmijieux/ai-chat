@@ -19,6 +19,7 @@ export type Message = {
   token_delta?: number | null
   context_excluded?: boolean
   exclusion_reason?: string | null
+  log_message?: string | null
   created_at?: string
   sibling_count?: number
   sibling_index?: number
@@ -81,6 +82,11 @@ export type SystemPromptTemplate = {
   created_at: string
 }
 
+export type AppSetting = {
+  key: string
+  value: string | null
+}
+
 export type AgentToolMeta = {
   name: string
   description: string
@@ -133,6 +139,7 @@ export type AgentEvent = {
   prompt_tokens?: number
   response_tokens?: number
   message?: string
+  log_message?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -198,6 +205,7 @@ export type DisplayMessage =
       kind: 'tool_result'
       id: string
       tool_name: string
+      log_message?: string | null
       content: string
       token_count?: number | null
       token_delta?: number | null

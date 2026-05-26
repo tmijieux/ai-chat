@@ -29,7 +29,7 @@ class SummarizeSubtaskTool(BaseTool):
     requires_confirmation = False
     measured_delta = 336
 
-    def validate(self, args: dict) -> str:
+    def label(self, args: dict) -> str:
         return f"SUMMARIZE for: {args.get('task', '')}"
 
     async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:

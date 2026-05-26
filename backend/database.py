@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy import event
+from sqlalchemy import event, text
 import sqlalchemy.ext.asyncio
 async_sessionmaker = sqlalchemy.ext.asyncio.async_sessionmaker
 

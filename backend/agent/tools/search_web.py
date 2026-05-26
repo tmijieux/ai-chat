@@ -18,10 +18,10 @@ class SearchWebTool(BaseTool):
         },
         "required": ["query"],
     }
-    requires_confirmation = False
+    requires_confirmation = True
     measured_delta = 282
 
-    def validate(self, args: dict) -> str:
+    def make_validation_text_for_user_confirmation(self, args: dict) -> str:
         return f"SEARCH: {args.get('query', '')}"
 
     async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
@@ -30,6 +30,12 @@ class SearchWebTool(BaseTool):
 
         query = args.get("query", "")
         max_results = 5
+
+        preview = self.make_validation_text_for_user_confirmation(args)
+        approved, user_msg = await session.request_confirm(f"search-{preview}", self.name, args, preview)
+        if not approved:
+            return tool_error(self.name, "User aborted the edit", user_message=user_msg)
+                
         results = []
         try:
             with DDGS() as ddgs:

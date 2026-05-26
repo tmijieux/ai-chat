@@ -28,6 +28,13 @@ class Message(Base):
     token_delta = column(Integer, nullable=True)
     context_excluded = column(Boolean, nullable=False, default=False)
     exclusion_reason = column(String, nullable=True)
+    log_message = column(String, nullable=True)
+
+
+class AppSettings(Base):
+    __tablename__ = "app_settings"
+    key = column(String, primary_key=True)
+    value = column(Text, nullable=True)
 
 
 class SystemPromptTemplate(Base):

@@ -39,8 +39,16 @@ class BaseTool(ABC):
     def to_ollama_schema(self) -> dict:
         return {"name": self.name, "description": self.description, "parameters": self.parameters}
 
-    def validate(self, args: dict) -> str:
+    def make_validation_text_for_user_confirmation(self, args: dict) -> str:
         return str(args)
+
+    def label(self, args: dict) -> str:
+        """Short single-line label for log output and UI summaries.
+        Non-confirmation tools override this directly.
+        Confirmation tools whose confirmation text is already single-line (run_shell, search_web) get
+        the right label for free via this delegation. Confirmation tools with multi-line confirmation
+        text (write_file, edit_file) override both methods separately."""
+        return self.make_validation_text_for_user_confirmation(args)
 
     @abstractmethod
     async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:

@@ -82,6 +82,7 @@ export class ChatService {
   // -------------------------------------------------------------------------
 
   conversations = new RefreshableQuery(() => this.api.get_conversations())
+  lastWorkingDirectory = new RefreshableQuery(() => this.api.get_app_setting('last_working_directory'))
 
   // -------------------------------------------------------------------------
   // Active conversation metadata
@@ -124,8 +125,20 @@ export class ChatService {
 
   // Active subscription to agentSvc.events$ — replaced on each new agent run
   private _agentEventSub: Subscription | null = null
+  private _lastWorkingDirectory = signal<string | null>(null)
 
   constructor() {
+    this.lastWorkingDirectory.obs$.subscribe((setting) => {
+      if (setting.value !== null) {
+        this._lastWorkingDirectory.set(setting.value)
+      }
+      if (this._conversationId() === undefined && setting.value !== null) {
+        this._conversationSettings.set({
+          ...this._conversationSettings(),
+          working_directory: setting.value,
+        })
+      }
+    })
     this.api.get_system_prompts().subscribe((p) => {
       this._prompts.set(p)
       // Patch pending new-chat settings with the default prompt if none is selected yet
@@ -167,12 +180,11 @@ export class ChatService {
     this._conversation = undefined
     this._conversationId.set(undefined)
     const defaultPromptId = this._prompts().find((p) => p.is_default)?.id ?? null
-    const lastWorkingDir = this._conversationSettings().working_directory
     this._conversationSettings.set({
       agentic_mode: true,
       active_prompt_id: defaultPromptId,
       active_tool_names: this._allToolNames(),
-      working_directory: lastWorkingDir,
+      working_directory: this._lastWorkingDirectory(),
     })
   }
 
@@ -189,9 +201,14 @@ export class ChatService {
       this._messages.set(this._fromDbMessages(dbMessages))
       this._conversation = conversation
       this._conversationId.set(conversation.id)
-      this._conversationSettings.set(
-        conversation.settings ? JSON.parse(conversation.settings) : this.DEFAULT_SETTINGS,
-      )
+      const settings: ConversationSettings = conversation.settings
+        ? JSON.parse(conversation.settings)
+        : this.DEFAULT_SETTINGS
+      this._conversationSettings.set(settings)
+      if (settings.working_directory != null) {
+        this._lastWorkingDirectory.set(settings.working_directory)
+        this.api.put_app_setting('last_working_directory', settings.working_directory).subscribe()
+      }
       const lastWithTokens = [...dbMessages].reverse().find((m) => m.token_count != null)
       this._promptTokens.set(lastWithTokens?.token_count ?? 0)
     })
@@ -321,11 +338,21 @@ export class ChatService {
     this._conversationSettings.set(settings)
     const id = this._conversationId()
     if (!id) {
+      if (settings.working_directory !== null) {
+        return this.api
+          .put_app_setting('last_working_directory', settings.working_directory)
+          .pipe(tap(() => this.lastWorkingDirectory.refresh()))
+      }
       return new Observable((s) => s.complete())
     }
     return this.api
       .put_conversation_settings(id, settings)
-      .pipe(tap(() => this.conversations.refresh()))
+      .pipe(tap(() => {
+        this.conversations.refresh()
+        if (settings.working_directory !== null) {
+          this.lastWorkingDirectory.refresh()
+        }
+      }))
   }
 
   reloadPrompts(): void {
@@ -547,12 +574,14 @@ export class ChatService {
         markThinkingMessageAsDoneAndClearIt()
         const resultId = `result-${event.tool_id}`
         const resultContent = event.content ?? ''
+        const logMessage = event.log_message ?? null
         this._messages.update((msgs) => [
           ...msgs,
           {
             kind: 'tool_result',
             id: resultId,
             tool_name: event.tool_name ?? '',
+            log_message: logMessage,
             content: resultContent,
           },
         ])
@@ -568,6 +597,7 @@ export class ChatService {
               id: resultId,
               role: 'tool',
               content: resultContent,
+              log_message: logMessage,
             }),
           ),
         )
@@ -684,6 +714,7 @@ export class ChatService {
           kind: 'tool_result',
           id: m.id,
           tool_name: '',
+          log_message: m.log_message ?? null,
           content: m.content,
           token_count: m.token_count,
           token_delta: m.token_delta,

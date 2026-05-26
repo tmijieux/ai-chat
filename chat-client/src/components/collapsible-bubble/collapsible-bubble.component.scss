@@ -1,0 +1,55 @@
+.collapsible-wrap {
+  border-radius: 1rem;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.collapsible-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1rem;
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.75rem;
+  font-style: italic;
+  font-weight: 500;
+  opacity: 0.7;
+
+  &:hover {
+    opacity: 0.9;
+  }
+}
+
+.collapsible-label {
+  flex: 1;
+}
+
+.collapsible-chevron {
+  font-size: 0.7rem;
+  font-style: normal;
+  opacity: 0.6;
+}
+
+.streaming-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: linear-gradient(135deg, #a78bfa, #818cf8);
+  box-shadow: 0 0 4px #a78bfa;
+  animation: streaming-sparkle 1.2s ease-in-out infinite;
+}
+
+@keyframes streaming-sparkle {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow: 0 0 4px #a78bfa;
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(1.5);
+    box-shadow: 0 0 10px #a78bfa, 0 0 18px #818cf8;
+  }
+}

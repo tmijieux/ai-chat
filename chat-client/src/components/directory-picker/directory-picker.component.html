@@ -12,27 +12,45 @@
       {{ currentPath() || '…' }}
     </div>
 
+    <!-- Filter input -->
+    <div class="px-2 py-2 border-bottom">
+      <input
+        #searchInput
+        class="field"
+        placeholder="Filter folders… (Ctrl+Enter to select current)"
+        [value]="filterText()"
+        (input)="onFilterInput($event)"
+        (keydown)="onKeydown($event)">
+    </div>
+
     <!-- Entry list -->
-    <div class="overflow-y-auto flex-grow p-2">
+    <div class="overflow-y-auto flex-grow p-2" #listContainer>
       @if (loading()) {
         <div class="text-muted text-sm p-4" style="text-align:center">Loading…</div>
       } @else if (error()) {
         <div class="text-sm p-4" style="text-align:center; color:#f87171">{{ error() }}</div>
       } @else {
-        @if (parent()) {
-          <button class="btn w-full flex items-center gap-2 bg-panel-hover" style="text-align:left" (click)="browse(parent())">
-            <span class="text-muted">↑</span>
-            <span class="text-muted text-sm">..</span>
+        @for (entry of filteredEntries(); track entry.path) {
+          <button
+            class="btn w-full flex items-center gap-2 bg-panel-hover"
+            [style.background-color]="isActive(entry) ? '#334155' : ''"
+            style="text-align:left"
+            [attr.data-nav-path]="entry.path"
+            (mousedown)="$event.preventDefault()"
+            (click)="browse(entry.path)">
+            @if (entry.name === '..') {
+              <span class="text-muted">↑</span>
+              <span class="text-muted text-sm">..</span>
+            } @else {
+              <span style="color:#f59e0b; flex-shrink:0">📁</span>
+              <span class="text-sm truncate">{{ entry.name }}</span>
+            }
           </button>
         }
-        @for (entry of entries(); track entry.path) {
-          <button class="btn w-full flex items-center gap-2 bg-panel-hover" style="text-align:left" (click)="browse(entry.path)">
-            <span style="color:#f59e0b; flex-shrink:0">📁</span>
-            <span class="text-sm truncate">{{ entry.name }}</span>
-          </button>
-        }
-        @if (!parent() && entries().length === 0) {
-          <div class="text-muted text-sm p-4" style="text-align:center">No subdirectories</div>
+        @if (filteredEntries().length === 0) {
+          <div class="text-muted text-sm p-4" style="text-align:center">
+            {{ filterText() ? 'No matches' : 'No subdirectories' }}
+          </div>
         }
       }
     </div>

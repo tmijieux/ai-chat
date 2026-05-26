@@ -27,7 +27,7 @@ class GlobFilesTool(BaseTool):
     requires_confirmation = False
     measured_delta = 344
 
-    def validate(self, args: dict) -> str:
+    def label(self, args: dict) -> str:
         return f"GLOB {args.get('pattern', '')} in {args.get('path', '.')}"
 
     async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:

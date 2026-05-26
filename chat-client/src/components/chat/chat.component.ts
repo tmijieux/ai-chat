@@ -10,6 +10,7 @@ import {
 } from '../../types/message-types'
 import { ActivatedRoute, RouterLink } from '@angular/router'
 import { ConversationSettingsComponent } from '../conversation-settings/conversation-settings.component'
+import { CollapsibleBubbleComponent } from '../collapsible-bubble/collapsible-bubble.component'
 import { MarkdownComponent } from 'ngx-markdown'
 
 @Component({
@@ -20,6 +21,7 @@ import { MarkdownComponent } from 'ngx-markdown'
     FormsModule,
     RouterLink,
     ConversationSettingsComponent,
+    CollapsibleBubbleComponent,
     MarkdownComponent,
   ],
   templateUrl: './chat.component.html',

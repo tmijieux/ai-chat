@@ -13,24 +13,6 @@
   </div>
 </ng-template>
 
-<!-- Thinking block template: active = still streaming -->
-<ng-template #thinkingBlock let-text="text" let-active="active">
-  @if (active) {
-    <div class="p-4 bg-thinking-bubble rounded-lg shadow-md text-xs italic overflow-hidden">
-      {{ text }}
-    </div>
-  } @else {
-    <details class="bg-thinking-bubble rounded-lg shadow-sm overflow-hidden">
-      <summary class="cursor-pointer p-4 text-xs font-medium select-none opacity-70 italic">
-        Thinking...
-      </summary>
-      <pre
-        class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-700 opacity-80"
-        >{{ text }}</pre
-      >
-    </details>
-  }
-</ng-template>
 
 <!-- =========================
    LEFT SIDEBAR: new chat + conversation list
@@ -106,13 +88,13 @@
     </div>
   </div>
 
-  <div class="flex-grow v-scroll p-6 space-y-6">
+  <div class="flex-grow v-scroll p-6 flex flex-col gap-6 items-center">
     <!-- system prompt bubble -->
     @let prompt = activePrompt();
     @if (!!prompt) {
       @let toolTok = activeToolsTokenCount();
       @let totalTok = (prompt.token_count ?? 0) + (toolTok ?? 0);
-      <div class="flex w-800px mx-auto">
+      <div class="flex w-800px">
         <details class="bg-thinking-bubble rounded-lg shadow-sm overflow-hidden w-full max-w-3xl">
           <summary class="cursor-pointer p-4 text-xs font-medium select-none opacity-70 italic">
             System prompt: {{ prompt.name }}
@@ -134,7 +116,7 @@
 
     <!-- messages list-->
     @for (msg of messagesWithMeta(); track msg.id) {
-      <div class="msg-row w-800px mx-auto" [class.has-siblings]="(msg.sibling_count ?? 1) > 1">
+      <div class="msg-row w-800px" [class.has-siblings]="(msg.sibling_count ?? 1) > 1">
         <!-- Sibling navigator (above message) -->
         @if ((msg.sibling_count ?? 1) > 1) {
           <div
@@ -171,7 +153,7 @@
         >
           <!-- User message -->
           @if (msg.kind === 'user') {
-            <div class="flex flex-col items-end gap-1">
+            <div class="flex flex-col items-end gap-1 p-relative">
               @if (editingMessageId() === msg.id) {
                 <div class="flex flex-col gap-2 max-w-3xl w-full">
                   <textarea
@@ -193,23 +175,23 @@
                 <div class="max-w-3xl p-4 shadow-md bg-user-bubble">{{ msg.content }}</div>
               }
               @if (msg.token_meta) {
-                <ng-container
-                  *ngTemplateOutlet="tokenTooltip; context: { meta: msg.token_meta }"
-                ></ng-container>
+                <div class="p-absolute bottom-0 right-0 z-50">
+                  <ng-container
+                    *ngTemplateOutlet="tokenTooltip; context: { meta: msg.token_meta }"
+                  ></ng-container>
+                </div>
               }
             </div>
           }
 
           <!-- Assistant message (non-agentic streaming or DB-loaded) -->
           @if (msg.kind === 'assistant') {
-            <div class="flex flex-col max-w-3xl gap-2">
+            <div class="flex flex-col max-w-3xl gap-2 p-relative">
               @if (msg.thinking) {
-                <ng-container
-                  *ngTemplateOutlet="
-                    thinkingBlock;
-                    context: { text: msg.thinking, active: msg.streaming && !msg.content }
-                  "
-                ></ng-container>
+                <app-collapsible-bubble [streaming]="!!(msg.streaming && !msg.content)">
+                  <span header>Thinking...</span>
+                  <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-700 opacity-80">{{ msg.thinking }}</pre>
+                </app-collapsible-bubble>
               }
               @if (msg.content) {
                 <div class="p-4 bg-assistant-bubble shadow-md rounded-lg prose-bubble">
@@ -223,18 +205,21 @@
                 <div class="p-4 bg-assistant-bubble shadow-md rounded-lg">...</div>
               }
               @if (msg.token_meta) {
-                <ng-container
-                  *ngTemplateOutlet="tokenTooltip; context: { meta: msg.token_meta }"
-                ></ng-container>
+                <div class="p-absolute bottom-0 right-0 z-50">
+                  <ng-container
+                    *ngTemplateOutlet="tokenTooltip; context: { meta: msg.token_meta }"
+                  ></ng-container>
+                </div>
               }
             </div>
           }
 
           <!-- Live streaming thinking block (agent run only) -->
           @if (msg.kind === 'thinking') {
-            <ng-container
-              *ngTemplateOutlet="thinkingBlock; context: { text: msg.content, active: !msg.done }"
-            ></ng-container>
+            <app-collapsible-bubble [streaming]="!msg.done">
+              <span header>Thinking...</span>
+              <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-700 opacity-80">{{ msg.content }}</pre>
+            </app-collapsible-bubble>
           }
 
           <!-- Tool confirmation card -->
@@ -312,28 +297,32 @@
 
           <!-- Tool result (collapsible) -->
           @if (msg.kind === 'tool_result') {
-            <div class="flex flex-col w-full max-w-2xl gap-1">
-              <details
-                class="border border-gray-300 bg-gray-50 rounded-lg shadow-sm overflow-hidden"
-              >
-                <summary class="cursor-pointer p-4 text-sm text-gray-600 font-medium select-none">
-                  Tool result
-                  @if (msg.tool_name) {
-                    : <code class="bg-gray-200 px-1 rounded">{{ msg.tool_name }}</code>
+            <div class="p-relative w-full max-w-2xl">
+              <app-collapsible-bubble wrapperClass="bg-card border-card">
+                <span header>
+                  @if (msg.log_message) {
+                    <code class="bg-gray-200 px-1 rounded text-xs">{{ msg.log_message }}</code>
+                  } @else {
+                    Tool result
+                    @if (msg.tool_name) {
+                      : <code class="bg-gray-200 px-1 rounded">{{ msg.tool_name }}</code>
+                    }
                   }
                   @if (msg.context_excluded) {
                     <span class="ml-2 text-xs text-gray-400 italic">excluded from context</span>
                   }
-                </summary>
+                </span>
                 <pre
                   class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-200"
                   >{{ msg.content }}</pre
                 >
-              </details>
+              </app-collapsible-bubble>
               @if (msg.token_meta) {
-                <ng-container
-                  *ngTemplateOutlet="tokenTooltip; context: { meta: msg.token_meta }"
-                ></ng-container>
+                <div class="p-absolute bottom-0 right-0 z-50">
+                  <ng-container
+                    *ngTemplateOutlet="tokenTooltip; context: { meta: msg.token_meta }"
+                  ></ng-container>
+                </div>
               }
             </div>
           }
@@ -381,15 +370,8 @@
     }
 
     <!-- Agent streaming phase indicator -->
-    @if (chatSvc.phase() === 'thinking') {
-      <div class="flex justify-start w-800px mx-auto">
-        <div class="p-4 bg-thinking-bubble rounded-lg shadow-md text-xs italic animate-pulse">
-          Thinking...
-        </div>
-      </div>
-    }
     @if (chatSvc.phase() === 'responding') {
-      <div class="flex justify-start w-800px mx-auto">
+      <div class="flex justify-start w-800px">
         <div class="flex items-center gap-2 px-3 py-1 text-xs opacity-50">
           <span class="animate-pulse">●</span> responding
         </div>

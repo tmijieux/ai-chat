@@ -10,7 +10,28 @@ A directory path scoped to a conversation. Restricts all file-access tools and s
 
 **Persistence rules:**
 - Must not reset to `null` when switching conversations or starting a new chat — the last-used working directory must carry over.
-- Must survive page refresh / browser return. Currently this is a **known gap**: the value is only kept in memory for the session. Target: persist to `localStorage` or a backend user-preference so it survives reloads.
+- Survives page refresh: persisted to the backend `app_settings` table under key `last_working_directory` via `GET/PUT /api/app-settings/{key}`. Loaded on app init via `lastWorkingDirectory` query in `chat.service.ts` and pre-filled into `ConversationSettings.working_directory` for new conversations.
+
+## DirectoryPickerComponent
+Keyboard-first modal folder browser opened via the "Browse" button in the [[Conversation Settings Drawer]]. Implemented in `chat-client/src/components/directory-picker/`.
+
+The filter input is auto-focused on open and retains focus throughout — entry buttons use `mousedown preventDefault` to avoid stealing focus, so typing always goes to the filter.
+
+`".."` is treated as a plain entry name and filtered like any other: it appears when the filter matches `".."` and disappears otherwise.
+
+Active entry is tracked by **path identity**: filtering keeps the current selection if the item is still visible in the filtered list; if it falls out, the first remaining entry is auto-selected. On each `browse()` call the filter and selection reset and the first entry is auto-selected.
+
+**Keybindings:**
+
+| Key | Effect |
+|-----|--------|
+| Typing | Filters the entry list |
+| ArrowUp / ArrowDown | Move highlighted entry |
+| Enter | Navigate into highlighted entry |
+| Ctrl+Enter | Confirm selection of the current directory |
+| Backspace (empty filter) | Go up one directory |
+| Escape (non-empty filter) | Clear filter |
+| Escape (empty filter) | Close picker |
 
 ## SystemPromptTemplate
 A named, versioned system prompt stored in the DB (`system_prompt_templates` table). Has a `name`, `category`, `content`, `token_count` (computed on create/edit), and `is_default` flag. The `token_count` is evaluated by calling `count_token` with `[{"role": "system", "content": content}]`.
@@ -93,7 +114,7 @@ The unit of visual grouping in the chat. One top-level bubble per speaker per it
 - **User bubble** — user message.
 - **Assistant bubble** — groups everything the assistant produced in one iteration: collapsed thinking block (expands while streaming, collapses when done) + response text + tool confirmation card + simplified tool call summary (tool name only, no full args). All nested inside one bubble so the "who is speaking" boundary is visually clear.
 - **Tool result bubble** — the tool's response; separate because it is a different speaker.
-This grouping is the **target design** (not yet fully implemented). Current state has thinking as a separate flat message.
+This grouping is the **target design** (not yet fully implemented). Current state has thinking as a separate flat message from tools and assitant response.
 
 ## Sidebar
 Left-side panel, always visible. Contains:

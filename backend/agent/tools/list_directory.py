@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 
 class ListDirectoryTool(BaseTool):
     name = "list_directory"
-    description = "List files and directories within a specific path. Use this to understand the project structure, file hierarchy, and permissions. Requires a workspace directory to be configured in conversation settings."
+    description = "List files and directories within a specific path. Use this to understand the project structure, file hierarchy, and permissions. Requires a workspace directory to be configured in conversation settings. This tool works like the unix 'find' command"
     parameters = {
         "type": "object",
         "properties": {
@@ -31,8 +31,8 @@ class ListDirectoryTool(BaseTool):
     requires_confirmation = False
     measured_delta = 375
 
-    def validate(self, args: dict) -> str:
-        return f"LIST {args.get('path', '')}"
+    def label(self, args: dict) -> str:
+        return f"DIRECTORY {args.get('path', '')}"
 
     async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
         if working_directory is None:
@@ -45,13 +45,13 @@ class ListDirectoryTool(BaseTool):
         absolute_path = resolve_workspace_path(path, working_directory)
         if not file_in_directory(str(absolute_path), working_directory):
             return tool_error(self.name, f"Listing outside workspace is forbidden. Workspace: {working_directory}")
-
-        path = absolute_path.relative_to(working_directory)
+        
+        new_path = absolute_path.relative_to(working_directory)
 
         exe = "c:\\Program Files\\Git\\usr\\bin\\find.exe"
-        cmd = [exe, str(path), "-maxdepth", str(maximum_depth)]
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        cmd = [exe, str(new_path), "-maxdepth", str(maximum_depth)]
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=working_directory)
         if proc.returncode == 0:
-            return {"tool": self.name, "path": str(absolute_path), "status": "success", "content": proc.stdout.decode()}
+            return {"tool": self.name, "path": str(new_path), "status": "success", "content": proc.stdout.decode()}
         else:
             return tool_error(self.name, proc.stderr.decode())

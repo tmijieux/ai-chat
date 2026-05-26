@@ -31,11 +31,16 @@ class WriteFileTool(BaseTool):
     requires_confirmation = True
     measured_delta = 360
 
-    def validate(self, args: dict) -> str:
+    def make_validation_text_for_user_confirmation(self, args: dict) -> str:
         path = args.get("file_path", "")
         content = args.get("content", "")
         append = args.get("append", False)
         return f"{'APPEND' if append else 'OVERWRITE'} {path}\n\n{content[:500]}{'...' if len(content) > 500 else ''}"
+
+    def label(self, args: dict) -> str:
+        path = args.get("file_path", "")
+        append = args.get("append", False)
+        return f"{'APPEND' if append else 'WRITE'} {path}"
 
     async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
         if working_directory is None:
@@ -49,7 +54,7 @@ class WriteFileTool(BaseTool):
         if not file_in_directory(str(absolute_path), working_directory):
             return tool_error(self.name, f"Writing outside workspace is forbidden. Workspace: {working_directory}")
 
-        preview = self.validate(args)
+        preview = self.make_validation_text_for_user_confirmation(args)
         approved, user_msg = await session.request_confirm(f"write-{path}", self.name, args, preview)
         if not approved:
             return tool_error(self.name, "User aborted the file write", user_message=user_msg)

@@ -224,8 +224,9 @@ button {
 .inset-0 {
   top: 0; right: 0; bottom: 0; left: 0;
 }
-.top-0  { top: 0; }
-.right-0 { right: 0; }
+.top-0    { top: 0; }
+.bottom-0 { bottom: 0; }
+.right-0  { right: 0; }
 .z-40  { z-index: 40; }
 .z-50  { z-index: 50; }
 .z-modal { z-index: 200; }

@@ -15,6 +15,7 @@ class NewMessage(BaseModel):
     parent_id: str | None = None
     token_count: int | None = None
     token_delta: int | None = None
+    log_message: str | None = None
 
 
 class UpdateTokenCount(BaseModel):
@@ -43,6 +44,10 @@ class ConversationSettings(BaseModel):
     active_tool_names: list[str] = []
     agentic_mode: bool = True
     working_directory: str | None = None
+
+
+class AppSettingUpdate(BaseModel):
+    value: str | None = None
 
 
 class NewSystemPrompt(BaseModel):

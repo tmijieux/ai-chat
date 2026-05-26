@@ -3,10 +3,12 @@ from pathlib import Path
 from .base import BaseTool, tool_error
 from agent.file_utils import file_in_directory, resolve_workspace_path
 from typing import TYPE_CHECKING
+import logging
 
 if TYPE_CHECKING:
     from agent.agent import AgentSession
 
+logger = logging.getLogger(__name__)
 
 class GrepFilesTool(BaseTool):
     name = "grep_files"
@@ -40,7 +42,7 @@ class GrepFilesTool(BaseTool):
     requires_confirmation = False
     measured_delta = 446
 
-    def validate(self, args: dict) -> str:
+    def label(self, args: dict) -> str:
         return f"GREP '{args.get('pattern', '')}' in {args.get('path', '.')}"
 
     async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
@@ -49,7 +51,9 @@ class GrepFilesTool(BaseTool):
 
         pattern = args.get("pattern", "")
         path = args.get("path", ".")
-        glob_pattern = args.get("glob", "**/*")
+        glob_pattern = args.get("glob", None)
+        if glob_pattern is None:
+            return tool_error(self.name, "the 'glob' argument is missing")
         case_insensitive = args.get("case_insensitive", False)
         max_matches = args.get("max_matches", 50)
 
@@ -72,12 +76,14 @@ class GrepFilesTool(BaseTool):
                 if not file_path.is_file():
                     continue
                 try:
-                    content = file_path.read_text(encoding="utf-8", errors="ignore")
-                except Exception:
+                    content = file_path.read_text(encoding="utf-8", errors="strict")
+                except Exception as e:
+                    logger.warning(f"encoding error in `{str(file_path)}`", exc_info=e)
                     continue
                 for i, line in enumerate(content.splitlines(), 1):
                     if regex.search(line):
-                        matches.append({"file": str(file_path), "line": i, "content": line.strip()})
+                        rel_path = file_path.relative_to(working_directory)
+                        matches.append({"file": str(rel_path), "line": i, "content": line.strip()})
                         if len(matches) >= max_matches:
                             break
                 if len(matches) >= max_matches:

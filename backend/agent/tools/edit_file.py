@@ -35,11 +35,14 @@ class EditFileTool(BaseTool):
     requires_confirmation = True
     measured_delta = 413
 
-    def validate(self, args: dict) -> str:
+    def make_validation_text_for_user_confirmation(self, args: dict) -> str:
         path = args.get("file_path", "")
         old_string = args.get("old_string", "")
         new_string = args.get("new_string", "")
         return f"EDIT {path}\n--- OLD ---\n{old_string[:300]}\n--- NEW ---\n{new_string[:300]}"
+
+    def label(self, args: dict) -> str:
+        return f"EDIT {args.get('file_path', '')}"
 
     async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
         if working_directory is None:
@@ -73,7 +76,7 @@ class EditFileTool(BaseTool):
         if old_string not in current_content:
             return tool_error(self.name, "old_string not found in file")
 
-        preview = self.validate(args)
+        preview = self.make_validation_text_for_user_confirmation(args)
         approved, user_msg = await session.request_confirm(f"edit-{path}", self.name, args, preview)
         if not approved:
             return tool_error(self.name, "User aborted the edit", user_message=user_msg)

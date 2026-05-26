@@ -2,6 +2,7 @@ import { inject, Injectable } from '@angular/core'
 import {
   AgentToolMeta,
   AgentToolsResponse,
+  AppSetting,
   Conversation,
   ConversationSettings,
   Message,
@@ -127,6 +128,14 @@ export class ApiService {
       `${BASE_URL}/conversations/${convId}/active-branch`,
       { message_id: messageId },
     )
+  }
+
+  get_app_setting(key: string) {
+    return this.http.get<AppSetting>(`${BASE_URL}/app-settings/${key}`)
+  }
+
+  put_app_setting(key: string, value: string | null) {
+    return this.http.put<AppSetting>(`${BASE_URL}/app-settings/${key}`, { value })
   }
 
   browse_directory(path?: string | null) {

@@ -22,7 +22,7 @@ class RunShellTool(BaseTool):
     requires_confirmation = True
     measured_delta = 316
 
-    def validate(self, args: dict) -> str:
+    def make_validation_text_for_user_confirmation(self, args: dict) -> str:
         return f"SHELL: {args.get('command', '')}"
 
     async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
@@ -33,7 +33,7 @@ class RunShellTool(BaseTool):
         if not command:
             return tool_error(self.name, "command is required")
 
-        preview = self.validate(args)
+        preview = self.make_validation_text_for_user_confirmation(args)
         approved, user_msg = await session.request_confirm(f"shell-{id(args)}", self.name, args, preview)
         if not approved:
             return tool_error(self.name, "User aborted the command", user_message=user_msg)

@@ -6,7 +6,8 @@ from typing import Any
 
 from .tools import TOOL_REGISTRY, get_ollama_tool_list
 
-OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"  # kept local; main.py owns the base URL constant
+OLLAMA_BASE_URL = "http://127.0.0.1:11434"  # kept local; main.py owns the base URL constant
+OLLAMA_CHAT_URL = f"{OLLAMA_BASE_URL}/api/chat"  # kept local; main.py owns the base URL constant
 MODEL_NAME = "qwen3.5:9b"
 
 logger = logging.getLogger(__name__)
@@ -66,10 +67,15 @@ def _deduplicate_file_reads(messages: list[dict[str, Any]]) -> None:
             path = json.loads(messages[i].get("content", "")).get("path", "")
         except (json.JSONDecodeError, ValueError):
             path = ""
+        try:
+            tool_call_id = json.loads(messages[i].get("content", "")).get("tool_call_id")
+        except (json.JSONDecodeError, ValueError):
+            tool_call_id = None
         messages[i]["content"] = json.dumps({
             "tool": "read_file",
             "status": "evicted",
             "path": path,
+            "tool_call_id": tool_call_id,
             "reason": "file content removed — analysis was expressed in conversation above, superseded by later read",
         })
 
@@ -96,19 +102,24 @@ def _log_context(messages: list[dict[str, Any]]) -> None:
                 if tool == "read_file":
                     suffix = " [evicted]" if status == "evicted" else ""
                     print(f"  [tool] FILE {path}{suffix}")
-                elif tool in ("list_directory", "glob_files", "grep_files"):
-                    location = path if path != "" else j.get("pattern", j.get("query", ""))
-                    print(f"  [tool] DIRECTORY {location}")
+                elif tool == "list_directory":
+                    print(f"  [tool] DIRECTORY {path}")
+                elif tool == "glob_files":
+                    pattern = j.get("pattern", "")
+                    print(f"  [tool] GLOB {pattern} in {path}")
+                elif tool == "grep_files":
+                    pattern = j.get("pattern", "")
+                    glob_pat = j.get("glob_pattern", "")
+                    suffix = f" [{glob_pat}]" if glob_pat else ""
+                    print(f"  [tool] GREP '{pattern}' in {path}{suffix}")
                 else:
                     print(f"  [tool] {tool}: {status}")
             except (json.JSONDecodeError, ValueError):
                 print(f"  [tool] {content[:80].replace('\n', ' ')}")
         elif role == "assistant":
-            thinking = m.get("thinking")
-            if thinking is not None and thinking.strip() != "":
-                print(f"  [thinking] {thinking.replace('\n', ' ')[:120]}")
             tool_calls = m.get("tool_calls")
             if tool_calls is not None and len(tool_calls) > 0:
+                print(f"  [thinking] {content.replace('\n', ' ')[:120]}")
                 names = ", ".join(tc.get("function", {}).get("name", "?") for tc in tool_calls)
                 print(f"  [assistant] {len(tool_calls)} tool call(s): {names}")
             elif content.strip() != "":
@@ -191,10 +202,14 @@ async def chat_with_tools(
         if len(tool_calls) > 0:
             message["tool_calls"] = tool_calls
         messages.append(message)
-    elif len(message["thinking"]) > 0 and len(tool_calls) > 0:
-        messages.append({"role": "assistant", "content": "", "thinking": message["thinking"], "tool_calls": tool_calls})
+    elif len(message["thinking"]) > 0 or len(tool_calls) > 0:
+        messages.append({
+            "role": "assistant", 
+            "content": f"<think>{message['thinking']}</think>", 
+            "tool_calls": tool_calls
+        })
         # old code (transient hack):
-        # messages.append({"role": "assistant", "content": f"<think>{message['thinking']}</think>", "_transient": True})
+        # messages.append({"role": "assistant", , "_transient": True})
 
 
     if len(tool_calls) > 0:
@@ -207,11 +222,15 @@ async def chat_with_tools(
 
             if tool_name not in TOOL_REGISTRY:
                 result_dict = {"tool": tool_name, "status": "error", "error": {"message": f"Unknown tool: {tool_name}"}}
+                log_msg = None
             else:
-                result_dict = await TOOL_REGISTRY[tool_name].execute(tool_args, session, working_directory)
+                tool_instance = TOOL_REGISTRY[tool_name]
+                result_dict = await tool_instance.execute(tool_args, session, working_directory)
+                log_msg = tool_instance.label(tool_args)
 
+            result_dict["tool_call_id"] = call_id
             tool_output = json.dumps(result_dict)
-            await session.emit({"type": "tool_result", "tool_id": call_id, "tool_name": tool_name, "content": tool_output})
+            await session.emit({"type": "tool_result", "tool_id": call_id, "tool_name": tool_name, "content": tool_output, "log_message": log_msg})
             messages.append({"role": "tool", "name": tool_name, "content": tool_output})
 
     _deduplicate_file_reads(messages)
