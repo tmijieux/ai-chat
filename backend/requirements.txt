@@ -5,3 +5,6 @@ pydantic
 aiosqlite
 python-dotenv # For environment variables
 requests # For calling Ollama
+pathspec # For .gitignore-style pattern matching
+tiktoken # Exact BPE tokenizer used by Qwen models
+gguf # For loading tokenizer metadata from GGUF model files

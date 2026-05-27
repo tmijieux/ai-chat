@@ -1,6 +1,6 @@
 from pathlib import Path
 from .base import BaseTool, tool_error
-from agent.file_utils import file_in_directory, resolve_workspace_path
+from agent.file_utils import file_in_directory, resolve_workspace_path, load_ignore_spec, is_path_ignored
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -21,11 +21,15 @@ class GlobFilesTool(BaseTool):
                 "type": "string",
                 "description": "Root directory to search from (default '.').",
             },
+            "include_ignored": {
+                "type": "boolean",
+                "description": "If true, include files normally excluded by .gitignore and common build/dependency directories (venv, node_modules, .git, __pycache__, dist, build). Default false.",
+            },
         },
         "required": ["pattern"],
     }
     requires_confirmation = False
-    measured_delta = 344
+    measured_delta = 398
 
     def label(self, args: dict) -> str:
         return f"GLOB {args.get('pattern', '')} in {args.get('path', '.')}"
@@ -36,6 +40,7 @@ class GlobFilesTool(BaseTool):
 
         pattern = args.get("pattern", "")
         path = args.get("path", ".")
+        include_ignored = args.get("include_ignored", False)
 
         if not pattern:
             return tool_error(self.name, "pattern is required")
@@ -45,7 +50,11 @@ class GlobFilesTool(BaseTool):
             return tool_error(self.name, f"Searching outside workspace is forbidden. Workspace: {working_directory}")
 
         try:
-            files = [str(p) for p in absolute_path.glob(pattern) if p.is_file()]
+            spec = None if include_ignored else load_ignore_spec(working_directory)
+            files = [
+                str(p) for p in absolute_path.glob(pattern)
+                if p.is_file() and (include_ignored or not is_path_ignored(p, working_directory, spec))
+            ]
             return {"tool": self.name, "pattern": pattern, "path": path, "status": "success", "files": files, "file_count": len(files)}
         except Exception as e:
             return tool_error(self.name, f"Error during glob: {e}")

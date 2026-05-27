@@ -5,9 +5,10 @@ import aiohttp
 
 from agent.agent import MODEL_NAME, OLLAMA_CHAT_URL
 from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
+from tokenizer import count_tokens
 
 
-async def count_token(messages: list[dict[str, Any]], tool_names: list[str] | None = None) -> int:
+async def count_token_with_ollama(messages: list[dict[str, Any]], tool_names: list[str] | None = None) -> int:
     """Generate 1 single token and read prompt_eval_count returned by Ollama."""
     if tool_names is None:
         tool_names = list(TOOL_REGISTRY.keys())
@@ -30,6 +31,14 @@ async def count_token(messages: list[dict[str, Any]], tool_names: list[str] | No
             return content["prompt_eval_count"]
 
 
+def count_token_local(messages: list[dict[str, Any]], tool_names: list[str] | None = None) -> int:
+    """Count tokens locally using tiktoken + GGUF vocab — no Ollama call needed."""
+    if tool_names is None:
+        tool_names = list(TOOL_REGISTRY.keys())
+    tools = get_ollama_tool_list(tool_names)
+    return count_tokens(messages, tools)
+
+
 async def count_token_in_file(file_path: str):
     with open(file_path, "r") as f:
         data = f.read()
@@ -39,10 +48,10 @@ async def count_token_in_file(file_path: str):
         if len(data) > chunk_size:
             for i in range(0, len(data), chunk_size):
                 data_part = data[i: i + chunk_size]
-                nb_token_part = await count_token([{"role": "user", "content": data_part}], tool_names=[])
+                nb_token_part = await count_token_with_ollama([{"role": "user", "content": data_part}], tool_names=[])
                 nb_token += nb_token_part
         else:
-            nb_token = await count_token([{"role": "user", "content": data}], tool_names=[])
+            nb_token = await count_token_with_ollama([{"role": "user", "content": data}], tool_names=[])
         print("TOTAL TOKENS=", nb_token)
 
 

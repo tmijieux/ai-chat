@@ -1,4 +1,37 @@
 from pathlib import Path
+import pathspec
+
+# Directories that are always ignored regardless of .gitignore
+_HARDCODED_IGNORE_DIRS = {
+    "venv", ".venv", "node_modules", ".git", "__pycache__",
+    "dist", "build", ".tox",
+}
+
+
+def load_ignore_spec(workspace: str) -> pathspec.PathSpec:
+    """Build a PathSpec from .gitignore (if present) plus hardcoded defaults."""
+    patterns = [f"{d}/" for d in _HARDCODED_IGNORE_DIRS]
+    gitignore = Path(workspace) / ".gitignore"
+    if gitignore.is_file():
+        try:
+            patterns.extend(gitignore.read_text(encoding="utf-8").splitlines())
+        except Exception:
+            pass
+    return pathspec.PathSpec.from_lines("gitwildmatch", patterns)
+
+
+def is_path_ignored(path: Path, workspace: str, spec: pathspec.PathSpec) -> bool:
+    """Return True if path should be excluded by the ignore spec."""
+    try:
+        rel = path.relative_to(workspace)
+    except ValueError:
+        return False
+    # Check if any directory component is in the hardcoded set
+    for part in rel.parts:
+        if part in _HARDCODED_IGNORE_DIRS:
+            return True
+    # Check gitignore spec (use forward slashes for cross-platform consistency)
+    return spec.match_file(rel.as_posix())
 
 
 def resolve_workspace_path(path: str, working_directory: str) -> Path:

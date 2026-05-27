@@ -1,7 +1,7 @@
 import re
 from pathlib import Path
 from .base import BaseTool, tool_error
-from agent.file_utils import file_in_directory, resolve_workspace_path
+from agent.file_utils import file_in_directory, resolve_workspace_path, load_ignore_spec, is_path_ignored
 from typing import TYPE_CHECKING
 import logging
 
@@ -36,11 +36,15 @@ class GrepFilesTool(BaseTool):
                 "type": "integer",
                 "description": "Maximum matches to return (default 50). Increase only if you need more.",
             },
+            "include_ignored": {
+                "type": "boolean",
+                "description": "If true, include files normally excluded by .gitignore and common build/dependency directories (venv, node_modules, .git, __pycache__, dist, build). Default false.",
+            },
         },
         "required": ["pattern", "glob"],
     }
     requires_confirmation = False
-    measured_delta = 446
+    measured_delta = 512
 
     def label(self, args: dict) -> str:
         return f"GREP '{args.get('pattern', '')}' in {args.get('path', '.')}"
@@ -56,6 +60,7 @@ class GrepFilesTool(BaseTool):
             return tool_error(self.name, "the 'glob' argument is missing")
         case_insensitive = args.get("case_insensitive", False)
         max_matches = args.get("max_matches", 50)
+        include_ignored = args.get("include_ignored", False)
 
         if not pattern:
             return tool_error(self.name, "pattern is required")
@@ -70,10 +75,13 @@ class GrepFilesTool(BaseTool):
         if not file_in_directory(str(absolute_path), working_directory):
             return tool_error(self.name, f"Searching outside workspace is forbidden. Workspace: {working_directory}")
 
+        spec = None if include_ignored else load_ignore_spec(working_directory)
         matches = []
         try:
             for file_path in absolute_path.glob(glob_pattern):
                 if not file_path.is_file():
+                    continue
+                if not include_ignored and is_path_ignored(file_path, working_directory, spec):
                     continue
                 try:
                     content = file_path.read_text(encoding="utf-8", errors="strict")

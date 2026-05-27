@@ -1,155 +1,113 @@
 """
-Simple Python script to tokenize text using Qwen3.5 tokenizer via AutoTokenizer.
+Local Qwen3.5 tokenizer built from the GGUF file — no PyTorch, no downloads.
+
+Exposes:
+  count_tokens(messages, tools=None) -> int
 """
+import os
+from typing import Any
 
-from transformers import AutoTokenizer
+import tiktoken
+from jinja2 import Environment
+from gguf import GGUFReader
+
+GGUF_PATH = os.environ.get(
+    "QWEN_GGUF_PATH",
+    "C:\\Users\\tmijieux\\.ollama\\models\\blobs\\"
+    "sha256-dec52a44569a2a25341c4e4d3fee25846eed4f6f0b936278e3a3c900bb99d37c",
+)
+
+# Qwen3.5 tiktoken pre-tokenization regex
+_QWEN_PAT = (
+    r"(?i:'s|'t|'re|'ve|'m|'ll|'d)"
+    r"|[^\r\n\p{L}\p{N}]?\p{L}+"
+    r"|\p{N}"
+    r"| ?[^\s\p{L}\p{N}]+[\r\n]*"
+    r"|\s*[\r\n]+"
+    r"|\s+(?!\S)"
+    r"|\s+"
+)
+
+# GPT-2 byte encoding inverse: unicode char → raw byte
+def _unicode_to_byte_map() -> dict[str, int]:
+    bs = (
+        list(range(ord("!"), ord("~") + 1))
+        + list(range(ord("¡"), ord("¬") + 1))
+        + list(range(ord("®"), ord("ÿ") + 1))
+    )
+    cs = bs[:]
+    n = 0
+    for b in range(2 ** 8):
+        if b not in bs:
+            bs.append(b)
+            cs.append(2 ** 8 + n)
+            n += 1
+    return {chr(c): b for b, c in zip(bs, cs)}
+
+_U2B = _unicode_to_byte_map()
+
+def _gpt2_str_to_bytes(s: str) -> bytes:
+    return bytes([_U2B[c] for c in s])
 
 
-def load_qwen35_tokenizer(model_name_or_path: str = "Qwen/Qwen3.5") -> AutoTokenizer:
-    """
-    Load the Qwen3.5 tokenizer using AutoTokenizer.
-
-    Args:
-        model_name_or_path: The model name or path to load the tokenizer from.
-                           Default: "Qwen/Qwen3.5"
-
-    Returns:
-        AutoTokenizer: The loaded tokenizer instance.
-    """
-    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
-    return tokenizer
+# Lazy singleton
+_enc: tiktoken.Encoding | None = None
+_chat_template: str | None = None
 
 
-def tokenize_text(text: str, tokenizer:AutoTokenizer|None=None):
-    """
-    Tokenize input text using the Qwen3.5 tokenizer.
+def _load() -> tuple[tiktoken.Encoding, str]:
+    global _enc, _chat_template
+    if _enc is not None and _chat_template is not None:
+        return _enc, _chat_template
 
-    Args:
-        text: The input text to tokenize.
-        tokenizer: Optional tokenizer instance. If None, loads the default Qwen3.5 tokenizer.
+    reader = GGUFReader(GGUF_PATH, "r")
+    fields = reader.fields
 
-    Returns:
-        dict: Tokenized output containing:
-            - input_ids: List of token IDs
-            - attention_mask: List of attention mask values
-            - special_tokens_mask: List of special token mask values
-    """
-    if tokenizer is None:
-        tokenizer = load_qwen35_tokenizer()
+    tokens: list[str] = fields["tokenizer.ggml.tokens"].contents()
+    token_types: list[int] = fields["tokenizer.ggml.token_type"].contents()
+    chat_template_str: str = fields["tokenizer.chat_template"].contents()
 
-    # Tokenize the text
-    tokenized = tokenizer(
-        text,
-        return_tensors="pt",  # Returns PyTorch tensors
-        truncation=True,      # Truncate if text is too long
-        padding=True          # Pad to max length in batch
+    mergeable_ranks: dict[bytes, int] = {}
+    special_tokens: dict[str, int] = {}
+
+    for rank, (tok, tok_type) in enumerate(zip(tokens, token_types)):
+        if tok_type in (3, 4):  # CONTROL and USER_DEFINED both need special token handling
+            special_tokens[tok] = rank
+        else:
+            mergeable_ranks[_gpt2_str_to_bytes(tok)] = rank
+
+    _enc = tiktoken.Encoding(
+        name="qwen35",
+        pat_str=_QWEN_PAT,
+        mergeable_ranks=mergeable_ranks,
+        special_tokens=special_tokens,
+    )
+    _chat_template = chat_template_str
+    return _enc, _chat_template
+
+
+def render_messages(messages: list[dict[str, Any]], tools: list | None, add_generation_prompt: bool = True) -> str:
+    _, chat_template_str = _load()
+
+    def raise_exception(msg):
+        raise ValueError(msg)
+
+    import json
+    env = Environment()
+    env.globals["raise_exception"] = raise_exception
+    env.filters["tojson"] = lambda x, **kw: json.dumps(x, ensure_ascii=False)
+
+    return env.from_string(chat_template_str).render(
+        messages=messages,
+        tools=tools or [],
+        add_generation_prompt=add_generation_prompt,
+        add_vision_id=False,
+        enable_thinking=True,
     )
 
-    return tokenized
 
-
-def tokenize_text_batch(texts: list, tokenizer=None, max_length: int = 512):
-    """
-    Tokenize a batch of texts using the Qwen3.5 tokenizer.
-
-    Args:
-        texts: List of input texts to tokenize.
-        tokenizer: Optional tokenizer instance. If None, loads the default Qwen3.5 tokenizer.
-        max_length: Maximum sequence length for each token.
-
-    Returns:
-        dict: Tokenized output containing:
-            - input_ids: Tensor of token IDs
-            - attention_mask: Tensor of attention mask values
-            - special_tokens_mask: Tensor of special token mask values
-    """
-    if tokenizer is None:
-        tokenizer = load_qwen35_tokenizer()
-
-    tokenized = tokenizer(
-        texts,
-        return_tensors="pt",
-        truncation=True,
-        padding=True,
-        max_length=max_length
-    )
-
-    return tokenized
-
-
-def get_tokenizer_info(tokenizer: AutoTokenizer|None=None):
-    """
-    Get information about the loaded tokenizer.
-
-    Args:
-        tokenizer: Optional tokenizer instance. If None, loads the default Qwen3.5 tokenizer.
-
-    Returns:
-        dict: Tokenizer information including:
-            - vocab_size: Vocabulary size
-            - model_max_length: Maximum sequence length
-            - pad_token: Padding token
-            - eos_token: End-of-sequence token
-            - bos_token: Beginning-of-sequence token
-    """
-    if tokenizer is None:
-        tokenizer = load_qwen35_tokenizer()
-
-    return {
-        "vocab_size": tokenizer.vocab_size,
-        "model_max_length": tokenizer.model_max_length,
-        "pad_token": tokenizer.pad_token,
-        "eos_token": tokenizer.eos_token,
-        "bos_token": tokenizer.bos_token,
-        "unk_token": tokenizer.unk_token
-    }
-
-
-def main():
-    # Example usage
-    print("Loading Qwen3.5 tokenizer...")
-
-
-    model_file = "C:\\Users\\tmijieux\\.ollama\\models\\blobs\\sha256-4c27e0f5b5adf02ac956c7322bd2ee7636fe3f45a8512c9aba5385242cb6e09a"
-    tokenizer = load_qwen35_tokenizer(model_file)
-
-    print("\nTokenizer Info:")
-    info = get_tokenizer_info(tokenizer)
-    for key, value in info.items():
-        print(f"  {key}: {value}")
-
-    # Example 1: Tokenize a single text
-    print("\n" + "="*50)
-    print("Example 1: Tokenizing a single text")
-    text = "Hello, how are you today?"
-    tokenized = tokenize_text(text, tokenizer)
-    print(f"Input text: {text}")
-    print(f"Input IDs shape: {tokenized['input_ids'].shape}")
-    print(f"Attention mask shape: {tokenized['attention_mask'].shape}")
-
-    # Example 2: Tokenize a batch of texts
-    print("\n" + "="*50)
-    print("Example 2: Tokenizing a batch of texts")
-    texts = [
-        "Hello, how are you?",
-        "I am doing well, thank you!",
-        "This is a test of the tokenizer.",
-        " text with <think> in between ",
-        " text with <|im_start|> in between ",
-        " text with <|im_end|> in between ",
-    ]
-    batch_tokenized = tokenize_text_batch(texts, tokenizer)
-    print(f"Input texts count: {len(texts)}")
-    print(f"Input IDs shape: {batch_tokenized['input_ids'].shape}")
-    print(f"Attention mask shape: {batch_tokenized['attention_mask'].shape}")
-
-    # Example 3: Show tokenized output
-    print("\n" + "="*50)
-    print("Example 3: Tokenized output for first text")
-    print(f"Input IDs: {batch_tokenized['input_ids'][0].tolist()}")
-    print(f"Attention Mask: {batch_tokenized['attention_mask'][0].tolist()}")
-
-    print("\nDone!")
-
-if __name__ == "__main__":
-    main()
+def count_tokens(messages: list[dict[str, Any]], tools: list | None = None) -> int:
+    enc, _ = _load()
+    add_generation_prompt = not messages or messages[-1]["role"] != "assistant"
+    rendered = render_messages(messages, tools, add_generation_prompt=add_generation_prompt)
+    return len(enc.encode(rendered, allowed_special="all"))

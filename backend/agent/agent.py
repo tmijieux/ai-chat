@@ -160,6 +160,8 @@ async def chat_with_tools(
         ) as response:
             message: dict[str, Any] = {"role": "assistant", "content": "", "thinking": ""}
             tool_calls: list[dict] = []
+            prompt_eval_count: int = 0
+            eval_count: int = 0
 
             async for raw_chunk in response.content.iter_chunks():
                 text = (raw_chunk[0] if isinstance(raw_chunk, tuple) else raw_chunk).decode().strip()
@@ -185,12 +187,9 @@ async def chat_with_tools(
                         if "tool_calls" in resp_msg:
                             tool_calls.extend(resp_msg["tool_calls"])
                     if chunk_json.get("done"):
-                        print(f"[tokens] prompt_eval_count={chunk_json.get('prompt_eval_count')} eval_count={chunk_json.get('eval_count')}")
-                        await session.emit({
-                            "type": "iteration_end",
-                            "prompt_tokens": chunk_json.get("prompt_eval_count", 0),
-                            "response_tokens": chunk_json.get("eval_count", 0),
-                        })
+                        prompt_eval_count = chunk_json.get("prompt_eval_count", 0)
+                        eval_count = chunk_json.get("eval_count", 0)
+                        print(f"[tokens] prompt_eval_count={prompt_eval_count} eval_count={eval_count}")
                 except Exception as e:
                     await session.emit({"type": "error", "message": str(e)})
 
@@ -233,6 +232,15 @@ async def chat_with_tools(
             await session.emit({"type": "tool_result", "tool_id": call_id, "tool_name": tool_name, "content": tool_output, "log_message": log_msg})
             messages.append({"role": "tool", "name": tool_name, "content": tool_output})
 
+    # Emit iteration_end after tool results so the frontend receives tool_result events
+    # before iteration_end. The frontend rotation logic patches tool results from iteration N
+    # with prompt_tokens from iteration N+1 — this ordering makes that work correctly.
+    await session.emit({
+        "type": "iteration_end",
+        "prompt_tokens": prompt_eval_count,
+        "response_tokens": eval_count,
+    })
+
     _deduplicate_file_reads(messages)
     return len(tool_calls) == 0
 
@@ -251,7 +259,9 @@ async def run_agent(
         await session.emit({"type": "done"})
     except asyncio.CancelledError:
         await session.emit({"type": "error", "message": "Agent was aborted"})
-    except aiohttp.ClientConnectorError:
+    except aiohttp.ClientConnectorError as e:
+        logger.error("Ollama connection error: %s", e)
         await session.emit({"type": "error", "message": "Ollama is not running — start Ollama and try again"})
     except Exception as e:
+        logger.exception("Unexpected error in agent loop")
         await session.emit({"type": "error", "message": str(e)})

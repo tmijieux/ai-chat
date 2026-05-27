@@ -45,6 +45,9 @@ export class AgentService {
     }
 
     this.ws.onclose = () => {
+      if (this._running()) {
+        this._events$.next({ type: 'error', message: 'Connection lost' })
+      }
       this._running.set(false)
     }
   }

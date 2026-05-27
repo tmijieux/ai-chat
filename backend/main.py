@@ -18,7 +18,7 @@ import aiohttp
 import asyncio
 from agent.agent import AgentSession, run_agent, _find_superseded_read_file_indices
 from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
-from agent.count_token import count_token
+from agent.count_token import count_token_with_ollama
 
 MODEL_NAME = "qwen3.5:9b"
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
@@ -136,7 +136,7 @@ async def _seed_prompts(sess: AsyncSession) -> None:
             continue
         token_count_value = None
         try:
-            token_count_value = await count_token([{"role": "system", "content": content}], tool_names=[])
+            token_count_value = await count_token_with_ollama([{"role": "system", "content": content}], tool_names=[])
         except Exception:
             pass
         sess.add(
@@ -624,7 +624,7 @@ async def delete_message_branch(
 
 async def _compute_prompt_token_count(content: str) -> int | None:
     try:
-        return await count_token([{"role": "system", "content": content}], tool_names=[])
+        return await count_token_with_ollama([{"role": "system", "content": content}], tool_names=[])
     except Exception as e:
         logger.exception("unexpected error in _compute_prompt_token_count()", exc_info=e)
         return None
@@ -828,7 +828,7 @@ async def count_conversation_tokens(id: str, sess: AsyncSession = Depends(get_db
     settings = _parse_conv_settings(conv)
     messages = await _build_inference_context(branch, settings.active_prompt_id, sess)
     tool_names = settings.active_tool_names if conv.settings is not None else list(TOOL_REGISTRY.keys())
-    token_count_value = await count_token(messages, tool_names=tool_names)
+    token_count_value = await count_token_with_ollama(messages, tool_names=tool_names)
 
     last_id: str | None = None
     if branch:

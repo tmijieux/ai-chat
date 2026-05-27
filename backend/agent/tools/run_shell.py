@@ -1,29 +1,62 @@
+import shutil
 import subprocess
+import sys
 from .base import BaseTool, tool_error
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from agent.agent import AgentSession
 
+_IS_WINDOWS = sys.platform == "win32"
+
+_MEASURED_DELTA_WINDOWS = 427
+_MEASURED_DELTA_UNIX = 316
+
+
+def _build_description() -> str:
+    if _IS_WINDOWS:
+        return (
+            "Execute a shell command on Windows. For running npm, git, python scripts, etc. "
+            "Requires user confirmation. Requires a workspace directory to be configured in conversation settings (sets the shell CWD). "
+            "Use shell_mode='bash' (default) for Git Bash (POSIX syntax, pipes, &&) "
+            "or shell_mode='cmd' for cmd.exe (Windows-native commands)."
+        )
+    return (
+        "Execute a shell command (bash). For running npm, git, python scripts, etc. "
+        "Requires user confirmation. Requires a workspace directory to be configured in conversation settings (sets the shell CWD)."
+    )
+
+
+def _build_parameters() -> dict:
+    props: dict = {
+        "command": {
+            "type": "string",
+            "description": "The full command string to execute (e.g. 'npm install', 'git log -10').",
+        },
+    }
+    if _IS_WINDOWS:
+        props["shell_mode"] = {
+            "type": "string",
+            "enum": ["bash", "cmd"],
+            "description": (
+                "'bash' (default): Git Bash — POSIX syntax, pipes, &&, etc. "
+                "'cmd': cmd.exe — for Windows-native commands that require cmd syntax."
+            ),
+        }
+    return {"type": "object", "properties": props, "required": ["command"]}
+
 
 class RunShellTool(BaseTool):
     name = "run_shell"
-    description = "Execute a shell command (bash). For running npm, git, python scripts, etc. Requires user confirmation. Requires a workspace directory to be configured in conversation settings (sets the shell CWD)."
-    parameters = {
-        "type": "object",
-        "properties": {
-            "command": {
-                "type": "string",
-                "description": "The full command string to execute (e.g. 'npm install', 'git log -10').",
-            },
-        },
-        "required": ["command"],
-    }
+    description = _build_description()
+    parameters = _build_parameters()
     requires_confirmation = True
-    measured_delta = 316
+    measured_delta = _MEASURED_DELTA_WINDOWS if _IS_WINDOWS else _MEASURED_DELTA_UNIX
 
     def make_validation_text_for_user_confirmation(self, args: dict) -> str:
-        return f"SHELL: {args.get('command', '')}"
+        mode = args.get("shell_mode", "bash")
+        label = f"[{mode}]" if _IS_WINDOWS else ""
+        return f"SHELL{label}: {args.get('command', '')}"
 
     async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
         if working_directory is None:
@@ -33,16 +66,29 @@ class RunShellTool(BaseTool):
         if not command:
             return tool_error(self.name, "command is required")
 
+        shell_mode = args.get("shell_mode", "bash")
+
         preview = self.make_validation_text_for_user_confirmation(args)
         approved, user_msg = await session.request_confirm(f"shell-{id(args)}", self.name, args, preview)
         if not approved:
             return tool_error(self.name, "User aborted the command", user_message=user_msg)
 
         try:
-            proc = subprocess.run(
-                command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, cwd=working_directory,
-            )
+            if _IS_WINDOWS and shell_mode == "bash":
+                bash_exe = shutil.which("bash")
+                if bash_exe is None:
+                    return tool_error(self.name, "Git Bash not found on PATH. Install Git for Windows or use shell_mode='cmd'.")
+                proc = subprocess.run(
+                    [bash_exe, "-c", command],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, cwd=working_directory,
+                )
+            else:
+                proc = subprocess.run(
+                    command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, cwd=working_directory,
+                )
+
             if proc.returncode == 0:
                 return {"tool": self.name, "status": "success", "command": command, "output": proc.stdout}
             else:

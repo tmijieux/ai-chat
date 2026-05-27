@@ -1,36 +1,56 @@
+"""Demo script: render a simulated conversation and compare local vs Ollama token counts."""
+import asyncio
+from agent.tools import get_ollama_tool_list
+from agent.count_token import count_token_with_ollama
+from tokenizer import render_messages, count_tokens
 
-from transformers import AutoTokenizer
-import json
+tool_names = ["glob_files"]
+tools = get_ollama_tool_list(tool_names)
 
-FILE_PATH = "./.claude.json"
+messages = [
+    {
+        "role": "system",
+        "content": "You are a coding assistant. You have access to tools to browse the filesystem.",
+    },
+    {
+        "role": "user",
+        "content": "Find all Python files in the backend directory.",
+    },
+    {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "glob_files",
+                    "arguments": {"pattern": "**/*.py", "path": "backend"},
+                },
+            }
+        ],
+    },
+    {
+        "role": "tool",
+        "content": '{"tool": "glob_files", "status": "success", "files": ["backend/main.py", "backend/database.py", "backend/tables.py", "backend/agent/agent.py"], "file_count": 4}',
+    },
+    {
+        "role": "assistant",
+        "content": "I found 4 Python files in the backend directory: main.py, database.py, tables.py, and agent/agent.py.",
+    },
+]
 
-try:
-    # 1. Read the entire file content (using simple open, bypassing Read tool limits)
-    with open(FILE_PATH, 'r', encoding='utf-8') as f:
-        file_content = f.read()
+rendered = render_messages(messages, tools, add_generation_prompt=False)
 
-    # 2. Initialize the tokenizer (assuming a standard Gemma 4 model structure)
-    # Note: In a real environment, the specific model path/name must be used.
-    # Using a placeholder model name that should work with the library.
-    model_file="C:\\Users\\tmijieux\\.ollama\\models\\blobs\\sha256-4c27e0f5b5adf02ac956c7322bd2ee7636fe3f45a8512c9aba5385242cb6e09a"
-    tokenizer = AutoTokenizer.from_pretrained(model_file)
+print("=" * 60)
+print("RENDERED TEMPLATE:")
+print("=" * 60)
+print(rendered)
+print("=" * 60)
 
-    # 3. Encode the content and count tokens
-    # Using encode_plus to handle the string input
-    encoding = tokenizer(file_content)
-    token_count = len(encoding['input_ids'])
+local = count_tokens(messages, tools)
+ollama = asyncio.run(count_token_with_ollama(messages, tool_names=tool_names))
 
-    print(f"Successfully tokenized the file content.")
-    print(f"Total number of tokens in {FILE_PATH}: {token_count}")
-
-except FileNotFoundError:
-    print(f"Error: The file {FILE_PATH} was not found.")
-except Exception as e:
-    print(f"An error occurred during tokenization: {e}")
-Implement the Edit File Diff Preview feature specified in CONTEXT.md. The confirmation card for edit_file should show a colored unified diff with actual file line numbers instead of the current plain-text preview. Follow the implementation sketch in CONTEXT.md exactly.
-
-
-
-
-Implement the Edit File Diff Preview feature. Spec: in edit_file.py:execute(), after reading current_content, compute a unified diff with correct line numbers using difflib.unified_diff, pass diff_lines into request_confirm(). Update the tool_confirm WS event in agent.py/main.py to include diff_lines. In the frontend, parse it in agent.service.ts and render colored lines (red -, green +) in chat.component.html instead of the plain <pre>.
-
+print(f"Local  (tiktoken): {local}")
+print(f"Ollama (inference): {ollama}")
+print(f"Delta: {ollama - local:+d}")
+print("=" * 60)

@@ -528,16 +528,20 @@ export class ChatService {
         this._messages.update((msgs) => msgs.filter((m) => m.kind !== 'tool_confirm'))
         if (event.type === 'error') {
           const errorText = event.message ?? 'An error occurred'
-          this._messages.update((msgs) => [
-            ...msgs,
-            { kind: 'error', id: crypto.randomUUID(), message: errorText },
-          ])
+          // Reload first, then append error so the reload doesn't wipe the error bubble.
+          enqueue(async () => {
+            await this._reloadFromDb()
+            this._messages.update((msgs) => [
+              ...msgs,
+              { kind: 'error', id: crypto.randomUUID(), message: errorText },
+            ])
+          })
         } else {
           enqueue(() => this._computeTokenCountForLastMessage())
+          // Reload from DB to get has_children and sibling metadata, which are only computed
+          // server-side and are not available on display messages created during the agent run.
+          enqueue(() => this._reloadFromDb())
         }
-        // Reload from DB to get has_children and sibling metadata, which are only computed
-        // server-side and are not available on display messages created during the agent run.
-        enqueue(() => this._reloadFromDb())
         this._agentEventSub?.unsubscribe()
         this._agentEventSub = null
       }
