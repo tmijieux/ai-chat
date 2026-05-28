@@ -7,6 +7,7 @@ Exposes:
 """
 import os
 import struct
+from pathlib import Path
 from typing import Any
 
 import tiktoken
@@ -14,8 +15,7 @@ from jinja2 import Environment
 
 GGUF_PATH = os.environ.get(
     "QWEN_GGUF_PATH",
-    "C:\\Users\\tmijieux\\.ollama\\models\\blobs\\"
-    "sha256-dec52a44569a2a25341c4e4d3fee25846eed4f6f0b936278e3a3c900bb99d37c",
+    str(Path.home() / "ai/models/unsloth/Qwen3.5-9B-UD-Q3_K_XL.gguf"),
 )
 
 # Qwen3.5 tiktoken pre-tokenization regex

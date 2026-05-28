@@ -1,81 +1,24 @@
-import os
 import datetime
 import uuid
 import logging
 import json
 import asyncio
-import subprocess
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI, Depends, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
-
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy import select, delete
 from database import init_db, get_db_session, AsyncSession
 import loaders as ld
 import tables as db
-import aiohttp
-import asyncio
 from agent.agent import AgentSession, run_agent, _find_superseded_read_file_indices
 from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
-from agent.count_token import count_token_local
-from tokenizer import warmup as _warmup_tokenizer
-
-MODEL_NAME = "qwen3.5:9b"
-OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+from llm import backend
 
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Ollama lifecycle
-# ---------------------------------------------------------------------------
-
-async def _ensure_ollama_running() -> None:
-    async with aiohttp.ClientSession() as http:
-        try:
-            async with http.get(f"{OLLAMA_BASE_URL}/", timeout=aiohttp.ClientTimeout(total=2)) as r:
-                if r.status == 200:
-                    logger.info("Ollama already running.")
-                    return
-                else:
-                    print("status=", r.status)
-        except Exception as e:
-            logger.exception("ollama detection", exc_info=e)
-
-    logger.info("Ollama not detected — launching 'ollama serve' ...")
-    env = os.environ.copy()
-    subprocess.Popen(
-        ["ollama", "serve"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        env={**env, "OLLAMA_CONTEXT_LENGTH": "16384", "OLLAMA_KEEP_ALIVE":"60m"},
-        start_new_session=True,
-    )
-
-    async with aiohttp.ClientSession() as http:
-        for _ in range(60):  # 30 s total
-            await asyncio.sleep(0.5)
-            try:
-                async with http.get(f"{OLLAMA_BASE_URL}/", timeout=aiohttp.ClientTimeout(total=1)) as r:
-                    if r.status == 200:
-                        logger.info("Ollama started successfully.")
-                        return
-            except Exception:
-                pass
-
-    logger.warning("Ollama did not respond within 30 s — continuing without it.")
-
-
-async def check_ollama() -> None:
-    async with aiohttp.ClientSession() as http:
-        try:
-            async with http.get(f"{OLLAMA_BASE_URL}/", timeout=aiohttp.ClientTimeout(total=2)) as r:
-                if r.status == 200:
-                    return
-        except Exception:
-            pass
-    raise HTTPException(status_code=503, detail="Ollama is not running")
+async def check_llm() -> None:
+    await backend.check_or_raise()
 
 
 def disable_sqlalchemy_logging():
@@ -135,7 +78,7 @@ async def _seed_prompts(sess: AsyncSession) -> None:
         ).first()
         if existing:
             continue
-        token_count_value = _compute_prompt_token_count(content)
+        token_count_value = await _compute_prompt_token_count(content)
         sess.add(
             db.SystemPromptTemplate(
                 id=str(uuid.uuid4()),
@@ -152,10 +95,7 @@ async def _seed_prompts(sess: AsyncSession) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await asyncio.gather(
-        _ensure_ollama_running(),
-        asyncio.to_thread(_warmup_tokenizer),
-    )
+    await backend.ensure_running()
     await init_db()
     print("Database initialized successfully.")
     async for sess in get_db_session():
@@ -624,9 +564,10 @@ async def delete_message_branch(
 
 _DUMMY_USER = [{"role": "user", "content": "."}]
 
-def _compute_prompt_token_count(content: str) -> int:
-    with_prompt = count_token_local([{"role": "system", "content": content}] + _DUMMY_USER, tool_names=[])
-    baseline    = count_token_local(_DUMMY_USER, tool_names=[])
+async def _compute_prompt_token_count(content: str) -> int:
+    tools: list = []
+    with_prompt = await backend.count_tokens([{"role": "system", "content": content}] + _DUMMY_USER, tools)
+    baseline    = await backend.count_tokens(_DUMMY_USER, tools)
     return with_prompt - baseline
 
 
@@ -652,7 +593,7 @@ async def list_system_prompts(sess: AsyncSession = Depends(get_db_session)):
 async def create_system_prompt(
     body: ld.NewSystemPrompt, sess: AsyncSession = Depends(get_db_session)
 ):
-    token_count_value = _compute_prompt_token_count(body.content)
+    token_count_value = await _compute_prompt_token_count(body.content)
     p = db.SystemPromptTemplate(
         id=str(uuid.uuid4()),
         name=body.name,
@@ -760,56 +701,6 @@ async def list_agent_tools():
     }
 
 
-# ---------------------------------------------------------------------------
-# Chat (streaming)
-# ---------------------------------------------------------------------------
-
-async def get_http_session():
-    async with aiohttp.ClientSession(conn_timeout=10) as httpsess:
-        yield httpsess
-
-
-OLLAMA_URL = f"{OLLAMA_BASE_URL}/api/chat"
-
-
-async def chat_endpoint_generator(
-    http_sess: aiohttp.ClientSession, conversation: ld.Conversation
-):
-    try:
-        query_body = {
-            "model": MODEL_NAME,
-            "messages": [m.model_dump() for m in conversation.messages],
-            "stream": True,
-        }
-        print("query_body=", query_body)
-        async with http_sess.post(OLLAMA_URL, json=query_body) as response:
-            if response.status != 200:
-                logger.error("ollama response code %s", response.status)
-                yield '{"error":true,"done":true}\n'
-                return
-            async for chunk_line in response.content:
-                if chunk_line:
-                    data = json.loads(chunk_line)
-                    print(".", end="", flush=True)
-                    if "done" in data and data["done"]:
-                        print(json.dumps(data, indent=2))
-                    yield json.dumps(data) + "\n"
-    except Exception:
-        logger.exception("chat stream error")
-        yield '{"error":true,"done":true}\n'
-
-
-@app.post("/api/chat")
-async def chat_endpoint(
-    conversation: ld.Conversation,
-    http_sess: aiohttp.ClientSession = Depends(get_http_session),
-    _: None = Depends(check_ollama),
-):
-    print(f"--- Received chat request for {len(conversation.messages)} messages ---")
-    return StreamingResponse(
-        chat_endpoint_generator(http_sess, conversation),
-        media_type="application/x-ndjson",
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -828,7 +719,8 @@ async def count_conversation_tokens(id: str, sess: AsyncSession = Depends(get_db
     settings = _parse_conv_settings(conv)
     messages = await _build_inference_context(branch, settings.active_prompt_id, sess)
     tool_names = settings.active_tool_names if conv.settings is not None else list(TOOL_REGISTRY.keys())
-    token_count_value = count_token_local(messages, tool_names=tool_names)
+    tools = get_ollama_tool_list(tool_names)
+    token_count_value = await backend.count_tokens(messages, tools)
 
     last_id: str | None = None
     if branch:

@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from agent.agent import AgentSession, run_agent
 from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
+from llm import backend
 
 GREY   = "\033[90m"
 YELLOW = "\033[33m"
@@ -22,6 +23,10 @@ def _print_event(event: dict) -> None:
         print(f"{GREY}{event.get('content', '')}{RESET}", end="", flush=True)
     elif t == "content":
         print(event.get("content", ""), end="", flush=True)
+    elif t == "tool_call_start":
+        print(f"\n{YELLOW}[{event.get('tool_name', '')}] ", end="", flush=True)
+    elif t == "tool_call_chunk":
+        print(f"{YELLOW}{event.get('chunk', '')}{RESET}", end="", flush=True)
     elif t == "tool_result":
         content = event.get("content", "")
         preview = content[:300] + ("…" if len(content) > 300 else "")
@@ -64,6 +69,7 @@ async def _run_turn(
 async def main() -> None:
     import os
     print("Agent REPL  —  type 'exit' to quit\n")
+    await backend.ensure_running()
     # raw = input("Workspace directory (empty to disable file tools): ").strip()
     # working_directory = raw or None
     working_directory = os.path.realpath(os.getcwd())

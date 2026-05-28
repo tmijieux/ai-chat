@@ -5,14 +5,10 @@ import aiohttp
 from typing import Any
 
 from .tools import TOOL_REGISTRY, get_ollama_tool_list
-from tokenizer import count_tokens
+from llm import backend
+from llm.base import ToolCallStartEvent, ToolCallArgEvent
 
-#CTX_LIMIT = 16384
 CTX_LIMIT = 2**15
-
-OLLAMA_BASE_URL = "http://127.0.0.1:11434"  # kept local; main.py owns the base URL constant
-OLLAMA_CHAT_URL = f"{OLLAMA_BASE_URL}/api/chat"  # kept local; main.py owns the base URL constant
-MODEL_NAME = "qwen3.5:9b"
 
 logger = logging.getLogger(__name__)
 
@@ -140,68 +136,61 @@ async def chat_with_tools(
     working_directory: str | None,
 ) -> bool:
     """
-    One iteration of the Ollama call + tool execution loop.
+    One iteration of the LLM call + tool execution loop.
     Returns True when the agent is done (no tool calls were made).
     """
-    def _to_ollama_msg(m: dict) -> dict:
-        msg: dict = {"role": m["role"], "content": m["content"]}
-        if "tool_calls" in m:
-            msg["tool_calls"] = m["tool_calls"]
-        return msg
-    ollama_messages = [_to_ollama_msg(m) for m in messages]
-    _log_context(ollama_messages)
-    #print(json.dumps(ollama_messages, indent=2, ensure_ascii=False))
-    ctx_before_generation = count_tokens(messages, tools)
-    num_predict = CTX_LIMIT - ctx_before_generation
-    print(f"[tokens] context before generation: {ctx_before_generation}/{CTX_LIMIT}, num_predict={num_predict}")
+    prepared = backend.prepare_messages(messages)
+    _log_context(prepared)
 
-    async with aiohttp.ClientSession() as http:
-        async with http.post(
-            OLLAMA_CHAT_URL,
-            json={
-                "model": MODEL_NAME,
-                "messages": ollama_messages,
-                "tools": tools,
-                "stream": True,
-                "options": {"temperature": 0.3, "num_ctx": CTX_LIMIT, "num_predict": num_predict},
+    ctx_before_generation = await backend.count_tokens(prepared, tools)
+    max_tokens = CTX_LIMIT - ctx_before_generation
+    print(f"[tokens] context before generation: {ctx_before_generation}/{CTX_LIMIT}, max_tokens={max_tokens}")
+
+    message: dict[str, Any] = {"role": "assistant", "content": "", "thinking": ""}
+    tool_calls_acc: dict[int, dict] = {}  # index → {id, name, arguments_str}
+    prompt_eval_count: int = ctx_before_generation
+    eval_count: int = 0
+    done_reason: str = ""
+
+    async for event in backend.stream_completion(prepared, tools, temperature=0.3, max_tokens=max_tokens):
+        etype = event["type"]
+
+        if etype == "thinking":
+            message["thinking"] += event["content"]
+            await session.emit({"type": "thinking", "content": event["content"]})
+
+        elif etype == "content":
+            message["content"] += event["content"]
+            await session.emit({"type": "content", "content": event["content"]})
+
+        elif etype == "tool_call_start":
+            idx = event["index"]
+            tool_calls_acc[idx] = {"id": event["id"], "name": event["name"], "arguments_str": ""}
+            await session.emit({"type": "tool_call_start", "tool_id": event["id"], "tool_name": event["name"]})
+
+        elif etype == "tool_call_arg":
+            idx = event["index"]
+            if idx in tool_calls_acc:
+                tool_calls_acc[idx]["arguments_str"] += event["fragment"]
+            await session.emit({"type": "tool_call_chunk", "tool_id": tool_calls_acc.get(idx, {}).get("id", ""), "chunk": event["fragment"]})
+
+        elif etype == "done":
+            prompt_eval_count = event["prompt_tokens"] or ctx_before_generation
+            eval_count = event["completion_tokens"]
+            done_reason = event["finish_reason"]
+            print(f"[tokens] prompt_tokens={prompt_eval_count} completion_tokens={eval_count} finish_reason={done_reason}")
+
+    # Build tool_calls list from accumulated fragments
+    tool_calls: list[dict] = [
+        {
+            "id": acc["id"],
+            "function": {
+                "name": acc["name"],
+                "arguments": json.loads(acc["arguments_str"]) if acc["arguments_str"] else {},
             },
-        ) as response:
-            message: dict[str, Any] = {"role": "assistant", "content": "", "thinking": ""}
-            tool_calls: list[dict] = []
-            prompt_eval_count: int = 0
-            eval_count: int = 0
-            done_reason: str = ""
-
-            async for raw_chunk in response.content.iter_chunks():
-                text = (raw_chunk[0] if isinstance(raw_chunk, tuple) else raw_chunk).decode().strip()
-                if text.startswith("data:"):
-                    text = text[5:].strip()
-                if not text:
-                    continue
-                try:
-                    chunk_json = json.loads(text)
-                except json.JSONDecodeError:
-                    continue
-                try:
-                    if "message" in chunk_json:
-                        resp_msg = chunk_json["message"]
-                        thinking = resp_msg.get("thinking", "")
-                        content = resp_msg.get("content", "")
-                        if thinking:
-                            message["thinking"] += thinking
-                            await session.emit({"type": "thinking", "content": thinking})
-                        if content:
-                            message["content"] += content
-                            await session.emit({"type": "content", "content": content})
-                        if "tool_calls" in resp_msg:
-                            tool_calls.extend(resp_msg["tool_calls"])
-                    if chunk_json.get("done"):
-                        prompt_eval_count = chunk_json.get("prompt_eval_count", 0)
-                        eval_count = chunk_json.get("eval_count", 0)
-                        done_reason = chunk_json.get("done_reason", "")
-                        print(f"[tokens] prompt_eval_count={prompt_eval_count} eval_count={eval_count} done_reason={done_reason}")
-                except Exception as e:
-                    await session.emit({"type": "error", "message": str(e)})
+        }
+        for acc in (tool_calls_acc[i] for i in sorted(tool_calls_acc))
+    ]
 
     if done_reason == "length":
         await session.emit({"type": "error", "message": f"Context limit reached during generation: {prompt_eval_count + eval_count}/{CTX_LIMIT} tokens. The response was cut off."})
@@ -226,7 +215,7 @@ async def chat_with_tools(
 
 
     if len(tool_calls) > 0:
-        ctx_before = count_tokens(messages, tools)
+        ctx_before = await backend.count_tokens(backend.prepare_messages(messages), tools)
         print(f"[tokens] context before tool execution: {ctx_before}/{CTX_LIMIT}")
         for tool_call in tool_calls:
             tool_name: str = tool_call.get("function", {}).get("name", "")
@@ -247,7 +236,7 @@ async def chat_with_tools(
             tool_output = json.dumps(result_dict)
             messages.append({"role": "tool", "name": tool_name, "content": tool_output})
 
-            ctx_after = count_tokens(messages, tools)
+            ctx_after = await backend.count_tokens(backend.prepare_messages(messages), tools)
             print(f"[tokens] context after tool result '{tool_name}': {ctx_after}/{CTX_LIMIT}")
             if ctx_after > CTX_LIMIT:
                 await session.emit({"type": "error", "message": f"Context limit exceeded after tool result from '{tool_name}': {ctx_after}/{CTX_LIMIT} tokens"})
@@ -283,8 +272,8 @@ async def run_agent(
     except asyncio.CancelledError:
         await session.emit({"type": "error", "message": "Agent was aborted"})
     except aiohttp.ClientConnectorError as e:
-        logger.error("Ollama connection error: %s", e)
-        await session.emit({"type": "error", "message": "Ollama is not running — start Ollama and try again"})
+        logger.error("LLM backend connection error: %s", e)
+        await session.emit({"type": "error", "message": "LLM backend is not running"})
     except Exception as e:
         logger.exception("Unexpected error in agent loop")
         await session.emit({"type": "error", "message": str(e)})
