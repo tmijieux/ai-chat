@@ -18,7 +18,8 @@ import aiohttp
 import asyncio
 from agent.agent import AgentSession, run_agent, _find_superseded_read_file_indices
 from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
-from agent.count_token import count_token_with_ollama
+from agent.count_token import count_token_local
+from tokenizer import warmup as _warmup_tokenizer
 
 MODEL_NAME = "qwen3.5:9b"
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
@@ -134,11 +135,7 @@ async def _seed_prompts(sess: AsyncSession) -> None:
         ).first()
         if existing:
             continue
-        token_count_value = None
-        try:
-            token_count_value = await count_token_with_ollama([{"role": "system", "content": content}], tool_names=[])
-        except Exception:
-            pass
+        token_count_value = _compute_prompt_token_count(content)
         sess.add(
             db.SystemPromptTemplate(
                 id=str(uuid.uuid4()),
@@ -155,7 +152,10 @@ async def _seed_prompts(sess: AsyncSession) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await _ensure_ollama_running()
+    await asyncio.gather(
+        _ensure_ollama_running(),
+        asyncio.to_thread(_warmup_tokenizer),
+    )
     await init_db()
     print("Database initialized successfully.")
     async for sess in get_db_session():
@@ -622,12 +622,12 @@ async def delete_message_branch(
 # System prompts
 # ---------------------------------------------------------------------------
 
-async def _compute_prompt_token_count(content: str) -> int | None:
-    try:
-        return await count_token_with_ollama([{"role": "system", "content": content}], tool_names=[])
-    except Exception as e:
-        logger.exception("unexpected error in _compute_prompt_token_count()", exc_info=e)
-        return None
+_DUMMY_USER = [{"role": "user", "content": "."}]
+
+def _compute_prompt_token_count(content: str) -> int:
+    with_prompt = count_token_local([{"role": "system", "content": content}] + _DUMMY_USER, tool_names=[])
+    baseline    = count_token_local(_DUMMY_USER, tool_names=[])
+    return with_prompt - baseline
 
 
 @app.get("/api/system-prompts")
@@ -652,7 +652,7 @@ async def list_system_prompts(sess: AsyncSession = Depends(get_db_session)):
 async def create_system_prompt(
     body: ld.NewSystemPrompt, sess: AsyncSession = Depends(get_db_session)
 ):
-    token_count_value = await _compute_prompt_token_count(body.content)
+    token_count_value = _compute_prompt_token_count(body.content)
     p = db.SystemPromptTemplate(
         id=str(uuid.uuid4()),
         name=body.name,
@@ -692,7 +692,7 @@ async def update_system_prompt(
         p.category = body.category
     if body.content is not None:
         p.content = body.content
-        p.token_count = await _compute_prompt_token_count(body.content)
+        p.token_count = _compute_prompt_token_count(body.content)
     if body.is_default is not None:
         p.is_default = body.is_default
     return {
@@ -817,7 +817,7 @@ async def chat_endpoint(
 # ---------------------------------------------------------------------------
 
 @app.post("/api/conversations/{id}/count-tokens")
-async def count_conversation_tokens(id: str, sess: AsyncSession = Depends(get_db_session), _: None = Depends(check_ollama)):
+async def count_conversation_tokens(id: str, sess: AsyncSession = Depends(get_db_session)):
     conv = (await sess.scalars(select(db.Conversation).where(db.Conversation.id == id))).first()
     if conv is None:
         raise HTTPException(404)
@@ -828,7 +828,7 @@ async def count_conversation_tokens(id: str, sess: AsyncSession = Depends(get_db
     settings = _parse_conv_settings(conv)
     messages = await _build_inference_context(branch, settings.active_prompt_id, sess)
     tool_names = settings.active_tool_names if conv.settings is not None else list(TOOL_REGISTRY.keys())
-    token_count_value = await count_token_with_ollama(messages, tool_names=tool_names)
+    token_count_value = count_token_local(messages, tool_names=tool_names)
 
     last_id: str | None = None
     if branch:

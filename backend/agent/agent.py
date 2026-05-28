@@ -5,6 +5,10 @@ import aiohttp
 from typing import Any
 
 from .tools import TOOL_REGISTRY, get_ollama_tool_list
+from tokenizer import count_tokens
+
+#CTX_LIMIT = 16384
+CTX_LIMIT = 2**15
 
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"  # kept local; main.py owns the base URL constant
 OLLAMA_CHAT_URL = f"{OLLAMA_BASE_URL}/api/chat"  # kept local; main.py owns the base URL constant
@@ -147,6 +151,10 @@ async def chat_with_tools(
     ollama_messages = [_to_ollama_msg(m) for m in messages]
     _log_context(ollama_messages)
     #print(json.dumps(ollama_messages, indent=2, ensure_ascii=False))
+    ctx_before_generation = count_tokens(messages, tools)
+    num_predict = CTX_LIMIT - ctx_before_generation
+    print(f"[tokens] context before generation: {ctx_before_generation}/{CTX_LIMIT}, num_predict={num_predict}")
+
     async with aiohttp.ClientSession() as http:
         async with http.post(
             OLLAMA_CHAT_URL,
@@ -155,13 +163,14 @@ async def chat_with_tools(
                 "messages": ollama_messages,
                 "tools": tools,
                 "stream": True,
-                "options": {"temperature": 0.3, "num_ctx": 16384},
+                "options": {"temperature": 0.3, "num_ctx": CTX_LIMIT, "num_predict": num_predict},
             },
         ) as response:
             message: dict[str, Any] = {"role": "assistant", "content": "", "thinking": ""}
             tool_calls: list[dict] = []
             prompt_eval_count: int = 0
             eval_count: int = 0
+            done_reason: str = ""
 
             async for raw_chunk in response.content.iter_chunks():
                 text = (raw_chunk[0] if isinstance(raw_chunk, tuple) else raw_chunk).decode().strip()
@@ -189,9 +198,14 @@ async def chat_with_tools(
                     if chunk_json.get("done"):
                         prompt_eval_count = chunk_json.get("prompt_eval_count", 0)
                         eval_count = chunk_json.get("eval_count", 0)
-                        print(f"[tokens] prompt_eval_count={prompt_eval_count} eval_count={eval_count}")
+                        done_reason = chunk_json.get("done_reason", "")
+                        print(f"[tokens] prompt_eval_count={prompt_eval_count} eval_count={eval_count} done_reason={done_reason}")
                 except Exception as e:
                     await session.emit({"type": "error", "message": str(e)})
+
+    if done_reason == "length":
+        await session.emit({"type": "error", "message": f"Context limit reached during generation: {prompt_eval_count + eval_count}/{CTX_LIMIT} tokens. The response was cut off."})
+        return True
 
     if len(message["content"]) == 0 and len(tool_calls) == 0:
         logger.warning("Degenerate response: thinking only, no content, no tool calls")
@@ -212,6 +226,8 @@ async def chat_with_tools(
 
 
     if len(tool_calls) > 0:
+        ctx_before = count_tokens(messages, tools)
+        print(f"[tokens] context before tool execution: {ctx_before}/{CTX_LIMIT}")
         for tool_call in tool_calls:
             tool_name: str = tool_call.get("function", {}).get("name", "")
             tool_args: dict = tool_call.get("function", {}).get("arguments", {})
@@ -229,8 +245,15 @@ async def chat_with_tools(
 
             result_dict["tool_call_id"] = call_id
             tool_output = json.dumps(result_dict)
-            await session.emit({"type": "tool_result", "tool_id": call_id, "tool_name": tool_name, "content": tool_output, "log_message": log_msg})
             messages.append({"role": "tool", "name": tool_name, "content": tool_output})
+
+            ctx_after = count_tokens(messages, tools)
+            print(f"[tokens] context after tool result '{tool_name}': {ctx_after}/{CTX_LIMIT}")
+            if ctx_after > CTX_LIMIT:
+                await session.emit({"type": "error", "message": f"Context limit exceeded after tool result from '{tool_name}': {ctx_after}/{CTX_LIMIT} tokens"})
+                return True
+
+            await session.emit({"type": "tool_result", "tool_id": call_id, "tool_name": tool_name, "content": tool_output, "log_message": log_msg})
 
     # Emit iteration_end after tool results so the frontend receives tool_result events
     # before iteration_end. The frontend rotation logic patches tool results from iteration N
