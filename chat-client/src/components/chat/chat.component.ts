@@ -47,6 +47,7 @@ export class ChatComponent implements OnDestroy {
 
   // Raw markdown toggle
   private rawModeIds = signal(new Set<string>())
+  readonly CTX_LIMIT = 2 ** 15
 
   isRaw(msgId: string): boolean {
     return this.rawModeIds().has(msgId)
@@ -104,7 +105,7 @@ export class ChatComponent implements OnDestroy {
       const tokenMeta: TokenMeta = {
         token_count: tokenCount,
         token_delta: prevTokenCount !== null ? tokenCount - prevTokenCount : null,
-        token_pct: Math.round((tokenCount / 16384) * 100),
+        token_pct: Math.round((tokenCount / this.CTX_LIMIT) * 100),
       }
       prevTokenCount = tokenCount
       return { ...msg, token_meta: tokenMeta }

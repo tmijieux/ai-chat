@@ -621,7 +621,7 @@ export class ChatService {
         result.push({
           kind: 'tool_result',
           id: m.id,
-          tool_name: '',
+          tool_name: (() => { try { return JSON.parse(m.content).tool ?? '' } catch { return '' } })(),
           log_message: m.log_message ?? null,
           content: m.content,
           token_count: m.token_count,

@@ -95,7 +95,6 @@ The structured JSON dict that every tool's `execute()` returns. Contains at mini
 **Not yet implemented.** Concept for the planned [[Post-Iteration Sub-Agent]] pipeline: a file read into context but not actively being modified, identified by parsing tool-role message history. Will be compressed to API surface (signatures, types, exports) by the post-iteration sub-agent when context pressure requires it.
 
 ## Known Bugs
-- **`tool_name` lost on reload**: Tool result bubbles show "Tool result: `edit_file`" during a live run but just "Tool result" after reload. Fix: in `_fromDbMessages`, parse `m.content` as JSON and read the `tool` field (already present in every Tool Result Envelope) to populate `tool_name` instead of hardcoding `''`.
 - **`is_default` uniqueness not enforced**: Setting a new prompt as default does not clear the previous default. Backend must clear the flag atomically.
 - **Workspace not persisted across reloads**: See [[Workspace]].
 

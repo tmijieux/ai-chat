@@ -11,7 +11,10 @@
       "Bash(python -m agent.count_tool_tokens)",
       "Bash(venv/Scripts/python -m agent.count_tool_tokens)",
       "Bash(sqlite3 chat_db.sqlite ' *)",
-      "Bash(xargs -I{} git show {} -- chat-client/src/services/chat.service.ts)"
+      "Bash(xargs -I{} git show {} -- chat-client/src/services/chat.service.ts)",
+      "Read(//c/Users/tmijieux/ai/ollama/**)",
+      "Read(//c/Users/tmijieux/ai/llama.cpp/**)",
+      "Bash(python discover.py)"
     ]
   }
 }

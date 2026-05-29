@@ -4,7 +4,7 @@
     ⓘ
     <div class="token-tooltip">
       @if (meta.token_count != null) {
-        <div>Context: {{ meta.token_count | number: '1.0-0' }} / 16 384 ({{ meta.token_pct }}%)</div>
+        <div>Context: {{ meta.token_count | number: '1.0-0' }} / {{ CTX_LIMIT }} ({{ meta.token_pct }}%)</div>
       }
       @if (meta.token_delta != null) {
         <div>This message: ~{{ meta.token_delta | number: '1.0-0' }} tokens</div>
@@ -66,7 +66,7 @@
   <div class="p-2 border-b bg-gray-100 flex justify-between items-center gap-4">
     <span class="font-medium text-gray-700"
       >Context Tokens:
-      <span class="font-bold text-indigo-600">{{ chatSvc.promptTokens() }} / 16,384 ({{ (chatSvc.promptTokens() / 16384 * 100).toFixed(1) }}%)</span>
+      <span class="font-bold text-indigo-600">{{ chatSvc.promptTokens() }} / {{ CTX_LIMIT }} ({{ (chatSvc.promptTokens() / CTX_LIMIT * 100).toFixed(1) }}%)</span>
     </span>
     <div class="flex items-center gap-3">
       <button
