@@ -74,6 +74,13 @@ export class ApiService {
     )
   }
 
+  compress_conversation(id: string) {
+    return this.http.post<{
+      compressions: { message_id: string; compressed_summary: string }[]
+      new_summary: string
+    }>(`${BASE_URL}/conversations/${id}/compress`, {})
+  }
+
   get_system_prompts() {
     return this.http.get<SystemPromptTemplate[]>(`${BASE_URL}/system-prompts`)
   }
@@ -143,5 +150,14 @@ export class ApiService {
       `${BASE_URL}/utils/browse-directory`,
       path ? { params: { path } } : undefined,
     )
+  }
+
+  post_transcribe(blob: Blob, language: string | null = 'fr') {
+    const form = new FormData()
+    form.append('audio', blob, 'audio.webm')
+    if (language) {
+      form.append('language', language)
+    }
+    return this.http.post<{ text: string }>(`${BASE_URL}/transcribe`, form)
   }
 }

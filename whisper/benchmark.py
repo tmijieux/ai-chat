@@ -1,78 +1,62 @@
 """
-Download whisper-tiny as an OpenVINO model and benchmark inference
-on every available device (CPU, GPU, NPU).
+Benchmark whisper-tiny on every OpenVINO device.
+Each device runs in a subprocess so an NPU crash doesn't kill the whole run.
 
 Run:  python benchmark.py
-The model (~40MB) is cached in ./model_cache/ after the first run.
 """
 
+import json
+import subprocess
+import sys
 import time
-import numpy as np
 from pathlib import Path
+
+import openvino as ov
+import numpy as np
 
 MODEL_ID = "openai/whisper-tiny"
 CACHE_DIR = Path(__file__).parent / "model_cache"
-SAMPLE_RATE = 16000
-DURATION_S = 5  # seconds of silence/noise used for benchmarking
+SAMPLE_RATE = 16_000
+DURATION_S = 5
 
-# ── build a dummy audio input ─────────────────────────────────────────────────
-# Real silence: the model will output nothing useful, but latency is real.
-dummy_audio = np.zeros(SAMPLE_RATE * DURATION_S, dtype=np.float32)
+WORKER = Path(__file__).parent / "_bench_worker.py"
 
-print(f"Benchmarking {MODEL_ID} with {DURATION_S}s dummy audio\n")
 
-# ── detect available OpenVINO devices ─────────────────────────────────────────
-import openvino as ov
-core = ov.Core()
-ov_devices = core.available_devices
-print(f"OpenVINO devices: {ov_devices}\n")
-
-# ── load processor once (device-agnostic) ────────────────────────────────────
-from transformers import AutoProcessor
-print("Loading processor...")
-processor = AutoProcessor.from_pretrained(MODEL_ID)
-inputs = processor(dummy_audio, sampling_rate=SAMPLE_RATE, return_tensors="pt")
-print("Processor ready.\n")
-
-# ── benchmark each device ────────────────────────────────────────────────────
-from optimum.intel import OVModelForSpeechSeq2Seq
-
-results = {}
-
-for device in ov_devices:
-    print(f"─── {device} ───────────────────────────────")
+def run_on_device(device: str) -> dict:
+    result = subprocess.run(
+        [sys.executable, str(WORKER), device, MODEL_ID, str(CACHE_DIR), str(SAMPLE_RATE), str(DURATION_S)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
     try:
+        return json.loads(result.stdout.strip().split("\n")[-1])
+    except Exception:
+        return {"error": (result.stderr or result.stdout or "no output")[-300:]}
+
+
+if __name__ == "__main__":
+    core = ov.Core()
+    devices = core.available_devices
+    print(f"Devices: {devices}\n")
+
+    results = {}
+    for d in devices:
+        print(f"  Testing {d}...", end=" ", flush=True)
         t0 = time.perf_counter()
-        model = OVModelForSpeechSeq2Seq.from_pretrained(
-            MODEL_ID,
-            device=device,
-            cache_dir=CACHE_DIR,
-            export=True,          # convert on first run, cached after
-        )
-        load_time = time.perf_counter() - t0
-        print(f"  load: {load_time:.1f}s")
+        r = run_on_device(d)
+        elapsed = time.perf_counter() - t0
+        if "error" in r:
+            print(f"FAILED ({elapsed:.0f}s)")
+            print(f"    {r['error'][:120]}")
+        else:
+            print(f"load={r['load_s']:.1f}s  infer={r['infer_ms']:.0f}ms  ({elapsed:.0f}s total)")
+        results[d] = r
 
-        # warm-up
-        _ = model.generate(**inputs)
-
-        # timed run
-        runs = 3
-        t0 = time.perf_counter()
-        for _ in range(runs):
-            _ = model.generate(**inputs)
-        infer_time = (time.perf_counter() - t0) / runs
-
-        print(f"  inference (avg {runs} runs): {infer_time*1000:.0f}ms")
-        results[device] = {"load_s": load_time, "infer_ms": infer_time * 1000}
-
-    except Exception as e:
-        print(f"  ✗ {e}")
-        results[device] = {"error": str(e)}
-
-# ── summary ───────────────────────────────────────────────────────────────────
-print("\n=== Summary ===")
-for dev, r in results.items():
-    if "error" in r:
-        print(f"  {dev:8s}  ERROR: {r['error'][:80]}")
-    else:
-        print(f"  {dev:8s}  load={r['load_s']:.1f}s  infer={r['infer_ms']:.0f}ms")
+    print("\n=== Summary ===")
+    for dev, r in results.items():
+        if "error" in r:
+            first_line = r["error"].splitlines()[-1][:80]
+            print(f"  {dev:8s}  ERROR: {first_line}")
+        else:
+            print(f"  {dev:8s}  load={r['load_s']:.1f}s  infer={r['infer_ms']:.0f}ms")

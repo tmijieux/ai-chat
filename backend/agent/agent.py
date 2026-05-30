@@ -175,7 +175,7 @@ async def chat_with_tools(
             await session.emit({"type": "tool_call_chunk", "tool_id": tool_calls_acc.get(idx, {}).get("id", ""), "chunk": event["fragment"]})
 
         elif etype == "done":
-            prompt_eval_count = event["prompt_tokens"] or ctx_before_generation
+            prompt_eval_count = ctx_before_generation
             eval_count = event["completion_tokens"]
             done_reason = event["finish_reason"]
             print(f"[tokens] prompt_tokens={prompt_eval_count} completion_tokens={eval_count} finish_reason={done_reason}")

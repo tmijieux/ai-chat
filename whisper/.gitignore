@@ -1,1 +1,4 @@
 model_cache/
+compiled_blobs/
+ov_model/
+ov_model_base/

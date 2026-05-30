@@ -19,6 +19,7 @@ export type Message = {
   token_delta?: number | null
   context_excluded?: boolean
   exclusion_reason?: string | null
+  compressed_summary?: string | null
   log_message?: string | null
   created_at?: string
   sibling_count?: number
@@ -206,6 +207,7 @@ export type DisplayMessage =
       tool_name: string
       log_message?: string | null
       content: string
+      compressed_summary?: string | null
       token_count?: number | null
       token_delta?: number | null
       context_excluded?: boolean

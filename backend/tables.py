@@ -28,6 +28,7 @@ class Message(Base):
     token_delta = column(Integer, nullable=True)
     context_excluded = column(Boolean, nullable=False, default=False)
     exclusion_reason = column(String, nullable=True)
+    compressed_summary = column(Text, nullable=True)
     log_message = column(String, nullable=True)
 
 

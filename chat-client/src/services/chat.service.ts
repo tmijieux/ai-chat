@@ -538,6 +538,7 @@ export class ChatService {
           })
         } else {
           enqueue(() => this._computeTokenCountForLastMessage())
+          enqueue(() => this._compressConversation())
           // Reload from DB to get has_children and sibling metadata, which are only computed
           // server-side and are not available on display messages created during the agent run.
           enqueue(() => this._reloadFromDb())
@@ -546,6 +547,14 @@ export class ChatService {
         this._agentEventSub = null
       }
     })
+  }
+
+  private async _compressConversation(): Promise<void> {
+    const id = this._conversationId()
+    if (!id) {
+      return
+    }
+    await firstValueFrom(this.api.compress_conversation(id))
   }
 
   private async _reloadFromDb(): Promise<void> {
@@ -624,6 +633,7 @@ export class ChatService {
           tool_name: (() => { try { return JSON.parse(m.content).tool ?? '' } catch { return '' } })(),
           log_message: m.log_message ?? null,
           content: m.content,
+          compressed_summary: m.compressed_summary ?? null,
           token_count: m.token_count,
           token_delta: m.token_delta,
           context_excluded: m.context_excluded,
@@ -740,5 +750,10 @@ export class ChatService {
     }
     this._agentEventSub?.unsubscribe()
     this._agentEventSub = null
+  }
+
+  async transcribe(blob: Blob, language: string | null = 'fr'): Promise<string> {
+    const res = await firstValueFrom(this.api.post_transcribe(blob, language))
+    return res.text
   }
 }

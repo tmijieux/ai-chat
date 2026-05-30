@@ -99,6 +99,7 @@ class LLMBackend(ABC):
         tools: list,
         temperature: float,
         max_tokens: int | None = None,
+        disable_thinking: bool = False,
     ) -> AsyncIterator[StreamEvent]: ...
 
     def prepare_messages(self, messages: list) -> list:

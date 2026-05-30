@@ -94,6 +94,29 @@ The structured JSON dict that every tool's `execute()` returns. Contains at mini
 ## Reference File
 **Not yet implemented.** Concept for the planned [[Post-Iteration Sub-Agent]] pipeline: a file read into context but not actively being modified, identified by parsing tool-role message history. Will be compressed to API surface (signatures, types, exports) by the post-iteration sub-agent when context pressure requires it.
 
+## Voice Dictation
+
+Mic button in the chat input area. Three visual states: gray (idle), red pulsing (recording), yellow pulsing (transcribing). Clicking starts/stops recording via `MediaRecorder`. On stop, the audio blob is sent to `POST /api/transcribe`, the transcript fills the textarea.
+
+**Pipeline:** `backend/whisper_pipeline.py` — OpenVINO inference, encoder on NPU, decoder on GPU.0 (Intel Arc iGPU). Audio decoded via ffmpeg (handles WebM/WAV/OGG). Tensor names and statefulness auto-detected at load time from the model XML (`_introspect`), so any Whisper variant works without code changes.
+
+**Model variants** (defined in `whisper_pipeline.py`, swap by changing `ACTIVE_VARIANT`):
+
+| Constant | HuggingFace ID | Dir | Stateful |
+|---|---|---|---|
+| `WHISPER_TINY` | `openai/whisper-tiny` | `whisper/ov_model_tiny` | yes |
+| `WHISPER_BASE` | `openai/whisper-base` | `whisper/ov_model_base` | yes |
+| `WHISPER_SMALL` | `openai/whisper-small` | `whisper/ov_model_small` | no |
+| `WHISPER_LARGE_FR` | `bofenghuang/whisper-large-v3-french` | `whisper/ov_model_large_fr` | no |
+
+Stateful models use one-token-at-a-time decode with internal KV cache (`_decode_stateful`). Non-stateful use full-sequence decode (`_decode_full_sequence`). Compiled blobs cached per variant in `whisper/compiled_blobs_<name>/`.
+
+Adding a new variant: one `WhisperVariant(...)` line + `optimum-cli export openvino` to export the model.
+
+**STT correction:** after transcription, `_correct_stt()` in `main.py` makes a non-streaming call to llama-server with a few-shot correction prompt. Fixes misheard English technical terms and French words mangled by the STT model. `enable_thinking: false` is set explicitly to avoid Qwen3.5 thinking-only responses.
+
+**Frontend:** `toggleMic()` in `chat.component.ts`. `isRecording` is set false before `isTranscribing` is set true — they are mutually exclusive. Error handling via `try/finally` on the transcribe call.
+
 ## Known Bugs
 - **`is_default` uniqueness not enforced**: Setting a new prompt as default does not clear the previous default. Backend must clear the flag atomically.
 - **Workspace not persisted across reloads**: See [[Workspace]].
@@ -103,7 +126,15 @@ The structured JSON dict that every tool's `execute()` returns. Contains at mini
 - **`context_excluded` UX**: beyond the "excluded from context" label on evicted messages, whether the user should be able to force-include an evicted message is TBD.
 
 ## Post-Iteration Sub-Agent
-A fixed-prompt LLM call fired by the framework after each main agent iteration (not triggered by the main agent). Receives a digest of: tools called, changes made, last user message summary, and reference file contents to compress. Returns a JSON state object (`current_goal`, `current_assumption`, etc.) and API summaries for reference files. Enables context eviction without relying on the main agent to cooperate.
+Framework-level compression pipeline that runs after each main agent iteration, before the next one begins. Two stages (see ADR-0006):
+
+**Stage 1 — Usefulness classification + deterministic compaction:** a single batch LLM call receives the current user message, an optional one-sentence conversation summary (omitted on the first loop, present on subsequent ones to anchor intent), and for each tool call: `(tool_name, key_args, result_metadata, following_thinking)` — never the full tool output. `run_shell` is treated like any other tool (metadata = `exit_code` + `line_count`). Returns `useful | noise` per tool call plus an updated conversation summary. Noise results are marked `excluded_from_context = true`; a compact one-liner (`glob_files("**/*ome-box*") → 0 files`) is stored in the new `compressed_summary` column and shown in the UI instead. `message.content` is never modified — original preserved for future re-inclusion. The updated conversation summary is also used to refresh the conversation title. Thinking messages are always kept verbatim.
+
+**Stage 2 — Reference file summarization:** for each `useful` `read_file` result exceeding ~500 tokens, a second LLM call produces an API surface summary (module purpose, function signatures, key constants, imports). Target: 400–800 tokens regardless of file size. Full content replaced in DB with `[compressed: N lines → ~M tokens]` header.
+
+Never compressed: `write_file`, `edit_file`, `run_shell` results; the active file (currently being edited); thinking messages.
+
+Enables multi-turn agent runs even when a file read dominates the context (e.g. a 19k-token file drops to ~600 tokens after stage 2).
 
 ## Status Bar
 Always-visible top bar in the chat area. Shows token info only: `Context Tokens: N / 16,384 (%)`. The value is the last measured `prompt_eval_count` — always from a real API call, never estimated. Shows 0 on a new chat. The agentic mode toggle is still present next to the ⚙ button (see [[Agentic Mode]] for the removal plan). The ⚙ button opens the [[Conversation Settings Drawer]].

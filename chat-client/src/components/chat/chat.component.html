@@ -300,12 +300,16 @@
                     }
                   }
                   @if (msg.context_excluded) {
-                    <span class="ml-2 text-xs text-gray-400 italic">excluded from context</span>
+                    @if (msg.compressed_summary) {
+                      <span class="ml-2 text-xs text-amber-500 italic">compressed</span>
+                    } @else {
+                      <span class="ml-2 text-xs text-gray-400 italic">excluded from context</span>
+                    }
                   }
                 </span>
                 <pre
                   class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-200"
-                  >{{ msg.content }}</pre
+                  >{{ msg.compressed_summary ?? msg.content }}</pre
                 >
               </app-collapsible-bubble>
               @if (msg.token_meta) {
@@ -389,6 +393,15 @@
           Stop
         </button>
       } @else {
+        <button
+          (click)="toggleMic()"
+          [disabled]="chatSvc.isLoading() || chatSvc.agentRunning()"
+          class="send-button px-4 py-3 rounded-lg transition-all"
+          [class]="isTranscribing() ? 'bg-yellow-400 text-white animate-pulse cursor-wait' : isRecording() ? 'bg-red-500 hover:bg-red-600 text-white animate-pulse' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'"
+          [title]="isTranscribing() ? 'Transcribing...' : isRecording() ? 'Stop recording' : 'Voice dictation'"
+        >
+          {{ isTranscribing() ? '⏳' : '🎤' }}
+        </button>
         <button
           (click)="sendMessage(null)"
           [disabled]="!currentInput().trim() || chatSvc.isLoading()"

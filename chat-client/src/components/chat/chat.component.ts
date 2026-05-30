@@ -45,6 +45,12 @@ export class ChatComponent implements OnDestroy {
   readonly openMenuId = signal<string | null>(null)
   readonly openConvMenuId = signal<string | null>(null)
 
+  // Voice dictation
+  readonly isRecording = signal(false)
+  readonly isTranscribing = signal(false)
+  private _mediaRecorder: MediaRecorder | null = null
+  private _audioChunks: Blob[] = []
+
   // Raw markdown toggle
   private rawModeIds = signal(new Set<string>())
   readonly CTX_LIMIT = 2 ** 15
@@ -235,5 +241,36 @@ export class ChatComponent implements OnDestroy {
 
   async onNavigateSibling(siblingId: string): Promise<void> {
     await this.chatSvc.navigateSibling(siblingId)
+  }
+
+  // -------------------------------------------------------------------------
+  // Voice dictation
+  // -------------------------------------------------------------------------
+
+  async toggleMic(): Promise<void> {
+    if (this.isRecording()) {
+      this._mediaRecorder?.stop()
+    } else {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      this._mediaRecorder = new MediaRecorder(stream)
+      this._audioChunks = []
+      this._mediaRecorder.ondataavailable = (e) => {
+        this._audioChunks.push(e.data)
+      }
+      this._mediaRecorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop())
+        const blob = new Blob(this._audioChunks, { type: 'audio/webm' })
+        this.isRecording.set(false)
+        this.isTranscribing.set(true)
+        try {
+          const text = await this.chatSvc.transcribe(blob)
+          this.currentInput.set((this.currentInput() + ' ' + text).trim())
+        } finally {
+          this.isTranscribing.set(false)
+        }
+      }
+      this._mediaRecorder.start()
+      this.isRecording.set(true)
+    }
   }
 }

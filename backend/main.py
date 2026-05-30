@@ -3,16 +3,19 @@ import uuid
 import logging
 import json
 import asyncio
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, Form
 from sqlalchemy import select, delete
 from database import init_db, get_db_session, AsyncSession
 import loaders as ld
 import tables as db
 from agent.agent import AgentSession, run_agent, _find_superseded_read_file_indices
+from agent.compress import compress_messages
 from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
 from llm import backend
+import whisper_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +96,18 @@ async def _seed_prompts(sess: AsyncSession) -> None:
     await sess.commit()
 
 
+_whisper: tuple | None = None
+
+
+def _load_whisper_bg() -> None:
+    global _whisper
+    try:
+        enc, dec, processor, schema = whisper_pipeline.load_pipeline()
+        _whisper = (enc, dec, processor, schema)
+    except Exception:
+        logger.exception("Whisper pipeline failed to load — /api/transcribe will be unavailable")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await backend.ensure_running()
@@ -100,6 +115,7 @@ async def lifespan(app: FastAPI):
     print("Database initialized successfully.")
     async for sess in get_db_session():
         await _seed_prompts(sess)
+    threading.Thread(target=_load_whisper_bg, daemon=True).start()
     yield
 
 
@@ -167,6 +183,17 @@ async def _build_inference_context(
             messages.append({"role": "system", "content": p.content})
     for m in branch:
         if m.context_excluded:
+            if m.compressed_summary:
+                try:
+                    original = json.loads(m.content or "{}")
+                except (json.JSONDecodeError, ValueError):
+                    original = {}
+                messages.append({"role": "tool", "content": json.dumps({
+                    "tool": original.get("tool", "tool"),
+                    "status": "compressed",
+                    "summary": m.compressed_summary,
+                    "tool_call_id": original.get("tool_call_id", ""),
+                })})
             continue
         if m.content is None or m.content.strip() == "":
             continue
@@ -201,6 +228,7 @@ def _msg_dict(m: db.Message) -> dict:
         "token_delta": m.token_delta,
         "context_excluded": m.context_excluded,
         "exclusion_reason": m.exclusion_reason,
+        "compressed_summary": m.compressed_summary,
         "log_message": m.log_message,
     }
 
@@ -633,7 +661,7 @@ async def update_system_prompt(
         p.category = body.category
     if body.content is not None:
         p.content = body.content
-        p.token_count = _compute_prompt_token_count(body.content)
+        p.token_count = await _compute_prompt_token_count(body.content)
     if body.is_default is not None:
         p.is_default = body.is_default
     return {
@@ -731,6 +759,44 @@ async def count_conversation_tokens(id: str, sess: AsyncSession = Depends(get_db
     return {"token_count": token_count_value, "message_id": last_id}
 
 
+@app.post("/api/conversations/{id}/compress")
+async def compress_conversation(id: str, sess: AsyncSession = Depends(get_db_session)):
+    conv = (await sess.scalars(select(db.Conversation).where(db.Conversation.id == id))).first()
+    if conv is None:
+        raise HTTPException(404)
+
+    all_msgs = list((await sess.scalars(select(db.Message).where(db.Message.conversation_id == id))).all())
+    branch = _build_active_branch_path(all_msgs, conv.active_message_id)
+
+    # Candidates: uncompressed tool messages on the active branch
+    candidates = [m for m in branch if m.role == "tool" and not m.context_excluded]
+    if not candidates:
+        return {"compressions": [], "new_summary": ""}
+
+    # Use the last user message as the goal anchor
+    user_message = next(
+        (m.content for m in reversed(branch) if m.role == "user"),
+        ""
+    ) or ""
+
+    all_dicts = [{"id": m.id, "role": m.role, "content": m.content, "thinking": m.thinking} for m in branch]
+    candidate_dicts = [{"id": m.id, "role": m.role, "content": m.content, "thinking": m.thinking} for m in candidates]
+
+    compressions, new_summary = await compress_messages(
+        candidate_dicts, all_dicts, user_message, None, backend
+    )
+
+    for c in compressions:
+        msg = next((m for m in candidates if m.id == c["message_id"]), None)
+        if msg is not None:
+            msg.context_excluded = True
+            msg.exclusion_reason = "compressed"
+            msg.compressed_summary = c["compressed_summary"]
+
+    await sess.flush()
+    return {"compressions": compressions, "new_summary": new_summary}
+
+
 # ---------------------------------------------------------------------------
 # Agent WebSocket
 # ---------------------------------------------------------------------------
@@ -746,6 +812,73 @@ async def _ws_receive_messages(websocket: WebSocket, session: AgentSession, agen
                 return
     except (WebSocketDisconnect, Exception):
         agent_task.cancel()
+
+
+_STT_CORRECTION_SYSTEM = (
+    "You are a speech-to-text correction assistant. "
+    "The user will give you a transcription that may contain misheard words — both English technical terms (filenames, commands, identifiers) and French words mangled by the STT model. "
+    "Correct only obvious STT errors. Do not rephrase, translate, or add anything. "
+    "Return only the corrected text, nothing else."
+)
+
+
+_STT_EXAMPLES = [
+    ("Lis le fichier Redmi et explique-moi ce qu'il fait.",
+     "Lis le fichier README et explique-moi ce qu'il fait."),
+    ("Lance la commande nope install dans le terminal.",
+     "Lance la commande npm install dans le terminal."),
+    ("Ouvre le fichier rythmique point p y.",
+     "Ouvre le fichier readme.py."),
+    ("Je veux modifier la fonction render dès composant.",
+     "Je veux modifier la fonction render du composant."),
+    ("Listons les fichiers à la racine de StripoGit.",
+     "Listons les fichiers à la racine du dépôt git."),
+    ("Fais un commit dans le tripoGit.",
+     "Fais un commit dans le dépôt git."),
+]
+
+
+async def _correct_stt(text: str, language: str | None) -> str:
+    import aiohttp
+    from llm.llama_server import LLAMA_CHAT_URL, MODEL_NAME
+    messages = [{"role": "system", "content": _STT_CORRECTION_SYSTEM}]
+    for user_ex, assistant_ex in _STT_EXAMPLES:
+        messages.append({"role": "user", "content": user_ex})
+        messages.append({"role": "assistant", "content": assistant_ex})
+    messages.append({"role": "user", "content": text})
+    body = {
+        "model": MODEL_NAME,
+        "messages": messages,
+        "stream": False,
+        "max_tokens": 200,
+        "temperature": 0.0,
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+    async with aiohttp.ClientSession() as http:
+        async with http.post(LLAMA_CHAT_URL, json=body) as resp:
+            data = await resp.json()
+            logger.info("STT correction LLM response: %s", data)
+            return data["choices"][0]["message"]["content"].strip()
+
+
+@app.post("/api/transcribe")
+async def transcribe_audio(
+    audio: UploadFile,
+    language: str | None = Form(default="fr"),
+):
+    if _whisper is None:
+        raise HTTPException(503, "Whisper pipeline is still loading, try again in a moment")
+    data = await audio.read()
+    loop = asyncio.get_event_loop()
+    enc, dec, processor, schema = _whisper
+    text = await loop.run_in_executor(
+        None, whisper_pipeline.transcribe, enc, dec, processor, data, language, schema
+    )
+    logger.info("STT raw transcript: %r", text)
+    if text:
+        text = await _correct_stt(text, language)
+        logger.info("STT corrected: %r", text)
+    return {"text": text}
 
 
 @app.websocket("/api/agent/ws")

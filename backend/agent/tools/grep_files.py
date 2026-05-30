@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 class GrepFilesTool(BaseTool):
     name = "grep_files"
-    description = "Search file contents with a regex pattern. Returns matching lines with file path and line numbers. Prefer this over reading whole files when looking for a symbol, function, or string. Requires a workspace directory to be configured in conversation settings."
+    description = "Search file contents with a regex pattern. Returns matching lines with file path and line numbers. Use -A/-B to extract code snippets around matches — prefer this over read_file when you need a specific function or symbol. Requires a workspace directory to be configured in conversation settings."
     parameters = {
         "type": "object",
         "properties": {
@@ -32,6 +32,14 @@ class GrepFilesTool(BaseTool):
                 "type": "boolean",
                 "description": "If true, match case-insensitively (default false).",
             },
+            "-A": {
+                "type": "integer",
+                "description": "Number of lines to include after each match. Default 0.",
+            },
+            "-B": {
+                "type": "integer",
+                "description": "Number of lines to include before each match. Default 0.",
+            },
             "max_matches": {
                 "type": "integer",
                 "description": "Maximum matches to return (default 50). Increase only if you need more.",
@@ -44,7 +52,7 @@ class GrepFilesTool(BaseTool):
         "required": ["pattern", "glob"],
     }
     requires_confirmation = False
-    measured_delta = 512
+    measured_delta = 574
 
     def label(self, args: dict) -> str:
         return f"GREP '{args.get('pattern', '')}' in {args.get('path', '.')}"
@@ -59,6 +67,8 @@ class GrepFilesTool(BaseTool):
         if glob_pattern is None:
             return tool_error(self.name, "the 'glob' argument is missing")
         case_insensitive = args.get("case_insensitive", False)
+        lines_after = int(args.get("-A", 0))
+        lines_before = int(args.get("-B", 0))
         max_matches = args.get("max_matches", 50)
         include_ignored = args.get("include_ignored", False)
 
@@ -77,6 +87,7 @@ class GrepFilesTool(BaseTool):
 
         spec = None if include_ignored else load_ignore_spec(working_directory)
         matches = []
+        total_match_count = 0
         try:
             for file_path in absolute_path.glob(glob_pattern):
                 if not file_path.is_file():
@@ -85,16 +96,33 @@ class GrepFilesTool(BaseTool):
                     continue
                 try:
                     content = file_path.read_text(encoding="utf-8", errors="strict")
-                except Exception as e:
-                    logger.warning(f"encoding error in `{str(file_path)}`", exc_info=e)
+                except Exception:
+                    logger.warning("skipping unreadable file: %s", file_path)
                     continue
-                for i, line in enumerate(content.splitlines(), 1):
+                all_lines = content.splitlines()
+                rel_path = file_path.relative_to(working_directory)
+                match_indices: set[int] = set()
+                show_indices: set[int] = set()
+                for i, line in enumerate(all_lines):
                     if regex.search(line):
-                        rel_path = file_path.relative_to(working_directory)
-                        matches.append({"file": str(rel_path), "line": i, "content": line.strip()})
-                        if len(matches) >= max_matches:
+                        match_indices.add(i)
+                        for j in range(max(0, i - lines_before), min(len(all_lines), i + lines_after + 1)):
+                            show_indices.add(j)
+                        if total_match_count + len(match_indices) >= max_matches:
                             break
-                if len(matches) >= max_matches:
+
+                for idx in sorted(show_indices):
+                    entry: dict = {
+                        "file": str(rel_path),
+                        "line": idx + 1,
+                        "content": all_lines[idx].rstrip(),
+                    }
+                    if idx in match_indices:
+                        entry["match"] = True
+                    matches.append(entry)
+
+                total_match_count += len(match_indices)
+                if total_match_count >= max_matches:
                     break
         except Exception as e:
             return tool_error(self.name, f"Error during grep: {e}")
@@ -106,6 +134,6 @@ class GrepFilesTool(BaseTool):
             "glob_pattern": glob_pattern,
             "status": "success",
             "matches": matches,
-            "total": len(matches),
-            "truncated": len(matches) >= max_matches,
+            "total": total_match_count,
+            "truncated": total_match_count >= max_matches,
         }
