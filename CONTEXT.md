@@ -54,6 +54,32 @@ When a tool with `requires_confirmation = true` is called, the backend emits a `
 - **Reject** — opens a textarea for an optional rejection reason; the reason is sent back to the model as part of the tool result so the agent can adjust without the run being aborted.
 The confirmation card disappears from the message list once the agent run is complete.
 
+## Chat Auto-scroll
+The message list auto-scrolls to the bottom when new content arrives, but only if the user was already at the bottom. Scrolling up manually disables auto-scroll — no jumps while reading. Scrolling back to within 50 px of the bottom re-enables it.
+
+**Not yet implemented.**
+
+## Vision / Image Input
+Allow pasting or dragging images into the chat input area. The image is encoded as base64 and attached to the message.
+
+**Current blocker:** llama-server is launched without vision support. The vision projector tensors are bundled inside the same GGUF (as they were with Ollama), so no separate `--mmproj` file is needed — but it's unclear whether the current llama-server build auto-detects them or requires an explicit flag. Must verify llama.cpp docs/changelog before implementing. Fallback option: route through a "describe this image" sub-agent call and inject the description as text into context.
+
+Frontend: paste/drag into textarea, show thumbnail preview, send base64 alongside text. Backend: accept `image_url` content format, forward to llama-server's OpenAI-compatible endpoint.
+
+**Not yet implemented.**
+
+## Tool Result Display
+Tool result bubbles currently render raw JSON in a `<pre>` block. Planned improvements:
+
+- **Grep results** (`grep_files`): Parse `matches: [{file, line, content, match?}]`. Render grouped by file — file-path header per group, line numbers, matched lines highlighted (green) vs context lines (subdued). The `log_message` header already shows a one-liner summary.
+- **Write / edit results**: Compact success/error line — just path and status, no raw JSON blob.
+- **Run_shell results**: Exit code prominently + stdout in a scrollable code block.
+- **Other tools**: Surface key fields (path, status, count) as a summary line; hide the rest.
+
+`compressed_summary` always takes precedence; structured rendering applies only to the raw content fallback.
+
+**Not yet implemented** (compressed_summary display is already live).
+
 ## Edit File Diff Preview
 **Planned improvement.** The `edit_file` confirmation card currently shows a plain-text `--- OLD --- / --- NEW ---` preview. Target: render a colored unified diff with actual file line numbers — red lines for removals (`-`), green lines for additions (`+`), gray/neutral for unchanged context lines.
 
@@ -119,25 +145,29 @@ Adding a new variant: one `WhisperVariant(...)` line + `optimum-cli export openv
 
 ## Known Bugs
 - **`is_default` uniqueness not enforced**: Setting a new prompt as default does not clear the previous default. Backend must clear the flag atomically.
-- **Workspace not persisted across reloads**: See [[Workspace]].
+- **Thinking-only assistant messages** (content = ""): Saved to DB — correctly filtered from LLM context but add noise to the message list.
 
 ## Open Questions
 - **`summarize_subtask` tool**: whether the agent calls it autonomously or it is framework-triggered is TBD.
 - **`context_excluded` UX**: beyond the "excluded from context" label on evicted messages, whether the user should be able to force-include an evicted message is TBD.
 
 ## Post-Iteration Sub-Agent
-Framework-level compression pipeline that runs after each main agent iteration, before the next one begins. Two stages (see ADR-0006):
+Framework-level compression pipeline that runs after each completed agent run. Two stages implemented (see ADR-0006):
 
-**Stage 1 — Usefulness classification + deterministic compaction:** a single batch LLM call receives the current user message, an optional one-sentence conversation summary (omitted on the first loop, present on subsequent ones to anchor intent), and for each tool call: `(tool_name, key_args, result_metadata, following_thinking)` — never the full tool output. `run_shell` is treated like any other tool (metadata = `exit_code` + `line_count`). Returns `useful | noise` per tool call plus an updated conversation summary. Noise results are marked `excluded_from_context = true`; a compact one-liner (`glob_files("**/*ome-box*") → 0 files`) is stored in the new `compressed_summary` column and shown in the UI instead. `message.content` is never modified — original preserved for future re-inclusion. The updated conversation summary is also used to refresh the conversation title. Thinking messages are always kept verbatim.
+**Stage 1 — Usefulness classification + deterministic compaction** ✅: a single batch LLM call receives the current user message, an optional one-sentence conversation summary, and for each tool call: `(tool_name, key_args, result_metadata, following_thinking)` — never the full tool output. Returns `compress | keep` per tool call plus an updated conversation summary. Compressed results get a compact one-liner (`glob_files("**/*ome-box*") → 0 files`) stored in `compressed_summary` and shown in the UI instead. `message.content` is never modified. Tools in `_SKIP_CLASSIFY = {write_file, edit_file}` are never classified. Thinking messages always kept verbatim.
 
-**Stage 2 — Reference file summarization:** for each `useful` `read_file` result exceeding ~500 tokens, a second LLM call produces an API surface summary (module purpose, function signatures, key constants, imports). Target: 400–800 tokens regardless of file size. Full content replaced in DB with `[compressed: N lines → ~M tokens]` header.
+**Stage 2 — Reference file summarization** ✅: for each `keep` `read_file` result exceeding ~2 000 chars, an LLM call produces an API surface summary (module purpose, function signatures, key constants, imports). Stored as `compressed_summary` with a `[compressed: N lines → ~M tokens]` header. Target: 400–800 tokens.
 
-Never compressed: `write_file`, `edit_file`, `run_shell` results; the active file (currently being edited); thinking messages.
+**Not yet implemented:**
+- **Active file tracking**: the file currently being written/edited should never be summarized in Stage 2. Currently all `read_file` results are eligible. Design open: "last file touched" only protects the most recent edit in a multi-file run; "all files edited in the run" protects more but prevents compression even when edits are complete. Prompt engineering (instruct agent to re-read before editing) may reduce the problem.
+- **Conversation title update**: after the first agent run, generate a short goal-framed title from the first user message via a small LLM call (not from the compression summary, which is agent-centric). Only update once — subsequent runs preserve the title. Update only if the title is still the auto-generated default (first 20 chars of first message), so manual renames are never overwritten.
+- **On-demand compression**: `agent.py:241` already detects `ctx_after > CTX_LIMIT` after each tool result and emits an error. Instead of failing immediately, the agent should: (1) attempt compression of all eligible tool-role messages in the full conversation history, (2) re-count tokens, (3) continue the run if now within budget. If still over: emit an error telling the user to manually delete old tool results or start a new conversation. No new event type needed — uses the existing error bubble.
+- **Oversized output summarization** for non-`read_file` tools (e.g. `run_shell` with large stdout).
 
-Enables multi-turn agent runs even when a file read dominates the context (e.g. a 19k-token file drops to ~600 tokens after stage 2).
+Never compressed by Stage 2: `write_file`, `edit_file`, `run_shell` results; thinking messages.
 
 ## Status Bar
-Always-visible top bar in the chat area. Shows token info only: `Context Tokens: N / 16,384 (%)`. The value is the last measured `prompt_eval_count` — always from a real API call, never estimated. Shows 0 on a new chat. The agentic mode toggle is still present next to the ⚙ button (see [[Agentic Mode]] for the removal plan). The ⚙ button opens the [[Conversation Settings Drawer]].
+Always-visible top bar in the chat area. Shows token info only: `Context Tokens: N / 16,384 (%)`. The value is the last measured token count — always from a real API call, never estimated. Shows 0 on a new chat. The ⚙ button opens the [[Conversation Settings Drawer]].
 
 ## Conversation Turn
 The unit of visual grouping in the chat. One top-level bubble per speaker per iteration:
@@ -184,7 +214,7 @@ This means the DB reflects the run state in near-real-time. Do not refactor this
 The ai chat is agentic and can use tools intended mode. The agent runs a tool-calling loop over WebSocket, can call tools, ask for user confirmation on destructive ones, and run multiple iterations.
 
 ## Token Count (cumulative)
-The `prompt_eval_count` value returned by the Ollama API for a given message. Stored in `Message.token_count`. Represents the total number of tokens in the context at the point that message was sent — system prompt + all prior messages + tools overhead. **Always a measured value, never an estimate.** The status bar always shows the cumulative token count of the last message that has one; it shows 0 on a new chat because no inference has happened yet.
+The `prompt_eval_count` value returned by the LLM backend for a given message. Stored in `Message.token_count`. Represents the total number of tokens in the context at the point that message was sent — system prompt + all prior messages + tools overhead. **Always a measured value, never an estimate.** The status bar always shows the cumulative token count of the last message that has one; it shows 0 on a new chat because no inference has happened yet.
 
 ## Token Delta
 The difference between a message's cumulative token count and the closest preceding message that also has a token count. Displayed in the per-message ⓘ tooltip as "This message: ~N tokens". Computed at generation time from two consecutive API-measured cumulatives and stored in `Message.token_delta`. Stable forever — does not change when upstream messages are deleted or evicted. Critical because context size varies with: which system prompt is active, which tool responses have been evicted, and which messages have been deleted.
@@ -202,6 +232,6 @@ Framework-level pruning of tool-role messages before the next main iteration. Cu
 
 Evicted messages remain visible in the UI with an "excluded from context" label. They retain their stored `token_count` so the user can see what was saved. The status bar and downstream deltas reflect the post-eviction reality from the next API call.
 
-Planned but not yet implemented: **reference file compression** — evicting full file reads and replacing them with API surface summaries produced by the [[Post-Iteration Sub-Agent]]. Also not yet implemented: **oversized output summarization** — if a tool result exceeds a token threshold, the framework calls `summarize_subtask` on it before storing in message history.
+Reference file compression (Stage 2 of the [[Post-Iteration Sub-Agent]]) is implemented — large `read_file` results are summarized and stored as `compressed_summary`. Not yet implemented: **oversized output summarization** for non-`read_file` tools (e.g. `run_shell` with large stdout).
 
 **Interaction with token counting — known hard problem:** after an eviction or manual deletion, downstream messages have stale stored cumulatives. Design intent: re-estimate their displayed cumulative by walking forward through still-in-context messages and summing their stored deltas (each delta was computed from two actual API measurements at generation time and remains valid). The status bar always shows the last real API measurement regardless. Exact re-estimation logic is still being refined.
