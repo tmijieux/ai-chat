@@ -254,6 +254,27 @@ def _msg_dict(m: db.Message) -> dict:
     }
 
 
+async def _delete_attachments_and_gc_images(sess: AsyncSession, msg_ids: list[str]) -> None:
+    """Delete MessageImageAttachment rows for msg_ids, then GC Image rows with no remaining refs."""
+    if not msg_ids:
+        return
+    # Collect image_ids that are about to lose a reference
+    candidate_ids = list((await sess.scalars(
+        select(db.MessageImageAttachment.image_id)
+        .where(db.MessageImageAttachment.message_id.in_(msg_ids))
+    )).all())
+    await sess.execute(delete(db.MessageImageAttachment).where(db.MessageImageAttachment.message_id.in_(msg_ids)))
+    if candidate_ids:
+        # Delete images that are now unreferenced
+        still_referenced = set((await sess.scalars(
+            select(db.MessageImageAttachment.image_id)
+            .where(db.MessageImageAttachment.image_id.in_(candidate_ids))
+        )).all())
+        orphaned = [iid for iid in candidate_ids if iid not in still_referenced]
+        if orphaned:
+            await sess.execute(delete(db.Image).where(db.Image.id.in_(orphaned)))
+
+
 async def _fetch_images_by_msg(sess: AsyncSession, msg_ids: list[str]) -> dict[str, list[dict]]:
     """Return {message_id: [{id, mime_type}, ...]} for all given message IDs."""
     if not msg_ids:
@@ -346,6 +367,10 @@ async def create_conversation(
 
 @app.delete("/api/conversations/{id}")
 async def delete_conversation(id: str, sess: AsyncSession = Depends(get_db_session)):
+    msg_ids = list((await sess.scalars(
+        select(db.Message.id).where(db.Message.conversation_id == id)
+    )).all())
+    await _delete_attachments_and_gc_images(sess, msg_ids)
     await sess.execute(delete(db.Message).where(db.Message.conversation_id == id))
     await sess.execute(delete(db.Conversation).where(db.Conversation.id == id))
     return ""
@@ -614,7 +639,7 @@ async def delete_message_branch(
                     new_active = _find_deepest_leaf(remaining, other_roots[0])
             conv.active_message_id = new_active
 
-        await sess.execute(delete(db.MessageImageAttachment).where(db.MessageImageAttachment.message_id.in_(list(to_delete))))
+        await _delete_attachments_and_gc_images(sess, list(to_delete))
         await sess.execute(delete(db.Message).where(db.Message.id.in_(list(to_delete))))
         return {"deleted": list(to_delete)}
     else:
@@ -636,7 +661,7 @@ async def delete_message_branch(
                 new_active = next((m.id for m in remaining if m.parent_id is None), None)
             conv.active_message_id = new_active
 
-        await sess.execute(delete(db.MessageImageAttachment).where(db.MessageImageAttachment.message_id == msg_id))
+        await _delete_attachments_and_gc_images(sess, [msg_id])
         await sess.execute(delete(db.Message).where(db.Message.id == msg_id))
         return {"deleted": [msg_id]}
 
