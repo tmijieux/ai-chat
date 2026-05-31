@@ -1,15 +1,17 @@
 # ADR-0007: Vision / Image Input
 
 **Date:** 2026-05-31  
-**Status:** Accepted — pending model verification
+**Status:** Accepted
 
 ## Context
 
-The app targets Qwen3.5-9B, a multimodal model. The Unsloth Q3_K_XL GGUF currently in use appears to have the vision encoder tensors stripped during quantization. The Ollama GGUF has them but uses a tensor layout incompatible with llama.cpp (Ollama adapted the model before llama.cpp had native Qwen3.5 support). A separate investigation session will resolve the model question via one of:
+The app targets Qwen3.5-9B, a native unified VLM (not a separate `-VL` variant). The Unsloth GGUFs are the text backbone only; the vision encoder ships as a separate `mmproj-F16.gguf` in the same HuggingFace repo (`unsloth/Qwen3.5-9B-GGUF`).
 
-1. Find a llama.cpp-native Qwen3.5-VL GGUF (bartowski confirmed broken; other sources TBD).
-2. Convert `Qwen/Qwen3.5-VL` from HuggingFace using `convert_hf_to_gguf.py` + quantize.
-3. Extract the vision encoder from the Ollama GGUF as a separate `--mmproj` file and test whether it is compatible with the Unsloth text backbone (same architecture, different quant — the hidden dim is invariant).
+## Resolution (2026-05-31)
+
+Qwen3.5-9B is a native unified VLM. The Unsloth GGUFs (`Q3_K_XL`, `Q4_K_M`) are the text backbone; the vision encoder is `mmproj-F16.gguf` (~918 MB, F16). Downloaded to `~/ai/models/unsloth/mmproj-F16.gguf`. Verified: llama-server b9399 loads both at 32 768-token context with `-ngl 99`. `llama_server.py` updated with `MMPROJ_PATH` constant and `--mmproj` launch arg.
+
+The Ollama GGUF (monolithic, vision embedded) failed to load with `rope.dimension_sections` array-length mismatch — not pursued further.
 
 The app is built assuming vision works. No graceful degradation or capability detection. Model is not switchable at runtime.
 

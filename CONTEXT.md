@@ -62,7 +62,7 @@ The message list auto-scrolls to the bottom when new content arrives, but only i
 ## Vision / Image Input
 Allow pasting or dragging images into the chat input area. Multiple images per message are supported.
 
-**Model status:** Qwen3.5-9B is multimodal. The Unsloth Q3_K_XL GGUF appears to have the vision encoder stripped. A separate investigation session will resolve which model path to use — see ADR-0007.
+**Model status:** Qwen3.5-9B is a unified VLM. Text backbone: `~/ai/models/unsloth/Qwen3.5-9B-UD-Q3_K_XL.gguf`. Vision encoder: `~/ai/models/unsloth/mmproj-F16.gguf` (Unsloth, F16, ~918 MB). llama-server is launched with `--mmproj mmproj-F16.gguf`. Investigation complete — see ADR-0007.
 
 **DB schema:** two new tables. `images` stores the blob once (`id`, `mime_type`, `data` base64, `created_at`). `message_image_attachments` is a join table (`message_id`, `image_id`, `position`). Branching copies attachment rows without duplicating image data.
 
