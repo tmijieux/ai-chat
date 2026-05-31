@@ -64,21 +64,19 @@ Allow pasting or dragging images into the chat input area. Multiple images per m
 
 **Model status:** Qwen3.5-9B is a unified VLM. Text backbone: `~/ai/models/unsloth/Qwen3.5-9B-UD-Q3_K_XL.gguf`. Vision encoder: `~/ai/models/unsloth/mmproj-F16.gguf` (Unsloth, F16, ~918 MB). llama-server is launched with `--mmproj mmproj-F16.gguf`. Investigation complete — see ADR-0007.
 
-**DB schema:** two new tables. `images` stores the blob once (`id`, `mime_type`, `data` base64, `created_at`). `message_image_attachments` is a join table (`message_id`, `image_id`, `position`). Branching copies attachment rows without duplicating image data.
+**DB schema:** two new tables. `images` stores the blob once (`id`, `mime_type`, `data` base64, `width`, `height`, `created_at`). `message_image_attachments` is a join table (`message_id`, `image_id`, `position`). Branching copies attachment rows without duplicating image data. Orphaned `images` rows are GC'd on message/conversation delete.
 
-**Upload:** `POST /api/images` → `{ id, mime_type }`. Uploaded immediately on attach (before send), with a thumbnail loading indicator and live upload speed display. On send, `POST /api/messages` includes `image_ids: string[]`. Accepted formats: JPEG, PNG, WebP. No hard size limit (local app); warn if large.
+**Upload:** `POST /api/images` → `{ id, mime_type }`. Uploaded immediately on attach (before send), with a thumbnail loading indicator. On send, `POST /api/messages` includes `image_ids: string[]`. Accepted formats: JPEG, PNG, WebP.
 
-**Context assembly:** `_build_inference_context` joins `message_image_attachments`, assembles the OpenAI multimodal content array per message: `[{"type":"text","text":"..."},{"type":"image_url","image_url":{"url":"data:mime;base64,..."}}]`. Text-only messages stay as plain strings.
+**Context assembly:** `_build_inference_context` batch-fetches `message_image_attachments`, assembles the OpenAI multimodal content array per message: `[{"type":"text","text":"..."},{"type":"image_url","image_url":{"url":"data:mime;base64,..."}}]`. Text-only messages stay as plain strings.
 
-**Token counting:** text tokens (existing path) + 512 estimated tokens per attached image. ⓘ tooltip notes the estimate.
+**Token counting:** text tokens (existing path) + `ceil(w/32) × ceil(h/32)` per image (Qwen3.5: patch=16, merge=2 → 32 px/token). Image dimensions stored at upload via Pillow. Formula source: llama.cpp discussion #17172.
 
-**Message list API:** returns `images: [{id, mime_type}]` per message (no base64). Frontend lazy-loads image data via `GET /api/images/{image_id}` for thumbnail display.
+**Message list API:** returns `images: [{id, mime_type}]` per message (no base64). Frontend lazy-loads via `GET /api/images/{image_id}`.
 
-**Frontend:** paste (`Ctrl+V`) and drag-and-drop onto the textarea append to a thumbnail strip below the input. Each thumbnail has an ✕ remove button and a loading indicator while uploading.
+**Frontend:** paste (`Ctrl+V`) and drag-and-drop onto the textarea append to a 64×64 thumbnail strip. Each thumbnail has an ✕ remove button and a spinner while uploading. Send button disabled while any image is still uploading. Persisted images display in user message bubbles (max 200×320 px).
 
 **Context eviction (deferred):** when implemented — strip image parts from evicted messages, store an AI-generated description as `compressed_summary`, provide a `reload_image` agent tool. See ADR-0007.
-
-**Not yet implemented.**
 
 ## Tool Result Display
 Tool result bubbles currently render raw JSON in a `<pre>` block. Planned improvements:

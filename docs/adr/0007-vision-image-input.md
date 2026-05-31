@@ -82,12 +82,15 @@ Image eviction is intentionally deferred. Design intent when implemented:
 
 Supported. Frontend shows a thumbnail strip (N thumbnails) below the textarea. Each thumbnail has an ✕ remove button. Paste (`Ctrl+V`) and drag-and-drop onto the textarea both append to the strip.
 
-## Consequences
+## Consequences (implemented 2026-05-31)
 
-- Two new DB tables, one new `POST /api/images` endpoint, one new `GET /api/images/{id}` endpoint.
-- `POST /api/messages` gains an optional `image_ids: string[]` field.
-- `_build_inference_context` gains a DB join + content array assembly step.
-- `prepare_messages` in `llama_server.py` must pass array `content` through unchanged (it currently overwrites with `m.get("content", "")` — needs a fix).
-- Token counting gains the 512-per-image estimate.
-- llama-server launch may need `--mmproj <file>` depending on which model path is chosen.
+- Two new DB tables (`images` with `width`/`height`, `message_image_attachments`).
+- `POST /api/images` and `GET /api/images/{id}` endpoints added.
+- `POST /api/messages` accepts optional `image_ids: string[]`.
+- `_build_inference_context` batch-fetches attachments, builds OpenAI multimodal content arrays.
+- `prepare_messages` in `llama_server.py`: `m.get("content", "")` already passes list content through unchanged — no fix needed.
+- Token counting: `ceil(w/32) × ceil(h/32)` per image via Pillow dimensions stored at upload. Formula confirmed via llama.cpp discussion #17172.
+- llama-server launched with `--mmproj ~/ai/models/unsloth/mmproj-F16.gguf`.
+- Orphaned `Image` rows GC'd on message/conversation delete via `_delete_attachments_and_gc_images()`.
+- `agent.py` `_log_context` updated to handle list content.
 - No changes to the agent loop, compression pipeline, or WebSocket protocol.
