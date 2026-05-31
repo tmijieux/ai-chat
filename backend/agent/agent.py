@@ -93,6 +93,10 @@ def _log_context(messages: list[dict[str, Any]]) -> None:
         content = m.get("content")
         if content is None:
             content = ""
+        if isinstance(content, list):
+            text_parts = [p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"]
+            img_count = sum(1 for p in content if isinstance(p, dict) and p.get("type") == "image_url")
+            content = " ".join(text_parts) + (f" [+{img_count} image(s)]" if img_count else "")
         if role == "system":
             print(f"  [system] {content[:120].replace('\n', ' ')}")
         elif role == "user":

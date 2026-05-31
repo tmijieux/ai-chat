@@ -233,8 +233,15 @@ button {
 .w-80 { width: 320px; }
 .bg-black-40 { background: rgba(0, 0, 0, 0.4); }
 .bg-black-60 { background: rgba(0, 0, 0, 0.6); }
+.border-gray-300 { border-color: #d1d5db; }
 .w-4 { width: 1rem; }
 .h-4 { height: 1rem; }
+.w-16 { width: 4rem; }
+.h-16 { height: 4rem; }
+.max-h-48 { max-height: 12rem; }
+.max-w-xs { max-width: 20rem; }
+.object-cover { object-fit: cover; }
+.flex-shrink-0-important { flex-shrink: 0; }
 .rounded-bl { border-bottom-left-radius: 0.25rem; }
 .leading-none { line-height: 1; }
 

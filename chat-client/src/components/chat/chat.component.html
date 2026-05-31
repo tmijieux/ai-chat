@@ -169,7 +169,7 @@
                       @for (img of msg.images; track img.id) {
                         <img
                           [src]="'/api/images/' + img.id"
-                          class="max-h-48 max-w-xs rounded object-cover border border-gray-300"
+                          class="max-h-48 max-w-xs object-cover rounded border border-gray-300"
                           alt="attached image"
                         />
                       }
@@ -455,7 +455,7 @@
     @if (pendingImages().length > 0) {
       <div class="flex gap-2 flex-wrap mb-3">
         @for (img of pendingImages(); track img.localUrl) {
-          <div class="p-relative w-16 h-16 rounded overflow-hidden border border-gray-300">
+          <div class="p-relative w-16 h-16 rounded overflow-hidden border border-gray-300 flex-shrink-0">
             <img [src]="img.localUrl" class="w-full h-full object-cover" alt="attachment" />
             @if (img.uploading) {
               <div class="p-absolute inset-0 bg-black-40 flex items-center justify-center text-white text-xs">↑</div>
