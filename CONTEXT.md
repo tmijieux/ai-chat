@@ -60,11 +60,23 @@ The message list auto-scrolls to the bottom when new content arrives, but only i
 **Not yet implemented.**
 
 ## Vision / Image Input
-Allow pasting or dragging images into the chat input area. The image is encoded as base64 and attached to the message.
+Allow pasting or dragging images into the chat input area. Multiple images per message are supported.
 
-**Current blocker:** llama-server is launched without vision support. The vision projector tensors are bundled inside the same GGUF (as they were with Ollama), so no separate `--mmproj` file is needed — but it's unclear whether the current llama-server build auto-detects them or requires an explicit flag. Must verify llama.cpp docs/changelog before implementing. Fallback option: route through a "describe this image" sub-agent call and inject the description as text into context.
+**Model status:** Qwen3.5-9B is multimodal. The Unsloth Q3_K_XL GGUF appears to have the vision encoder stripped. A separate investigation session will resolve which model path to use — see ADR-0007.
 
-Frontend: paste/drag into textarea, show thumbnail preview, send base64 alongside text. Backend: accept `image_url` content format, forward to llama-server's OpenAI-compatible endpoint.
+**DB schema:** two new tables. `images` stores the blob once (`id`, `mime_type`, `data` base64, `created_at`). `message_image_attachments` is a join table (`message_id`, `image_id`, `position`). Branching copies attachment rows without duplicating image data.
+
+**Upload:** `POST /api/images` → `{ id, mime_type }`. Uploaded immediately on attach (before send), with a thumbnail loading indicator and live upload speed display. On send, `POST /api/messages` includes `image_ids: string[]`. Accepted formats: JPEG, PNG, WebP. No hard size limit (local app); warn if large.
+
+**Context assembly:** `_build_inference_context` joins `message_image_attachments`, assembles the OpenAI multimodal content array per message: `[{"type":"text","text":"..."},{"type":"image_url","image_url":{"url":"data:mime;base64,..."}}]`. Text-only messages stay as plain strings.
+
+**Token counting:** text tokens (existing path) + 512 estimated tokens per attached image. ⓘ tooltip notes the estimate.
+
+**Message list API:** returns `images: [{id, mime_type}]` per message (no base64). Frontend lazy-loads image data via `GET /api/images/{image_id}` for thumbnail display.
+
+**Frontend:** paste (`Ctrl+V`) and drag-and-drop onto the textarea append to a thumbnail strip below the input. Each thumbnail has an ✕ remove button and a loading indicator while uploading.
+
+**Context eviction (deferred):** when implemented — strip image parts from evicted messages, store an AI-generated description as `compressed_summary`, provide a `reload_image` agent tool. See ADR-0007.
 
 **Not yet implemented.**
 

@@ -160,6 +160,218 @@
   }
 }
 
+// -------------------------------------------------------------------------
+// Scroll-to-bottom button
+// -------------------------------------------------------------------------
+
+.scroll-to-bottom-btn {
+  position: absolute;
+  bottom: 6rem;
+  right: 1.5rem;
+  background: #4f46e5;
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 2.25rem;
+  height: 2.25rem;
+  font-size: 1.1rem;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+  z-index: 20;
+
+  &:hover {
+    background: #4338ca;
+  }
+}
+
+// -------------------------------------------------------------------------
+// Tool confirm card (dark amber theme)
+// -------------------------------------------------------------------------
+
+.tool-confirm-card {
+  background: #1a1400;
+  border: 1px solid #d97706;
+  border-radius: 0.5rem;
+  padding: 1rem;
+  width: 100%;
+  max-width: 42rem;
+}
+
+.tool-confirm-label {
+  color: #fbbf24;
+  font-weight: 600;
+}
+
+.tool-confirm-tool-name {
+  background: #2d1f00;
+  border: 1px solid #92400e;
+  color: #fcd34d;
+  padding: 0.1em 0.5em;
+  border-radius: 0.25rem;
+  font-size: 0.875rem;
+  font-family: monospace;
+}
+
+.tool-confirm-preview {
+  font-size: 0.75rem;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 0.25rem;
+  padding: 0.5rem;
+  overflow: auto;
+  max-height: 10rem;
+  white-space: pre-wrap;
+  color: #cbd5e1;
+  margin: 0;
+}
+
+// -------------------------------------------------------------------------
+// Diff block (edit_file confirmation)
+// -------------------------------------------------------------------------
+
+.diff-block {
+  font-family: 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.75rem;
+  overflow: auto;
+  max-height: 300px;
+  border-radius: 4px;
+  background: #0f172a;
+  border: 1px solid #334155;
+}
+
+.diff-line {
+  display: flex;
+  padding: 1px 0;
+  white-space: pre;
+  line-height: 1.5;
+}
+
+.diff-lineno {
+  color: #475569;
+  min-width: 4ch;
+  text-align: right;
+  padding: 0 6px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.diff-op {
+  width: 1.2ch;
+  padding-right: 4px;
+  flex-shrink: 0;
+}
+
+.diff-header {
+  color: #64748b;
+}
+
+.diff-added {
+  background: rgba(134, 239, 172, 0.08);
+  color: #86efac;
+
+  .diff-op { color: #4ade80; }
+}
+
+.diff-removed {
+  background: rgba(252, 165, 165, 0.08);
+  color: #fca5a5;
+
+  .diff-op { color: #f87171; }
+}
+
+.diff-context {
+  color: #64748b;
+}
+
+// -------------------------------------------------------------------------
+// Tool result labels
+// -------------------------------------------------------------------------
+
+.tool-result-label {
+  background: #1e293b;
+  padding: 0.1em 0.4em;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+
+.tool-result-simple {
+  font-size: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  color: #94a3b8;
+  font-family: monospace;
+}
+
+.tool-result-icon {
+  font-weight: 600;
+}
+
+// -------------------------------------------------------------------------
+// Grep result display
+// -------------------------------------------------------------------------
+
+.grep-result {
+  font-family: 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.75rem;
+  overflow: auto;
+  max-height: 20rem;
+}
+
+.grep-file-name {
+  color: #818cf8;
+  font-weight: 600;
+  padding: 4px 8px 2px;
+  border-top: 1px solid #1e293b;
+  background: #0f172a;
+
+  &:first-child {
+    border-top: none;
+  }
+}
+
+.grep-line {
+  display: flex;
+  padding: 0 8px;
+  line-height: 1.5;
+
+  &.grep-match {
+    background: rgba(134, 239, 172, 0.06);
+
+    .grep-text { color: #86efac; }
+  }
+}
+
+.grep-lineno {
+  color: #475569;
+  min-width: 4ch;
+  text-align: right;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.grep-sep {
+  color: #334155;
+  margin: 0 6px;
+  flex-shrink: 0;
+}
+
+.grep-text {
+  color: #64748b;
+  white-space: pre;
+  overflow: hidden;
+}
+
+.grep-truncated {
+  color: #475569;
+  font-size: 0.7rem;
+  padding: 4px 8px;
+  font-style: italic;
+}
+
 textarea {
   flex-grow: 1;
   resize: none;

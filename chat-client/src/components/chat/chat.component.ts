@@ -1,4 +1,4 @@
-import { Component, computed, HostListener, inject, model, OnDestroy, signal } from '@angular/core'
+import { Component, computed, effect, ElementRef, HostListener, inject, model, OnDestroy, signal, untracked, ViewChild } from '@angular/core'
 import { CommonModule } from '@angular/common'
 import { FormsModule } from '@angular/forms'
 import { ChatService } from '../../services/chat.service'
@@ -50,6 +50,10 @@ export class ChatComponent implements OnDestroy {
   readonly isTranscribing = signal(false)
   private _mediaRecorder: MediaRecorder | null = null
   private _audioChunks: Blob[] = []
+
+  // Auto-scroll
+  @ViewChild('scrollContainer') private _scrollEl!: ElementRef<HTMLElement>
+  readonly autoScrollEnabled = signal(true)
 
   // Raw markdown toggle
   private rawModeIds = signal(new Set<string>())
@@ -121,6 +125,20 @@ export class ChatComponent implements OnDestroy {
   readonly conversations$ = this.chatSvc.conversations.obs$
 
   constructor() {
+    effect(() => {
+      this.messagesWithMeta()
+      untracked(() => {
+        if (this.autoScrollEnabled()) {
+          queueMicrotask(() => {
+            const el = this._scrollEl?.nativeElement
+            if (el) {
+              el.scrollTop = el.scrollHeight
+            }
+          })
+        }
+      })
+    })
+
     this.route.queryParamMap.subscribe((pm) => {
       const convId = pm.get('conversationId')
       if (convId) {
@@ -138,6 +156,89 @@ export class ChatComponent implements OnDestroy {
   ngOnDestroy() {}
 
   // -------------------------------------------------------------------------
+  // Scroll
+  // -------------------------------------------------------------------------
+
+  onScrollContainer(event: Event): void {
+    const el = event.target as HTMLElement
+    this.autoScrollEnabled.set(el.scrollHeight - el.scrollTop - el.clientHeight < 50)
+  }
+
+  scrollToBottom(): void {
+    const el = this._scrollEl?.nativeElement
+    if (el) {
+      el.scrollTop = el.scrollHeight
+    }
+    this.autoScrollEnabled.set(true)
+  }
+
+  // -------------------------------------------------------------------------
+  // Tool result parsing helpers
+  // -------------------------------------------------------------------------
+
+  parseGrepResult(content: string): {
+    files: { name: string; lines: { no: number; text: string; match: boolean }[] }[]
+    pattern: string
+    total: number
+    truncated: boolean
+  } | null {
+    try {
+      const r = JSON.parse(content)
+      if (r.tool !== 'grep_files' || !Array.isArray(r.matches)) return null
+      const map = new Map<string, { no: number; text: string; match: boolean }[]>()
+      for (const m of r.matches) {
+        if (!map.has(m.file)) map.set(m.file, [])
+        map.get(m.file)!.push({ no: m.line, text: m.content, match: !!m.match })
+      }
+      return {
+        files: [...map.entries()].map(([name, lines]) => ({ name, lines })),
+        pattern: r.pattern ?? '',
+        total: r.total ?? 0,
+        truncated: !!r.truncated,
+      }
+    } catch {
+      return null
+    }
+  }
+
+  formatSimpleToolResult(content: string): { icon: string; text: string } | null {
+    try {
+      const r = JSON.parse(content)
+      if (r.tool !== 'write_file' && r.tool !== 'edit_file') return null
+      const icon = r.status === 'success' ? '✓' : '✗'
+      const msg = r.message ? ` — ${r.message}` : ''
+      return { icon, text: `${r.tool}: ${r.path ?? ''}${msg}` }
+    } catch {
+      return null
+    }
+  }
+
+  formatShellResult(content: string): { icon: string; output: string } | null {
+    try {
+      const r = JSON.parse(content)
+      if (r.tool !== 'run_shell') return null
+      const ok = r.status === 'success'
+      const icon = ok ? '✓ exit 0' : '✗ exit 1'
+      const output = ok ? (r.output ?? '') : (r.error?.message ?? '')
+      return { icon, output }
+    } catch {
+      return null
+    }
+  }
+
+  grepHeaderSuffix(content: string, compressed: string | null | undefined): string {
+    if (compressed) return ''
+    try {
+      const r = JSON.parse(content)
+      if (r.tool !== 'grep_files' || r.total == null) return ''
+      const n: number = r.total
+      return ` → ${n} ${n === 1 ? 'match' : 'matches'}`
+    } catch {
+      return ''
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // User actions — all delegated to ChatService
   // -------------------------------------------------------------------------
 
@@ -147,8 +248,7 @@ export class ChatComponent implements OnDestroy {
     const input = this.currentInput().trim()
     if (!input) return
     this.currentInput.set('')
-
-    const settings = this.chatSvc.currentConversationSettings()
+    this.autoScrollEnabled.set(true)
     this.chatSvc.startAgentRun(input)
   }
 
@@ -173,11 +273,13 @@ export class ChatComponent implements OnDestroy {
 
   selectConversation(conv: Conversation | undefined): void {
     this.drawerOpen.set(false)
+    this.autoScrollEnabled.set(true)
     this.chatSvc.selectConversation(conv)
   }
 
   startNewChat(): void {
     this.drawerOpen.set(false)
+    this.autoScrollEnabled.set(true)
     this.chatSvc.startNewChat()
   }
 

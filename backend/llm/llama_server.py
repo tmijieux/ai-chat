@@ -21,6 +21,7 @@ LLAMA_TOKENIZE_URL = f"{LLAMA_BASE_URL}/tokenize"
 LLAMA_HEALTH_URL = f"{LLAMA_BASE_URL}/health"
 LLAMA_SERVER_EXE = str(Path.home() / "ai/llama.cpp/build/bin/Release/llama-server.exe")
 GGUF_PATH = str(Path.home() / "ai/models/unsloth/Qwen3.5-9B-UD-Q3_K_XL.gguf")
+MMPROJ_PATH = str(Path.home() / "ai/models/unsloth/mmproj-F16.gguf")
 CTX_LIMIT = 2**15 # 14 -> 16K, 15 -> 32K, 16 -> 65k
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,7 @@ class LlamaServerBackend(LLMBackend):
             [
                 LLAMA_SERVER_EXE,
                 "-m", GGUF_PATH,
+                "--mmproj", MMPROJ_PATH,
                 "-c", str(CTX_LIMIT),
                 "-ngl", "99",
                 "--port", "8080",

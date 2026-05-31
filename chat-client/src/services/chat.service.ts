@@ -461,6 +461,7 @@ export class ChatService {
             tool_name: event.tool_name ?? '',
             args: event.arguments ?? {},
             preview: event.preview ?? '',
+            diff_lines: event.diff_lines,
             confirmed: null,
           },
         ])

@@ -1,3 +1,5 @@
+import difflib
+import re as _re
 from pathlib import Path
 from .base import BaseTool, tool_error
 from agent.file_utils import file_in_directory, resolve_workspace_path
@@ -76,8 +78,36 @@ class EditFileTool(BaseTool):
         if old_string not in current_content:
             return tool_error(self.name, "old_string not found in file")
 
+        idx = current_content.find(old_string)
+
+        diff_lines = None
+        if not replace_all:
+            start_line = current_content[:idx].count('\n') + 1
+            old_sl = old_string.splitlines(True)
+            new_sl = new_string.splitlines(True)
+            raw_diff = list(difflib.unified_diff(old_sl, new_sl, n=3, lineterm=''))
+            if raw_diff:
+                diff_lines = []
+                cur_old = start_line
+                for raw in raw_diff:
+                    if raw.startswith('---') or raw.startswith('+++'):
+                        continue
+                    if raw.startswith('@@'):
+                        m = _re.match(r'@@ -(\d+)', raw)
+                        if m:
+                            cur_old = start_line + int(m.group(1)) - 1
+                        diff_lines.append({'type': 'header', 'text': raw})
+                    elif raw.startswith('-'):
+                        diff_lines.append({'type': 'removed', 'line': cur_old, 'text': raw[1:]})
+                        cur_old += 1
+                    elif raw.startswith('+'):
+                        diff_lines.append({'type': 'added', 'line': None, 'text': raw[1:]})
+                    else:
+                        diff_lines.append({'type': 'context', 'line': cur_old, 'text': raw[1:]})
+                        cur_old += 1
+
         preview = self.make_validation_text_for_user_confirmation(args)
-        approved, user_msg = await session.request_confirm(f"edit-{path}", self.name, args, preview)
+        approved, user_msg = await session.request_confirm(f"edit-{path}", self.name, args, preview, diff_lines=diff_lines)
         if not approved:
             return tool_error(self.name, "User aborted the edit", user_message=user_msg)
 
@@ -85,7 +115,6 @@ class EditFileTool(BaseTool):
             if replace_all:
                 new_content = current_content.replace(old_string, new_string)
             else:
-                idx = current_content.find(old_string)
                 new_content = current_content[:idx] + new_string + current_content[idx + len(old_string):]
             absolute_path.write_text(new_content, encoding="utf-8")
             return {"tool": self.name, "status": "success", "path": str(absolute_path), "message": f"Edition succeed"}

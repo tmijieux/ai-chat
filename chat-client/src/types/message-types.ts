@@ -129,6 +129,12 @@ export type AgentEventType =
   | 'done'
   | 'error'
 
+export type DiffLine = {
+  type: 'added' | 'removed' | 'context' | 'header'
+  text: string
+  line?: number | null
+}
+
 export type AgentEvent = {
   type: AgentEventType
   content?: string
@@ -136,6 +142,7 @@ export type AgentEvent = {
   tool_name?: string
   arguments?: Record<string, unknown>
   preview?: string
+  diff_lines?: DiffLine[]
   prompt_tokens?: number
   response_tokens?: number
   message?: string
@@ -198,6 +205,7 @@ export type DisplayMessage =
       tool_name: string
       args: Record<string, unknown>
       preview: string
+      diff_lines?: DiffLine[]
       /** null = awaiting response, true/false = confirmed/rejected */
       confirmed: boolean | null
     } & SiblingMeta)

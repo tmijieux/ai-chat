@@ -24,16 +24,20 @@ class AgentSession:
         await self.outbound.put(event)
 
     async def request_confirm(
-        self, tool_id: str, tool_name: str, arguments: dict, preview: str
+        self, tool_id: str, tool_name: str, arguments: dict, preview: str,
+        diff_lines: list | None = None,
     ) -> tuple[bool, str | None]:
         """Emit a confirmation request and suspend until the client responds."""
-        await self.emit({
+        event: dict = {
             "type": "tool_confirm",
             "tool_id": tool_id,
             "tool_name": tool_name,
             "arguments": arguments,
             "preview": preview,
-        })
+        }
+        if diff_lines is not None:
+            event["diff_lines"] = diff_lines
+        await self.emit(event)
         future: asyncio.Future[tuple[bool, str | None]] = asyncio.get_running_loop().create_future()
         self._pending_confirms[tool_id] = future
         return await future

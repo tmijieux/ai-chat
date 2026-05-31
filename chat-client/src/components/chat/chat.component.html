@@ -61,7 +61,7 @@
 <!-- =========================
    MAIN CHAT AREA
    ========================= -->
-<main class="flex flex-col flex-grow bg-main h-full">
+<main class="flex flex-col flex-grow bg-main h-full p-relative">
   <!-- Token status bar -->
   <div class="p-2 border-b bg-gray-100 flex justify-between items-center gap-4">
     <span class="font-medium text-gray-700"
@@ -79,7 +79,7 @@
     </div>
   </div>
 
-  <div class="flex-grow v-scroll p-6 flex flex-col gap-6 items-center">
+  <div #scrollContainer class="flex-grow v-scroll p-6 flex flex-col gap-6 items-center p-relative" (scroll)="onScrollContainer($event)">
     <!-- system prompt bubble -->
     @let prompt = activePrompt();
     @if (!!prompt) {
@@ -215,30 +215,47 @@
 
           <!-- Tool confirmation card -->
           @if (msg.kind === 'tool_confirm') {
-            <div
-              class="w-full max-w-2xl border border-amber-400 bg-amber-50 rounded-lg p-4 shadow-md"
-            >
+            <div class="tool-confirm-card">
               <div class="flex items-center gap-2 mb-2">
-                <span class="font-semibold text-amber-800">Tool request:</span>
-                <code class="bg-amber-100 px-2 py-0.5 rounded text-amber-900 text-sm">{{
-                  msg.tool_name
-                }}</code>
+                <span class="tool-confirm-label">Tool request:</span>
+                <code class="tool-confirm-tool-name">{{ msg.tool_name }}</code>
                 @if (msg.confirmed === true) {
-                  <span class="ml-auto text-green-600 text-sm font-medium">Approved</span>
+                  <span class="ml-auto text-sm font-medium" style="color:#4ade80">Approved</span>
                 }
                 @if (msg.confirmed === false) {
-                  <span class="ml-auto text-red-600 text-sm font-medium">Rejected</span>
+                  <span class="ml-auto text-sm font-medium" style="color:#f87171">Rejected</span>
                 }
               </div>
-              <pre
-                class="text-xs bg-white border border-amber-200 rounded p-2 overflow-auto max-h-40 whitespace-pre-wrap"
-                >{{ msg.preview }}</pre
-              >
+              @if (msg.diff_lines && msg.diff_lines.length > 0) {
+                <div class="diff-block">
+                  @for (dl of msg.diff_lines; track $index) {
+                    @if (dl.type === 'header') {
+                      <div class="diff-line diff-header">
+                        <span class="diff-lineno"></span><span class="diff-op"> </span>{{ dl.text }}
+                      </div>
+                    } @else if (dl.type === 'removed') {
+                      <div class="diff-line diff-removed">
+                        <span class="diff-lineno">{{ dl.line }}</span><span class="diff-op">-</span>{{ dl.text }}
+                      </div>
+                    } @else if (dl.type === 'added') {
+                      <div class="diff-line diff-added">
+                        <span class="diff-lineno"></span><span class="diff-op">+</span>{{ dl.text }}
+                      </div>
+                    } @else {
+                      <div class="diff-line diff-context">
+                        <span class="diff-lineno">{{ dl.line }}</span><span class="diff-op"> </span>{{ dl.text }}
+                      </div>
+                    }
+                  }
+                </div>
+              } @else {
+                <pre class="tool-confirm-preview">{{ msg.preview }}</pre>
+              }
               @if (msg.confirmed === null) {
                 @if (rejectingToolId() === msg.tool_id) {
                   <div class="mt-3 flex flex-col gap-2">
                     <textarea
-                      class="w-full bg-white border border-amber-300 rounded px-3 py-2 text-sm text-gray-800 resize-none"
+                      class="field"
                       rows="2"
                       placeholder="Reason for rejection (optional)…"
                       [value]="rejectReason()"
@@ -247,13 +264,13 @@
                     <div class="flex gap-2">
                       <button
                         (click)="sendRejection(msg.tool_id)"
-                        class="px-4 py-1.5 bg-red-500 hover:bg-red-600 text-white text-sm rounded transition-all"
+                        class="btn btn-danger text-sm"
                       >
                         Send rejection
                       </button>
                       <button
                         (click)="rejectingToolId.set(null)"
-                        class="px-4 py-1.5 text-gray-600 hover:text-gray-800 text-sm rounded transition-all"
+                        class="btn btn-ghost text-sm"
                       >
                         Cancel
                       </button>
@@ -263,13 +280,13 @@
                   <div class="flex gap-2 mt-3">
                     <button
                       (click)="confirmTool(msg.tool_id, true)"
-                      class="px-4 py-1.5 bg-green-600 hover:bg-green-700 text-white text-sm rounded transition-all"
+                      class="btn btn-primary text-sm"
                     >
                       Approve
                     </button>
                     <button
                       (click)="startReject(msg.tool_id)"
-                      class="px-4 py-1.5 bg-red-500 hover:bg-red-600 text-white text-sm rounded transition-all"
+                      class="btn btn-danger text-sm"
                     >
                       Reject
                     </button>
@@ -292,25 +309,64 @@
               <app-collapsible-bubble wrapperClass="bg-card border-card">
                 <span header>
                   @if (msg.log_message) {
-                    <code class="bg-gray-200 px-1 rounded text-xs">{{ msg.log_message }}</code>
+                    <code class="tool-result-label">{{ msg.log_message }}{{ grepHeaderSuffix(msg.content, msg.compressed_summary) }}</code>
                   } @else {
                     Tool result
                     @if (msg.tool_name) {
-                      : <code class="bg-gray-200 px-1 rounded">{{ msg.tool_name }}</code>
+                      : <code class="tool-result-label">{{ msg.tool_name }}</code>
                     }
                   }
                   @if (msg.context_excluded) {
                     @if (msg.compressed_summary) {
-                      <span class="ml-2 text-xs text-amber-500 italic">compressed</span>
+                      <span class="ml-2 text-xs text-warning italic">compressed</span>
                     } @else {
-                      <span class="ml-2 text-xs text-gray-400 italic">excluded from context</span>
+                      <span class="ml-2 text-xs text-muted italic">excluded from context</span>
                     }
                   }
                 </span>
-                <pre
-                  class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-200"
-                  >{{ msg.compressed_summary ?? msg.content }}</pre
-                >
+                @if (msg.compressed_summary) {
+                  <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-200">{{ msg.compressed_summary }}</pre>
+                } @else {
+                  @let grep = parseGrepResult(msg.content);
+                  @let simple = formatSimpleToolResult(msg.content);
+                  @let shell = formatShellResult(msg.content);
+                  @if (grep) {
+                    <div class="grep-result border-t border-gray-200">
+                      @if (grep.total === 0) {
+                        <div class="grep-truncated p-3">No matches</div>
+                      } @else {
+                        @for (file of grep.files; track file.name) {
+                          <div class="grep-file-name">{{ file.name }}</div>
+                          @for (line of file.lines; track line.no) {
+                            <div class="grep-line" [class.grep-match]="line.match">
+                              <span class="grep-lineno">{{ line.no }}</span>
+                              <span class="grep-sep">|</span>
+                              <span class="grep-text">{{ line.text }}</span>
+                            </div>
+                          }
+                        }
+                        @if (grep.truncated) {
+                          <div class="grep-truncated">… truncated ({{ grep.total }} total matches)</div>
+                        }
+                      }
+                    </div>
+                  } @else if (simple) {
+                    <div class="tool-result-simple border-t border-gray-200">
+                      <span class="tool-result-icon">{{ simple.icon }}</span> {{ simple.text }}
+                    </div>
+                  } @else if (shell) {
+                    <div class="border-t border-gray-200">
+                      <div class="tool-result-simple">
+                        <span class="tool-result-icon">{{ shell.icon }}</span>
+                      </div>
+                      @if (shell.output) {
+                        <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap">{{ shell.output }}</pre>
+                      }
+                    </div>
+                  } @else {
+                    <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-200">{{ msg.content }}</pre>
+                  }
+                }
               </app-collapsible-bubble>
               @if (msg.token_meta) {
                 <div class="p-absolute bottom-0 right-0 z-50">
@@ -372,7 +428,13 @@
         </div>
       </div>
     }
+
   </div>
+
+  <!-- Jump-to-bottom button (floats above input area) -->
+  @if (!autoScrollEnabled()) {
+    <button class="scroll-to-bottom-btn" (click)="scrollToBottom()" title="Jump to bottom">↓</button>
+  }
 
   <!-- Input area -->
   <div class="p-6 border-t bg-white">
