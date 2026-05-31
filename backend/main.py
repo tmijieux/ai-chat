@@ -1,3 +1,4 @@
+import base64
 import datetime
 import uuid
 import logging
@@ -6,7 +7,7 @@ import asyncio
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, Form
+from fastapi import FastAPI, Depends, HTTPException, Response, WebSocket, WebSocketDisconnect, UploadFile, Form
 from sqlalchemy import select, delete
 from database import init_db, get_db_session, AsyncSession
 import loaders as ld
@@ -171,7 +172,7 @@ async def _build_inference_context(
     prompt_id: str | None,
     sess: AsyncSession,
 ) -> list[dict]:
-    """Build the message list sent to Ollama. Prepends system prompt from DB if prompt_id given."""
+    """Build the message list sent to the LLM. Prepends system prompt from DB if prompt_id given."""
     messages: list[dict] = []
     if prompt_id is not None:
         p = (
@@ -181,6 +182,19 @@ async def _build_inference_context(
         ).first()
         if p is not None:
             messages.append({"role": "system", "content": p.content})
+
+    # Batch-fetch image attachments for all branch messages
+    branch_ids = [m.id for m in branch]
+    img_rows = (await sess.execute(
+        select(db.MessageImageAttachment, db.Image)
+        .join(db.Image, db.MessageImageAttachment.image_id == db.Image.id)
+        .where(db.MessageImageAttachment.message_id.in_(branch_ids))
+        .order_by(db.MessageImageAttachment.position)
+    )).all() if branch_ids else []
+    images_by_msg: dict[str, list] = {}
+    for att, img in img_rows:
+        images_by_msg.setdefault(att.message_id, []).append(img)
+
     for m in branch:
         if m.context_excluded:
             if m.compressed_summary:
@@ -197,7 +211,14 @@ async def _build_inference_context(
             continue
         if m.content is None or m.content.strip() == "":
             continue
-        messages.append({"role": m.role, "content": m.content})
+        imgs = images_by_msg.get(m.id, [])
+        if imgs:
+            content: list[dict] = [{"type": "text", "text": m.content}]
+            for img in imgs:
+                content.append({"type": "image_url", "image_url": {"url": f"data:{img.mime_type};base64,{img.data}"}})
+            messages.append({"role": m.role, "content": content})
+        else:
+            messages.append({"role": m.role, "content": m.content})
     return messages
 
 
@@ -233,7 +254,27 @@ def _msg_dict(m: db.Message) -> dict:
     }
 
 
-def _enrich_branch(path: list[db.Message], all_msgs: list[db.Message]) -> list[dict]:
+async def _fetch_images_by_msg(sess: AsyncSession, msg_ids: list[str]) -> dict[str, list[dict]]:
+    """Return {message_id: [{id, mime_type}, ...]} for all given message IDs."""
+    if not msg_ids:
+        return {}
+    rows = (await sess.execute(
+        select(db.MessageImageAttachment, db.Image)
+        .join(db.Image, db.MessageImageAttachment.image_id == db.Image.id)
+        .where(db.MessageImageAttachment.message_id.in_(msg_ids))
+        .order_by(db.MessageImageAttachment.position)
+    )).all()
+    result: dict[str, list[dict]] = {}
+    for att, img in rows:
+        result.setdefault(att.message_id, []).append({"id": img.id, "mime_type": img.mime_type})
+    return result
+
+
+def _enrich_branch(
+    path: list[db.Message],
+    all_msgs: list[db.Message],
+    images_by_msg: dict[str, list[dict]] | None = None,
+) -> list[dict]:
     """Return _msg_dict for each message in path, enriched with sibling navigation metadata."""
     children_by_parent: dict[str | None, list[db.Message]] = {}
     for m in all_msgs:
@@ -241,6 +282,7 @@ def _enrich_branch(path: list[db.Message], all_msgs: list[db.Message]) -> list[d
     for siblings in children_by_parent.values():
         siblings.sort(key=lambda m: m.created_at)
 
+    images = images_by_msg or {}
     result = []
     for m in path:
         siblings = children_by_parent.get(m.parent_id, [m])
@@ -248,6 +290,7 @@ def _enrich_branch(path: list[db.Message], all_msgs: list[db.Message]) -> list[d
         count = len(siblings)
         result.append({
             **_msg_dict(m),
+            "images": images.get(m.id, []),
             "sibling_count": count,
             "sibling_index": idx + 1,
             "prev_sibling_id": siblings[idx - 1].id if idx > 0 else None,
@@ -361,9 +404,10 @@ async def set_active_branch(
     leaf_id = _find_deepest_leaf(all_msgs, body.message_id)
     conv.active_message_id = leaf_id
     path = _build_active_branch_path(all_msgs, leaf_id)
+    images_by_msg = await _fetch_images_by_msg(sess, [m.id for m in path])
     return {
         "active_message_id": leaf_id,
-        "messages": _enrich_branch(path, all_msgs),
+        "messages": _enrich_branch(path, all_msgs, images_by_msg),
     }
 
 
@@ -387,7 +431,8 @@ async def get_conversation_messages(
         ).all()
     )
     path = _build_active_branch_path(all_msgs, conv.active_message_id)
-    return _enrich_branch(path, all_msgs)
+    images_by_msg = await _fetch_images_by_msg(sess, [m.id for m in path])
+    return _enrich_branch(path, all_msgs, images_by_msg)
 
 
 @app.get("/api/conversations/{id}/tree")
@@ -456,6 +501,8 @@ async def add_message(
             log_message=message.log_message,
         )
     )
+    for position, image_id in enumerate(message.image_ids):
+        sess.add(db.MessageImageAttachment(message_id=msg_id, image_id=image_id, position=position))
     conv.active_message_id = msg_id
     await sess.flush()
     return {"id": msg_id, "parent_id": parent_id}
@@ -498,6 +545,12 @@ async def branch_message(
             role=original.role,
         )
     )
+    # Copy image attachments from the original message to the new branch
+    orig_atts = (await sess.scalars(
+        select(db.MessageImageAttachment).where(db.MessageImageAttachment.message_id == original.id)
+    )).all()
+    for att in orig_atts:
+        sess.add(db.MessageImageAttachment(message_id=new_id, image_id=att.image_id, position=att.position))
     conv = (
         await sess.scalars(
             select(db.Conversation).where(
@@ -561,6 +614,7 @@ async def delete_message_branch(
                     new_active = _find_deepest_leaf(remaining, other_roots[0])
             conv.active_message_id = new_active
 
+        await sess.execute(delete(db.MessageImageAttachment).where(db.MessageImageAttachment.message_id.in_(list(to_delete))))
         await sess.execute(delete(db.Message).where(db.Message.id.in_(list(to_delete))))
         return {"deleted": list(to_delete)}
     else:
@@ -582,8 +636,36 @@ async def delete_message_branch(
                 new_active = next((m.id for m in remaining if m.parent_id is None), None)
             conv.active_message_id = new_active
 
+        await sess.execute(delete(db.MessageImageAttachment).where(db.MessageImageAttachment.message_id == msg_id))
         await sess.execute(delete(db.Message).where(db.Message.id == msg_id))
         return {"deleted": [msg_id]}
+
+
+# ---------------------------------------------------------------------------
+# Images
+# ---------------------------------------------------------------------------
+
+_ALLOWED_IMAGE_MIME = {"image/jpeg", "image/png", "image/webp"}
+
+
+@app.post("/api/images")
+async def upload_image(file: UploadFile, sess: AsyncSession = Depends(get_db_session)):
+    if file.content_type not in _ALLOWED_IMAGE_MIME:
+        raise HTTPException(415, f"Unsupported image type: {file.content_type}")
+    data = await file.read()
+    encoded = base64.b64encode(data).decode("ascii")
+    image_id = str(uuid.uuid4())
+    sess.add(db.Image(id=image_id, mime_type=file.content_type, data=encoded, created_at=_now()))
+    await sess.flush()
+    return {"id": image_id, "mime_type": file.content_type}
+
+
+@app.get("/api/images/{image_id}")
+async def get_image(image_id: str, sess: AsyncSession = Depends(get_db_session)):
+    img = await sess.get(db.Image, image_id)
+    if img is None:
+        raise HTTPException(404)
+    return Response(content=base64.b64decode(img.data), media_type=img.mime_type)
 
 
 # ---------------------------------------------------------------------------
@@ -749,6 +831,11 @@ async def count_conversation_tokens(id: str, sess: AsyncSession = Depends(get_db
     tool_names = settings.active_tool_names if conv.settings is not None else list(TOOL_REGISTRY.keys())
     tools = get_ollama_tool_list(tool_names)
     token_count_value = await backend.count_tokens(messages, tools)
+
+    # Add 512 estimated tokens per image attachment across the branch
+    images_by_msg = await _fetch_images_by_msg(sess, [m.id for m in branch])
+    image_token_estimate = sum(len(imgs) for imgs in images_by_msg.values()) * 512
+    token_count_value += image_token_estimate
 
     last_id: str | None = None
     if branch:

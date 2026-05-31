@@ -266,20 +266,24 @@ export class ChatService {
   // Agentic chat
   // -------------------------------------------------------------------------
 
-  startAgentRun(input: string): void {
+  startAgentRun(input: string, imageIds: string[] = []): void {
     const userMsg: DisplayMessage = { kind: 'user', id: crypto.randomUUID(), content: input }
     this._messages.update((msgs) => [...msgs, userMsg])
     this._promptTokens.set(0)
 
     const persist = !this._conversation
-      ? this._createConversation(userMsg)
-      : this._addUserMessageToDb(userMsg)
+      ? this._createConversation(userMsg, imageIds)
+      : this._addUserMessageToDb(userMsg, imageIds)
 
     persist.then(() => {
       const convId = this._conversationId()
       this._subscribeToAgentEvents(userMsg.id)
       this.agentSvc.start(input, convId, userMsg.id)
     })
+  }
+
+  uploadImage(file: File) {
+    return this.api.upload_image(file)
   }
 
   confirmTool(toolId: string, approved: boolean, reason?: string): void {
@@ -600,6 +604,7 @@ export class ChatService {
           kind: 'user',
           id: m.id,
           content: m.content,
+          images: m.images,
           token_count: m.token_count,
           token_delta: m.token_delta,
           context_excluded: m.context_excluded,
@@ -665,7 +670,7 @@ export class ChatService {
   // Private: DB persistence helpers
   // -------------------------------------------------------------------------
 
-  private async _createConversation(userMsg: { id: string; content: string }): Promise<void> {
+  private async _createConversation(userMsg: { id: string; content: string }, imageIds: string[] = []): Promise<void> {
     const title = userMsg.content.substring(0, 20)
     const conversation = await firstValueFrom(this.api.post_conversation(title))
     this._conversation = conversation
@@ -684,11 +689,12 @@ export class ChatService {
         id: userMsg.id,
         role: 'user',
         content: userMsg.content,
+        ...(imageIds.length > 0 ? { image_ids: imageIds } : {}),
       }),
     )
   }
 
-  private async _addUserMessageToDb(userMsg: { id: string; content: string }): Promise<void> {
+  private async _addUserMessageToDb(userMsg: { id: string; content: string }, imageIds: string[] = []): Promise<void> {
     if (!this._conversation) {
       return
     }
@@ -697,6 +703,7 @@ export class ChatService {
         id: userMsg.id,
         role: 'user',
         content: userMsg.content,
+        ...(imageIds.length > 0 ? { image_ids: imageIds } : {}),
       }),
     )
   }

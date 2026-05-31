@@ -32,6 +32,21 @@ class Message(Base):
     log_message = column(String, nullable=True)
 
 
+class Image(Base):
+    __tablename__ = "images"
+    id = column(String, primary_key=True)
+    mime_type = column(String, nullable=False)
+    data = column(Text, nullable=False)  # base64-encoded blob
+    created_at = column(String, nullable=False)
+
+
+class MessageImageAttachment(Base):
+    __tablename__ = "message_image_attachments"
+    message_id = column(String, ForeignKey("messages.id"), primary_key=True)
+    image_id = column(String, ForeignKey("images.id"), primary_key=True)
+    position = column(Integer, nullable=False)
+
+
 class AppSettings(Base):
     __tablename__ = "app_settings"
     key = column(String, primary_key=True)

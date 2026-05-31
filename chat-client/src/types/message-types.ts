@@ -1,5 +1,14 @@
 export type Role = 'user' | 'assistant' | 'system' | 'tool'
 
+export type ImageAttachment = { id: string; mime_type: string }
+
+export type PendingImage = {
+  localUrl: string
+  uploading: boolean
+  id?: string
+  mime_type?: string
+}
+
 export type MessageForQuery = {
   role: Role
   content: string
@@ -27,6 +36,7 @@ export type Message = {
   prev_sibling_id?: string | null
   next_sibling_id?: string | null
   has_children?: boolean
+  images?: ImageAttachment[]
 }
 
 export type ApiDone =
@@ -176,6 +186,7 @@ export type DisplayMessage =
       kind: 'user'
       id: string
       content: string
+      images?: ImageAttachment[]
       token_count?: number | null
       token_delta?: number | null
       context_excluded?: boolean

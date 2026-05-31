@@ -163,7 +163,20 @@
                   </div>
                 </div>
               } @else {
-                <div class="max-w-3xl p-4 shadow-md bg-user-bubble">{{ msg.content }}</div>
+                <div class="max-w-3xl p-4 shadow-md bg-user-bubble">
+                  @if (msg.images && msg.images.length > 0) {
+                    <div class="flex gap-2 flex-wrap mb-2">
+                      @for (img of msg.images; track img.id) {
+                        <img
+                          [src]="'/api/images/' + img.id"
+                          class="max-h-48 max-w-xs rounded object-cover border border-gray-300"
+                          alt="attached image"
+                        />
+                      }
+                    </div>
+                  }
+                  {{ msg.content }}
+                </div>
               }
               @if (msg.token_meta) {
                 <div class="p-absolute bottom-0 right-0 z-50">
@@ -438,11 +451,32 @@
 
   <!-- Input area -->
   <div class="p-6 border-t bg-white">
+    <!-- Pending image thumbnail strip -->
+    @if (pendingImages().length > 0) {
+      <div class="flex gap-2 flex-wrap mb-3">
+        @for (img of pendingImages(); track img.localUrl) {
+          <div class="p-relative w-16 h-16 rounded overflow-hidden border border-gray-300">
+            <img [src]="img.localUrl" class="w-full h-full object-cover" alt="attachment" />
+            @if (img.uploading) {
+              <div class="p-absolute inset-0 bg-black-40 flex items-center justify-center text-white text-xs">↑</div>
+            }
+            <button
+              (mousedown)="$event.preventDefault()"
+              (click)="removeImage(img)"
+              class="p-absolute top-0 right-0 bg-black-60 text-white text-xs leading-none w-4 h-4 flex items-center justify-center rounded-bl"
+            >✕</button>
+          </div>
+        }
+      </div>
+    }
     <div class="flex items-end gap-3">
       <textarea
         [(ngModel)]="currentInput"
         (keydown.enter)="sendMessage($event)"
-        placeholder="Message the AI... (Shift+Enter for newline)"
+        (paste)="onPaste($event)"
+        (dragover)="onDragOver($event)"
+        (drop)="onDrop($event)"
+        placeholder="Message the AI... (Shift+Enter for newline, paste or drop images)"
         rows="1"
         class="flex-grow resize-none p-3 border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
         [disabled]="chatSvc.isLoading() || chatSvc.agentRunning()"
@@ -466,7 +500,7 @@
         </button>
         <button
           (click)="sendMessage(null)"
-          [disabled]="!currentInput().trim() || chatSvc.isLoading()"
+          [disabled]="(!currentInput().trim() && pendingImages().length === 0) || chatSvc.isLoading() || isUploading()"
           class="send-button bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-lg disabled:bg-gray-300 transition-all"
         >
           {{ chatSvc.isLoading() ? '...' : 'Send' }}

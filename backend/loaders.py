@@ -16,6 +16,7 @@ class NewMessage(BaseModel):
     token_count: int | None = None
     token_delta: int | None = None
     log_message: str | None = None
+    image_ids: list[str] = []
 
 
 class UpdateTokenCount(BaseModel):

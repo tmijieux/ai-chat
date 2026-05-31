@@ -37,7 +37,7 @@ export class ApiService {
     )
   }
 
-  post_message(conversationId: string, message: Message) {
+  post_message(conversationId: string, message: Partial<Message> & { id: string; role: string; content: string; image_ids?: string[] }) {
     return this.http.post<{ id: string; parent_id: string | null }>(
       `${BASE_URL}/messages`,
       message,
@@ -45,6 +45,16 @@ export class ApiService {
         params: { conversationId: conversationId },
       },
     )
+  }
+
+  upload_image(file: File) {
+    const form = new FormData()
+    form.append('file', file, file.name)
+    return this.http.post<{ id: string; mime_type: string }>(`${BASE_URL}/images`, form)
+  }
+
+  get_image(imageId: string) {
+    return this.http.get(`${BASE_URL}/images/${imageId}`, { responseType: 'blob' })
   }
 
   delete_conversation(conversationId: string) {

@@ -232,6 +232,11 @@ button {
 .z-modal { z-index: 200; }
 .w-80 { width: 320px; }
 .bg-black-40 { background: rgba(0, 0, 0, 0.4); }
+.bg-black-60 { background: rgba(0, 0, 0, 0.6); }
+.w-4 { width: 1rem; }
+.h-4 { height: 1rem; }
+.rounded-bl { border-bottom-left-radius: 0.25rem; }
+.leading-none { line-height: 1; }
 
 /* --- 7. TYPOGRAPHY UTILITIES --- */
 .text-xs {

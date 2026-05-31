@@ -1,11 +1,13 @@
 import { Component, computed, effect, ElementRef, HostListener, inject, model, OnDestroy, signal, untracked, ViewChild } from '@angular/core'
 import { CommonModule } from '@angular/common'
 import { FormsModule } from '@angular/forms'
+import { firstValueFrom } from 'rxjs'
 import { ChatService } from '../../services/chat.service'
 import {
   Conversation,
   ConversationSettings,
   DisplayMessageWithMeta,
+  PendingImage,
   TokenMeta,
 } from '../../types/message-types'
 import { ActivatedRoute, RouterLink } from '@angular/router'
@@ -50,6 +52,10 @@ export class ChatComponent implements OnDestroy {
   readonly isTranscribing = signal(false)
   private _mediaRecorder: MediaRecorder | null = null
   private _audioChunks: Blob[] = []
+
+  // Image attachments
+  readonly pendingImages = signal<PendingImage[]>([])
+  readonly isUploading = computed(() => this.pendingImages().some((p) => p.uploading))
 
   // Auto-scroll
   @ViewChild('scrollContainer') private _scrollEl!: ElementRef<HTMLElement>
@@ -246,10 +252,60 @@ export class ChatComponent implements OnDestroy {
     if (event && (event as KeyboardEvent).shiftKey) return
     event?.preventDefault()
     const input = this.currentInput().trim()
-    if (!input) return
+    if (!input && this.pendingImages().length === 0) return
+    const imageIds = this.pendingImages().filter((p) => !p.uploading && p.id).map((p) => p.id!)
     this.currentInput.set('')
+    this.pendingImages.set([])
     this.autoScrollEnabled.set(true)
-    this.chatSvc.startAgentRun(input)
+    this.chatSvc.startAgentRun(input, imageIds)
+  }
+
+  attachImages(files: FileList | File[]): void {
+    const arr = Array.from(files)
+    for (const file of arr) {
+      if (!file.type.startsWith('image/')) continue
+      const localUrl = URL.createObjectURL(file)
+      const entry: PendingImage = { localUrl, uploading: true }
+      this.pendingImages.update((imgs) => [...imgs, entry])
+      firstValueFrom(this.chatSvc.uploadImage(file)).then(({ id, mime_type }) => {
+        this.pendingImages.update((imgs) =>
+          imgs.map((img) => (img.localUrl === localUrl ? { ...img, id, mime_type, uploading: false } : img)),
+        )
+      }).catch(() => {
+        this.pendingImages.update((imgs) => imgs.filter((img) => img.localUrl !== localUrl))
+      })
+    }
+  }
+
+  removeImage(img: PendingImage): void {
+    URL.revokeObjectURL(img.localUrl)
+    this.pendingImages.update((imgs) => imgs.filter((i) => i.localUrl !== img.localUrl))
+  }
+
+  onPaste(event: ClipboardEvent): void {
+    const items = event.clipboardData?.items
+    if (!items) return
+    const imageFiles: File[] = []
+    for (const item of Array.from(items)) {
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile()
+        if (file) imageFiles.push(file)
+      }
+    }
+    if (imageFiles.length > 0) {
+      event.preventDefault()
+      this.attachImages(imageFiles)
+    }
+  }
+
+  onDragOver(event: DragEvent): void {
+    event.preventDefault()
+  }
+
+  onDrop(event: DragEvent): void {
+    event.preventDefault()
+    const files = event.dataTransfer?.files
+    if (files) this.attachImages(files)
   }
 
   startReject(toolId: string): void {
