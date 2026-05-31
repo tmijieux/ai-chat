@@ -9,3 +9,4 @@ pathspec # For .gitignore-style pattern matching
 tiktoken # Exact BPE tokenizer used by Qwen models
 gguf # For loading tokenizer metadata from GGUF model files
 soundfile # Audio decoding for Whisper transcription endpoint
+Pillow

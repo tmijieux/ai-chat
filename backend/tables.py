@@ -37,6 +37,8 @@ class Image(Base):
     id = column(String, primary_key=True)
     mime_type = column(String, nullable=False)
     data = column(Text, nullable=False)  # base64-encoded blob
+    width = column(Integer, nullable=True)
+    height = column(Integer, nullable=True)
     created_at = column(String, nullable=False)
 
 

@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy import event, text
+from sqlalchemy import event
 import sqlalchemy.ext.asyncio
 async_sessionmaker = sqlalchemy.ext.asyncio.async_sessionmaker
 
@@ -34,7 +34,6 @@ AsyncSessionLocal = async_sessionmaker(
 async def init_db():
     """Creates all defined tables if they don't exist."""
     async with engine.begin() as conn:
-        # This creates all tables defined in the Base
         await conn.run_sync(Base.metadata.create_all)
 
 # Helper function to get an async session

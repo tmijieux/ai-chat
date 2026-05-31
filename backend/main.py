@@ -1,5 +1,7 @@
 import base64
 import datetime
+import io
+import math
 import uuid
 import logging
 import json
@@ -672,6 +674,19 @@ async def delete_message_branch(
 
 _ALLOWED_IMAGE_MIME = {"image/jpeg", "image/png", "image/webp"}
 
+# Qwen3.5-9B: patch_size=16, spatial_merge_size=2 → 32px per token side
+_IMAGE_PIXELS_PER_TOKEN = 32 * 32
+
+
+def _image_dimensions(data: bytes) -> tuple[int, int]:
+    from PIL import Image as PILImage
+    with PILImage.open(io.BytesIO(data)) as img:
+        return img.width, img.height
+
+
+def _image_token_count(width: int, height: int) -> int:
+    return math.ceil(width / 32) * math.ceil(height / 32)
+
 
 @app.post("/api/images")
 async def upload_image(file: UploadFile, sess: AsyncSession = Depends(get_db_session)):
@@ -679,8 +694,9 @@ async def upload_image(file: UploadFile, sess: AsyncSession = Depends(get_db_ses
         raise HTTPException(415, f"Unsupported image type: {file.content_type}")
     data = await file.read()
     encoded = base64.b64encode(data).decode("ascii")
+    width, height = _image_dimensions(data)
     image_id = str(uuid.uuid4())
-    sess.add(db.Image(id=image_id, mime_type=file.content_type, data=encoded, created_at=_now()))
+    sess.add(db.Image(id=image_id, mime_type=file.content_type, data=encoded, width=width, height=height, created_at=_now()))
     await sess.flush()
     return {"id": image_id, "mime_type": file.content_type}
 
@@ -857,10 +873,14 @@ async def count_conversation_tokens(id: str, sess: AsyncSession = Depends(get_db
     tools = get_ollama_tool_list(tool_names)
     token_count_value = await backend.count_tokens(messages, tools)
 
-    # Add 512 estimated tokens per image attachment across the branch
-    images_by_msg = await _fetch_images_by_msg(sess, [m.id for m in branch])
-    image_token_estimate = sum(len(imgs) for imgs in images_by_msg.values()) * 512
-    token_count_value += image_token_estimate
+    # Add image tokens using real dimensions (patch=16, merge=2 → 32px/token side)
+    img_rows = (await sess.execute(
+        select(db.Image.width, db.Image.height)
+        .join(db.MessageImageAttachment, db.MessageImageAttachment.image_id == db.Image.id)
+        .where(db.MessageImageAttachment.message_id.in_([m.id for m in branch]))
+    )).all()
+    image_tokens = sum(_image_token_count(w or 0, h or 0) for w, h in img_rows)
+    token_count_value += image_tokens
 
     last_id: str | None = None
     if branch:
