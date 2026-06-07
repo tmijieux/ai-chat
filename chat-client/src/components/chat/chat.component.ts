@@ -12,6 +12,7 @@ import { ConversationSettingsComponent } from '../conversation-settings/conversa
 import { CollapsibleBubbleComponent } from '../collapsible-bubble/collapsible-bubble.component'
 import { MarkdownComponent } from 'ngx-markdown'
 import { ChatInputComponent } from '../chat-input/chat-input.component'
+import { AppStatusService } from '../../services/app-status.service'
 
 @Component({
   selector: 'app-chat',
@@ -31,6 +32,7 @@ import { ChatInputComponent } from '../chat-input/chat-input.component'
 export class ChatComponent implements OnDestroy {
   private route = inject(ActivatedRoute)
   readonly chatSvc = inject(ChatService)
+  readonly appStatus = inject(AppStatusService)
 
   readonly drawerOpen = signal(false)
   readonly rejectingToolId = signal<string | null>(null)

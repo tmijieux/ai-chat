@@ -100,6 +100,7 @@ async def _seed_prompts(sess: AsyncSession) -> None:
 
 
 _whisper: whisper_pipeline.WhisperPipeline | None = None
+_llm_ready: bool = False
 
 
 def _load_whisper_bg() -> None:
@@ -110,19 +111,33 @@ def _load_whisper_bg() -> None:
         logger.exception("Whisper pipeline failed to load — /api/transcribe will be unavailable")
 
 
+def _load_llm_bg() -> None:
+    global _llm_ready
+    try:
+        asyncio.run(backend.ensure_running())
+        _llm_ready = True
+        logger.info("LLM backend ready.")
+    except Exception:
+        logger.exception("LLM backend failed to start.")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await backend.ensure_running()
     await init_db()
     print("Database initialized successfully.")
     async for sess in get_db_session():
         await _seed_prompts(sess)
+    threading.Thread(target=_load_llm_bg, daemon=True).start()
     threading.Thread(target=_load_whisper_bg, daemon=True).start()
     yield
 
 
 app = FastAPI(title="LLM Chat Backend", lifespan=lifespan)
 
+
+@app.get("/api/status")
+async def get_status():
+    return {"llm": _llm_ready, "whisper": _whisper is not None}
 
 
 
@@ -1008,7 +1023,6 @@ async def transcribe_audio(
     if _whisper is None:
         raise HTTPException(503, "Whisper pipeline is still loading, try again in a moment")
     data = await audio.read()
-    Path("last_recording.webm").write_bytes(data)
     loop = asyncio.get_event_loop()
     text = await loop.run_in_executor(
         None, whisper_pipeline.transcribe, _whisper, data, language

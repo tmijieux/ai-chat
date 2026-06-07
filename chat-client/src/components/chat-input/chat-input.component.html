@@ -47,16 +47,18 @@
     } @else {
       <button
         (mousedown)="onMicMousedown($event)"
+        [disabled]="!appStatus.whisperReady()"
         class="send-button px-4 py-3 rounded-lg transition-all"
-        [class]="voiceSvc.isTranscribing() ? 'bg-yellow-400 text-white animate-pulse cursor-wait' : voiceSvc.isRecording() ? 'bg-red-500 hover:bg-red-600 text-white animate-pulse' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'"
-        [title]="voiceSvc.isTranscribing() ? 'Transcribing...' : voiceSvc.isRecording() ? 'Recording...' : 'Hold to dictate (or hold Alt)'"
+        [class]="voiceSvc.isTranscribing() ? 'bg-yellow-400 text-white animate-pulse cursor-wait' : voiceSvc.isRecording() ? 'bg-red-500 hover:bg-red-600 text-white animate-pulse' : appStatus.whisperReady() ? 'bg-gray-200 hover:bg-gray-300 text-gray-700' : 'bg-gray-100 text-gray-400 cursor-not-allowed'"
+        [title]="!appStatus.whisperReady() ? 'Speech recognition loading...' : voiceSvc.isTranscribing() ? 'Transcribing...' : voiceSvc.isRecording() ? 'Recording...' : 'Hold to dictate (or hold Alt)'"
       >
-        {{ voiceSvc.isTranscribing() ? '⏳' : '🎤' }}
+        {{ !appStatus.whisperReady() ? '⏳' : voiceSvc.isTranscribing() ? '⏳' : '🎤' }}
       </button>
       <button
         (click)="sendMessage(null)"
-        [disabled]="(!currentInput().trim() && pendingImages().length === 0) || isUploading()"
+        [disabled]="!appStatus.llmReady() || (!currentInput().trim() && pendingImages().length === 0) || isUploading()"
         class="send-button bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-lg disabled:bg-gray-300 transition-all"
+        [title]="!appStatus.llmReady() ? 'AI model loading...' : ''"
       >
         Send
       </button>

@@ -1,5 +1,7 @@
 export type Role = 'user' | 'assistant' | 'system' | 'tool'
 
+export type AppStatus = { llm: boolean; whisper: boolean }
+
 export type ImageAttachment = { id: string; mime_type: string }
 
 export type PendingImage = {

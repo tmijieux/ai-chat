@@ -1,6 +1,6 @@
 import { Injectable, inject, signal, computed } from '@angular/core'
-import { BehaviorSubject, firstValueFrom, Observable, Subscription } from 'rxjs'
-import { catchError, shareReplay, switchMap, tap } from 'rxjs/operators'
+import { BehaviorSubject, firstValueFrom, Observable, of, Subscription } from 'rxjs'
+import { catchError, retry, shareReplay, switchMap, tap } from 'rxjs/operators'
 import { throwError } from 'rxjs'
 import {
   AgentToolMeta,
@@ -141,7 +141,10 @@ export class ChatService {
         })
       }
     })
-    this.api.get_system_prompts().subscribe((p) => {
+    this.api.get_system_prompts().pipe(
+      retry({ count: 10, delay: 2000 }),
+      catchError(() => of([])),
+    ).subscribe((p) => {
       this._prompts.set(p)
       // Patch pending new-chat settings with the default prompt if none is selected yet
       if (this._conversationId() === undefined) {
@@ -154,7 +157,13 @@ export class ChatService {
         }
       }
     })
-    this.api.get_agent_tools().subscribe((response: AgentToolsResponse) => {
+    this.api.get_agent_tools().pipe(
+      retry({ count: 10, delay: 2000 }),
+      catchError(() => of(null)),
+    ).subscribe((response: AgentToolsResponse | null) => {
+      if (!response) {
+        return
+      }
       const names = response.tools.map((t) => t.name)
       this._allToolNames.set(names)
       this._allTools.set(response.tools)

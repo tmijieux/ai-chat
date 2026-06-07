@@ -5,6 +5,7 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop'
 import { firstValueFrom } from 'rxjs'
 import { ChatService } from '../../services/chat.service'
 import { VoiceDictationService } from '../../services/voice-dictation.service'
+import { AppStatusService } from '../../services/app-status.service'
 import { PendingImage } from '../../types/message-types'
 
 @Component({
@@ -17,6 +18,7 @@ import { PendingImage } from '../../types/message-types'
 export class ChatInputComponent {
   private chatSvc = inject(ChatService)
   readonly voiceSvc = inject(VoiceDictationService)
+  readonly appStatus = inject(AppStatusService)
 
   @ViewChild('textarea') private _textareaRef!: ElementRef<HTMLTextAreaElement>
 

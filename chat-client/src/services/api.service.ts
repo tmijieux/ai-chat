@@ -3,6 +3,7 @@ import {
   AgentToolMeta,
   AgentToolsResponse,
   AppSetting,
+  AppStatus,
   Conversation,
   ConversationSettings,
   Message,
@@ -160,6 +161,10 @@ export class ApiService {
       `${BASE_URL}/utils/browse-directory`,
       path ? { params: { path } } : undefined,
     )
+  }
+
+  get_status() {
+    return this.http.get<AppStatus>(`${BASE_URL}/status`)
   }
 
   post_transcribe(blob: Blob, language: string | null = null) {

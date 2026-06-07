@@ -62,6 +62,17 @@
    MAIN CHAT AREA
    ========================= -->
 <main class="flex flex-col flex-grow bg-main h-full p-relative">
+  <!-- Backend loading banner -->
+  @if (!appStatus.llmReady() || !appStatus.whisperReady()) {
+    <div class="flex items-center gap-3 px-4 py-2 bg-amber-50 border-b border-amber-200 text-sm text-amber-800">
+      <span class="animate-pulse">⏳</span>
+      <span>Loading:
+        @if (!appStatus.llmReady()) { <span class="font-medium">AI model</span> }
+        @if (!appStatus.llmReady() && !appStatus.whisperReady()) { <span> · </span> }
+        @if (!appStatus.whisperReady()) { <span class="font-medium">Speech recognition</span> }
+      </span>
+    </div>
+  }
   <!-- Token status bar -->
   <div class="p-2 border-b bg-gray-100 flex justify-between items-center gap-4">
     <span class="font-medium text-gray-700"
