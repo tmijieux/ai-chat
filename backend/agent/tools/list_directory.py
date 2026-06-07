@@ -1,4 +1,5 @@
-import subprocess
+import asyncio
+from pathlib import Path
 from .base import BaseTool, tool_error
 from agent.file_utils import file_in_directory, resolve_workspace_path
 from typing import TYPE_CHECKING
@@ -45,13 +46,27 @@ class ListDirectoryTool(BaseTool):
         absolute_path = resolve_workspace_path(path, working_directory)
         if not file_in_directory(str(absolute_path), working_directory):
             return tool_error(self.name, f"Listing outside workspace is forbidden. Workspace: {working_directory}")
-        
-        new_path = absolute_path.relative_to(working_directory)
 
-        exe = "c:\\Program Files\\Git\\usr\\bin\\find.exe"
-        cmd = [exe, str(new_path), "-maxdepth", str(maximum_depth)]
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=working_directory)
-        if proc.returncode == 0:
-            return {"tool": self.name, "path": str(new_path), "status": "success", "content": proc.stdout.decode()}
-        else:
-            return tool_error(self.name, proc.stderr.decode())
+        rel_root = absolute_path.relative_to(working_directory)
+
+        def _walk(base: Path, max_depth: int) -> str:
+            lines = [str(rel_root)]
+            def _recurse(p: Path, depth: int) -> None:
+                if depth > max_depth:
+                    return
+                try:
+                    entries = sorted(p.iterdir())
+                except PermissionError:
+                    return
+                for entry in entries:
+                    lines.append(str(entry.relative_to(Path(working_directory))))
+                    if entry.is_dir() and depth < max_depth:
+                        _recurse(entry, depth + 1)
+            _recurse(base, 1)
+            return "\n".join(lines)
+
+        try:
+            content = await asyncio.to_thread(_walk, absolute_path, maximum_depth)
+            return {"tool": self.name, "path": str(rel_root), "status": "success", "content": content}
+        except Exception as e:
+            return tool_error(self.name, str(e))

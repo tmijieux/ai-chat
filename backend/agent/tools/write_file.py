@@ -1,3 +1,4 @@
+import aiofiles
 from pathlib import Path
 from .base import BaseTool, tool_error
 from agent.file_utils import file_in_directory, resolve_workspace_path
@@ -61,9 +62,9 @@ class WriteFileTool(BaseTool):
 
         try:
             absolute_path.parent.mkdir(parents=True, exist_ok=True)
-            mode = "ab" if append else "wb"
-            with open(absolute_path, mode=mode) as f:
-                f.write(content.encode())
+            mode = "a" if append else "w"
+            async with aiofiles.open(absolute_path, mode=mode, encoding="utf-8") as f:
+                await f.write(content)
             return {"tool": self.name, "status": "success", "path": str(absolute_path)}
         except Exception as e:
             return tool_error(self.name, f"Unexpected error: {e}")

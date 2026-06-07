@@ -1,3 +1,4 @@
+import aiofiles
 import difflib
 import re as _re
 from pathlib import Path
@@ -71,7 +72,8 @@ class EditFileTool(BaseTool):
             return tool_error(self.name, f"File '{path}' does not exist or is not a regular file")
 
         try:
-            current_content = absolute_path.read_text(encoding="utf-8")
+            async with aiofiles.open(absolute_path, encoding="utf-8") as f:
+                current_content = await f.read()
         except Exception as e:
             return tool_error(self.name, f"Error reading file: {e}")
 
@@ -116,7 +118,8 @@ class EditFileTool(BaseTool):
                 new_content = current_content.replace(old_string, new_string)
             else:
                 new_content = current_content[:idx] + new_string + current_content[idx + len(old_string):]
-            absolute_path.write_text(new_content, encoding="utf-8")
-            return {"tool": self.name, "status": "success", "path": str(absolute_path), "message": f"Edition succeed"}
+            async with aiofiles.open(absolute_path, "w", encoding="utf-8") as f:
+                await f.write(new_content)
+            return {"tool": self.name, "status": "success", "path": str(absolute_path)}
         except Exception as e:
             return tool_error(self.name, f"Unexpected error: {e}")

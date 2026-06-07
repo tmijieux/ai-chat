@@ -1,5 +1,5 @@
+import asyncio
 import shutil
-import subprocess
 import sys
 from .base import BaseTool, tool_error
 from typing import TYPE_CHECKING
@@ -78,20 +78,22 @@ class RunShellTool(BaseTool):
                 bash_exe = shutil.which("bash")
                 if bash_exe is None:
                     return tool_error(self.name, "Git Bash not found on PATH. Install Git for Windows or use shell_mode='cmd'.")
-                proc = subprocess.run(
-                    [bash_exe, "-c", command],
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    text=True, cwd=working_directory,
+                proc = await asyncio.create_subprocess_exec(
+                    bash_exe, "-c", command,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                    cwd=working_directory,
                 )
             else:
-                proc = subprocess.run(
-                    command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    text=True, cwd=working_directory,
+                proc = await asyncio.create_subprocess_shell(
+                    command,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                    cwd=working_directory,
                 )
 
+            stdout, stderr = await proc.communicate()
             if proc.returncode == 0:
-                return {"tool": self.name, "status": "success", "command": command, "output": proc.stdout}
+                return {"tool": self.name, "status": "success", "command": command, "output": stdout.decode()}
             else:
-                return {"tool": self.name, "status": "error", "command": command, "error": {"message": proc.stderr}}
+                return {"tool": self.name, "status": "error", "command": command, "error": {"message": stderr.decode()}}
         except Exception as e:
             return tool_error(self.name, f"Unexpected error: {e}")

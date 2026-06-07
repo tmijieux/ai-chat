@@ -1,3 +1,4 @@
+import asyncio
 import re
 from pathlib import Path
 from .base import BaseTool, tool_error
@@ -86,9 +87,10 @@ class GrepFilesTool(BaseTool):
             return tool_error(self.name, f"Searching outside workspace is forbidden. Workspace: {working_directory}")
 
         spec = None if include_ignored else load_ignore_spec(working_directory)
-        matches = []
-        total_match_count = 0
-        try:
+
+        def _do_grep() -> tuple[list, int]:
+            matches = []
+            total_match_count = 0
             for file_path in absolute_path.glob(glob_pattern):
                 if not file_path.is_file():
                     continue
@@ -124,6 +126,10 @@ class GrepFilesTool(BaseTool):
                 total_match_count += len(match_indices)
                 if total_match_count >= max_matches:
                     break
+            return matches, total_match_count
+
+        try:
+            matches, total_match_count = await asyncio.to_thread(_do_grep)
         except Exception as e:
             return tool_error(self.name, f"Error during grep: {e}")
 

@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from .base import BaseTool, tool_error
 from agent.file_utils import file_in_directory, resolve_workspace_path, load_ignore_spec, is_path_ignored
@@ -51,10 +52,12 @@ class GlobFilesTool(BaseTool):
 
         try:
             spec = None if include_ignored else load_ignore_spec(working_directory)
-            files = [
-                str(p) for p in absolute_path.glob(pattern)
-                if p.is_file() and (include_ignored or not is_path_ignored(p, working_directory, spec))
-            ]
+            files = await asyncio.to_thread(
+                lambda: [
+                    str(p) for p in absolute_path.glob(pattern)
+                    if p.is_file() and (include_ignored or not is_path_ignored(p, working_directory, spec))
+                ]
+            )
             return {"tool": self.name, "pattern": pattern, "path": path, "status": "success", "files": files, "file_count": len(files)}
         except Exception as e:
             return tool_error(self.name, f"Error during glob: {e}")

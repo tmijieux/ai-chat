@@ -1,3 +1,4 @@
+import aiofiles
 from pathlib import Path
 from .base import BaseTool, tool_error
 from agent.file_utils import file_in_directory, resolve_workspace_path
@@ -42,7 +43,8 @@ class ReadFileTool(BaseTool):
             return tool_error(self.name, f"Reading outside workspace is forbidden. Workspace: {working_directory}", path=path)
 
         try:
-            file_content = absolute_path.read_text(encoding="utf-8")
+            async with aiofiles.open(absolute_path, encoding="utf-8") as f:
+                file_content = await f.read()
             if limit and limit > 0:
                 lines = file_content.splitlines()
                 file_content = "\n".join(lines[-limit:])

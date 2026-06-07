@@ -1,3 +1,4 @@
+import asyncio
 from .base import BaseTool, tool_error
 from typing import TYPE_CHECKING
 
@@ -34,10 +35,10 @@ class SearchWebTool(BaseTool):
         preview = self.make_validation_text_for_user_confirmation(args)
         approved, user_msg = await session.request_confirm(f"search-{preview}", self.name, args, preview)
         if not approved:
-            return tool_error(self.name, "User aborted the edit", user_message=user_msg)
-                
-        results = []
-        try:
+            return tool_error(self.name, "User aborted the search", user_message=user_msg)
+
+        def _do_search() -> list:
+            results = []
             with DDGS() as ddgs:
                 for r in ddgs.text(query, max_results=max_results):
                     url = r["href"]
@@ -52,6 +53,10 @@ class SearchWebTool(BaseTool):
                         "snippet": r.get("body"),
                         "content": content,
                     })
+            return results
+
+        try:
+            results = await asyncio.to_thread(_do_search)
             return {
                 "tool": self.name,
                 "status": "success",

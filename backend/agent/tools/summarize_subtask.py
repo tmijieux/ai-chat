@@ -1,12 +1,8 @@
-import aiohttp
 from .base import BaseTool, tool_error
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from agent.agent import AgentSession
-
-OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
-MODEL_NAME = "qwen3.5:9b"
 
 
 class SummarizeSubtaskTool(BaseTool):
@@ -33,30 +29,23 @@ class SummarizeSubtaskTool(BaseTool):
         return f"SUMMARIZE for: {args.get('task', '')}"
 
     async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
+        from llm import backend
+
         task = args.get("task", "")
         content = args.get("content", "")
 
         if not task or not content:
             return tool_error(self.name, "Both 'task' and 'content' are required")
 
-        
-        system_prompt = f"Task: {task}\nProvide a concise summary of the user message focused on the task above."
+        messages = [
+            {"role": "system", "content": f"Task: {task}\nProvide a concise summary of the user message focused on the task above."},
+            {"role": "user", "content": content},
+        ]
         try:
-            async with aiohttp.ClientSession() as http:
-                async with http.post(
-                    OLLAMA_CHAT_URL,
-                    json={
-                        "model": MODEL_NAME,
-                        "messages": [
-                            {"role":"system", "content": system_prompt},
-                            {"role": "user", "content": content},
-                        ],
-                        "stream": False,
-                        "options": {"temperature": 0.1},
-                    },
-                ) as response:
-                    result = await response.json()
-                    summary = result.get("message", {}).get("content", "")
-                    return {"tool": self.name, "status": "success", "summary": summary}
+            summary = ""
+            async for event in backend.stream_completion(messages, [], temperature=0.1):
+                if event["type"] == "content":
+                    summary += event["content"]
+            return {"tool": self.name, "status": "success", "summary": summary}
         except Exception as e:
             return tool_error(self.name, f"Summarization error: {e}")
