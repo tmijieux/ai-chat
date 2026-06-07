@@ -99,14 +99,13 @@ async def _seed_prompts(sess: AsyncSession) -> None:
     await sess.commit()
 
 
-_whisper: tuple | None = None
+_whisper: whisper_pipeline.WhisperPipeline | None = None
 
 
 def _load_whisper_bg() -> None:
     global _whisper
     try:
-        enc, dec, processor, schema = whisper_pipeline.load_pipeline()
-        _whisper = (enc, dec, processor, schema)
+        _whisper = whisper_pipeline.load_pipeline()
     except Exception:
         logger.exception("Whisper pipeline failed to load — /api/transcribe will be unavailable")
 
@@ -947,9 +946,17 @@ async def _ws_receive_messages(websocket: WebSocket, session: AgentSession, agen
 
 
 _STT_CORRECTION_SYSTEM = (
-    "You are a speech-to-text correction assistant. "
-    "The user will give you a transcription that may contain misheard words — both English technical terms (filenames, commands, identifiers) and French words mangled by the STT model. "
+    "You are a speech-to-text correction assistant for a French-speaking developer using an agentic coding assistant.\n"
+    "The assistant has tools to operate on files and projects: read_file, list_directory, glob_files, grep_files, edit_file, write_file, run_shell.\n"
+    "The user dictates commands and questions in French, heavily mixed with English technical terms: "
+    "filenames, function names, variable names, class names, CLI commands, package names, git terms, framework names.\n"
+    "Common speech patterns: 'lis le fichier X', 'lance la commande X', 'modifie la fonction X dans Y', "
+    "'liste les fichiers de Z', 'fais un commit', 'installe le package X'.\n"
+    "The STT model often mishears English technical words as phonetically similar French words or nonsense. "
+    "Use semantic coherence and typical developer vocabulary to infer the intended word — "
+    "a phrase like 'lis le fichier et demi' makes no sense but 'lis le fichier README' does.\n"
     "Correct only obvious STT errors. Do not rephrase, translate, or add anything. "
+    "Do NOT sanitize, soften, or replace crude language — if the user said 'merde', keep 'merde'. Your job is dictation correction, not content moderation. "
     "Return only the corrected text, nothing else."
 )
 
@@ -996,21 +1003,27 @@ async def _correct_stt(text: str, language: str | None) -> str:
 @app.post("/api/transcribe")
 async def transcribe_audio(
     audio: UploadFile,
-    language: str | None = Form(default="fr"),
+    language: str | None = Form(default=None),
 ):
     if _whisper is None:
         raise HTTPException(503, "Whisper pipeline is still loading, try again in a moment")
     data = await audio.read()
+    Path("last_recording.webm").write_bytes(data)
     loop = asyncio.get_event_loop()
-    enc, dec, processor, schema = _whisper
     text = await loop.run_in_executor(
-        None, whisper_pipeline.transcribe, enc, dec, processor, data, language, schema
+        None, whisper_pipeline.transcribe, _whisper, data, language
     )
     logger.info("STT raw transcript: %r", text)
-    if text:
-        text = await _correct_stt(text, language)
-        logger.info("STT corrected: %r", text)
     return {"text": text}
+
+
+@app.post("/api/correct")
+async def correct_stt(req: ld.CorrectRequest):
+    if not req.text:
+        return {"text": req.text}
+    corrected = await _correct_stt(req.text, req.language)
+    logger.info("STT corrected: %r", corrected)
+    return {"text": corrected}
 
 
 @app.websocket("/api/agent/ws")

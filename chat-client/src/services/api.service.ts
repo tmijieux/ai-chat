@@ -162,12 +162,16 @@ export class ApiService {
     )
   }
 
-  post_transcribe(blob: Blob, language: string | null = 'fr') {
+  post_transcribe(blob: Blob, language: string | null = null) {
     const form = new FormData()
     form.append('audio', blob, 'audio.webm')
     if (language) {
       form.append('language', language)
     }
     return this.http.post<{ text: string }>(`${BASE_URL}/transcribe`, form)
+  }
+
+  post_correct(text: string, language: string | null = 'fr') {
+    return this.http.post<{ text: string }>(`${BASE_URL}/correct`, { text, language })
   }
 }

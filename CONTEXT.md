@@ -132,9 +132,9 @@ The structured JSON dict that every tool's `execute()` returns. Contains at mini
 
 ## Voice Dictation
 
-Mic button in the chat input area. Three visual states: gray (idle), red pulsing (recording), yellow pulsing (transcribing). Clicking starts/stops recording via `MediaRecorder`. On stop, the audio blob is sent to `POST /api/transcribe`, the transcript fills the textarea.
+Hold-to-record mic button in `ChatInputComponent`. Three visual states: gray (idle), red pulsing (recording), yellow pulsing (transcribing). Hold mousedown → record; release anywhere (mouseup on document) → stop. Alt held 500ms in textarea → same. Partial transcripts appear in the textarea while speaking; final result replaces them on release.
 
-**Pipeline:** `backend/whisper_pipeline.py` — OpenVINO inference, encoder on NPU, decoder on GPU.0 (Intel Arc iGPU). Audio decoded via ffmpeg (handles WebM/WAV/OGG). Tensor names and statefulness auto-detected at load time from the model XML (`_introspect`), so any Whisper variant works without code changes.
+**Pipeline:** `backend/whisper_pipeline.py` — OpenVINO inference, encoder and decoder both on GPU.0 (Intel Arc iGPU). Audio decoded via ffmpeg (handles WebM/WAV/OGG). Tensor names and statefulness auto-detected at load time (`_introspect`), so any Whisper variant works without code changes. Pipeline exposed as `WhisperPipeline` dataclass; call `load_pipeline()` once at startup, pass to `transcribe(pipeline, audio_bytes, language)`.
 
 **Model variants** (defined in `whisper_pipeline.py`, swap by changing `ACTIVE_VARIANT`):
 
@@ -143,15 +143,19 @@ Mic button in the chat input area. Three visual states: gray (idle), red pulsing
 | `WHISPER_TINY` | `openai/whisper-tiny` | `whisper/ov_model_tiny` | yes |
 | `WHISPER_BASE` | `openai/whisper-base` | `whisper/ov_model_base` | yes |
 | `WHISPER_SMALL` | `openai/whisper-small` | `whisper/ov_model_small` | no |
-| `WHISPER_LARGE_FR` | `bofenghuang/whisper-large-v3-french` | `whisper/ov_model_large_fr` | no |
+| `WHISPER_LARGE_FR` | `bofenghuang/whisper-large-v3-french` | `whisper/ov_model_large_fr` | yes (re-exported with optimum-intel stateful) |
 
-Stateful models use one-token-at-a-time decode with internal KV cache (`_decode_stateful`). Non-stateful use full-sequence decode (`_decode_full_sequence`). Compiled blobs cached per variant in `whisper/compiled_blobs_<name>/`.
+Stateful models use one-token-at-a-time decode with internal KV cache (`_decode_stateful`) — O(n). Non-stateful use full-sequence decode (`_decode_full_sequence`) — O(n²). Compiled blobs cached per variant+device in `whisper/compiled_blobs_<name>/`. Export new variants with `optimum-cli export openvino` from the `whisper/venv`.
 
-Adding a new variant: one `WhisperVariant(...)` line + `optimum-cli export openvino` to export the model.
+**STT correction:** `POST /api/correct` calls `_correct_stt()` — non-streaming llama-server call with few-shot prompt. Fixes misheard technical terms and mangled French words.
 
-**STT correction:** after transcription, `_correct_stt()` in `main.py` makes a non-streaming call to llama-server with a few-shot correction prompt. Fixes misheard English technical terms and French words mangled by the STT model. `enable_thinking: false` is set explicitly to avoid Qwen3.5 thinking-only responses.
+**Streaming partials:** `VoiceDictationService` collects 200ms chunks via `MediaRecorder`. After every 3 new chunks (≈600ms), `_maybeFirePartial()` sends the full accumulated blob to `POST /api/transcribe` and updates `partialText` signal. On release: the last in-flight partial (or a new call if none) becomes the final, then chains to `/api/correct`. Frontend effect in `ChatInputComponent` writes `_startPrefix + partial` to `currentInput` on every partial update.
 
-**Frontend:** `toggleMic()` in `chat.component.ts`. `isRecording` is set false before `isTranscribing` is set true — they are mutually exclusive. Error handling via `try/finally` on the transcribe call.
+**Overlay + diff (not yet implemented):** On recording start, a `contenteditable` div appears absolutely positioned over the textarea, pre-filled with the current text and cursor at the same position. Partials update the overlay live. After the final + correction, a word-level LCS diff between `raw` and `corrected` is rendered: 1–2 changed words get `<span class="diff-word">` (orange bg), 3+ consecutive changed words get `<span class="diff-block">` — clicking either toggles between corrected and raw. Dismissal: Enter/send serializes overlay text to `currentInput` and hides the overlay; any printable key does the same then inserts the key at the cursor.
+
+**Mic button states (not yet implemented):** Four states driven by signals — idle (gray, `title="Hold to dictate (or hold Alt)"`), idle with textarea selection (gray + replace-hint indicator), recording (red pulse), transcribing (yellow pulse). Selection state tracked via `selectionchange` event on the textarea.
+
+**30-second limit (not yet implemented):** Whisper's mel spectrogram window is fixed at 30s — audio beyond that is silently truncated. The mic button shows a progress indicator as recording approaches 30s and auto-stops at 28s with a visual warning.
 
 ## Known Bugs
 - **`is_default` uniqueness not enforced**: Setting a new prompt as default does not clear the previous default. Backend must clear the flag atomically.

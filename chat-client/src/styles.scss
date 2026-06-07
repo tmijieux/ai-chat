@@ -363,6 +363,57 @@ button {
 }
 textarea.field { resize: vertical; min-height: 8rem; }
 
+/* --- 15. MISSING LAYOUT --- */
+.border-t { border-top: 1px solid #334155; }
+.items-end { align-items: flex-end; }
+.mb-3 { margin-bottom: 0.75rem; }
+
+/* --- 16. TEXT COLOR UTILITIES --- */
+.text-white { color: #ffffff; }
+.text-gray-700 { color: #9ca3af; }
+.text-indigo-600 { color: #818cf8; }
+.font-medium { font-weight: 500; }
+.font-bold { font-weight: 700; }
+.font-extrabold { font-weight: 800; }
+
+/* --- 17. BACKGROUND COLOR UTILITIES --- */
+.bg-white   { background-color: #1e1e1e; }
+.bg-gray-100 { background-color: #1f2937; }
+.bg-gray-200 { background-color: #374151; }
+.bg-gray-300 { background-color: #4b5563; }
+.bg-gray-800 { background-color: #1f2937; }
+.bg-indigo-600 { background-color: #4f46e5; }
+.bg-red-500 { background-color: #ef4444; }
+.bg-yellow-400 { background-color: #ca8a04; }
+
+/* Hover variants */
+.hover\:bg-gray-300:hover   { background-color: #4b5563; }
+.hover\:bg-gray-700:hover   { background-color: #374151; }
+.hover\:bg-indigo-700:hover { background-color: #4338ca; }
+.hover\:bg-red-600:hover    { background-color: #dc2626; }
+
+/* Disabled variants */
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* --- 18. ANIMATION & TRANSITION UTILITIES --- */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.animate-pulse { animation: pulse 1.2s ease-in-out infinite; }
+.transition-all { transition: all 0.15s ease; }
+.cursor-wait { cursor: wait; }
+
+/* --- 19. SEND BUTTON BASE --- */
+.send-button {
+  border: none;
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
 /* --- 15. MISCELLANEOUS --- */
 .ml-auto { margin-left: auto; }
 .m-0  { margin: 0; }

@@ -1,0 +1,65 @@
+<div class="p-6 border-t bg-white">
+  <!-- Pending image thumbnail strip -->
+  @if (pendingImages().length > 0) {
+    <div class="flex gap-2 flex-wrap mb-3">
+      @for (img of pendingImages(); track img.localUrl) {
+        <div class="p-relative w-16 h-16 rounded overflow-hidden border border-gray-300 flex-shrink-0">
+          <img [src]="img.localUrl" class="w-full h-full object-cover" alt="attachment" />
+          @if (img.uploading) {
+            <div class="p-absolute inset-0 bg-black-40 flex items-center justify-center text-white text-xs">↑</div>
+          }
+          <button
+            (mousedown)="$event.preventDefault()"
+            (click)="removeImage(img)"
+            class="p-absolute top-0 right-0 bg-black-60 text-white text-xs leading-none w-4 h-4 flex items-center justify-center rounded-bl"
+          >✕</button>
+        </div>
+      }
+    </div>
+  }
+  @if (voiceSvc.lastCorrection(); as corr) {
+    <div class="flex items-start gap-2 mb-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-sm">
+      <span class="text-yellow-700 font-medium flex-shrink-0">Correction:</span>
+      <span class="text-gray-800 flex-grow">{{ corr.corrected }}</span>
+      <button (click)="useCorrection(corr.corrected)" class="flex-shrink-0 px-2 py-0.5 bg-yellow-400 hover:bg-yellow-500 rounded text-xs font-medium">Use</button>
+      <button (click)="voiceSvc.dismissCorrection()" class="flex-shrink-0 text-gray-400 hover:text-gray-600 px-1">✕</button>
+    </div>
+  }
+  <div class="flex items-end gap-3">
+    <textarea
+      #textarea
+      [(ngModel)]="currentInput"
+      (keydown.enter)="sendMessage($event)"
+      (paste)="onPaste($event)"
+      (dragover)="onDragOver($event)"
+      (drop)="onDrop($event)"
+      placeholder="Message the AI... (Shift+Enter for newline, paste or drop images)"
+      rows="1"
+      class="flex-grow resize-none p-3 border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+    ></textarea>
+    @if (busy()) {
+      <button
+        (click)="stopRequested.emit()"
+        class="send-button bg-red-500 hover:bg-red-600 text-white px-6 py-3 rounded-lg transition-all"
+      >
+        Stop
+      </button>
+    } @else {
+      <button
+        (mousedown)="onMicMousedown($event)"
+        class="send-button px-4 py-3 rounded-lg transition-all"
+        [class]="voiceSvc.isTranscribing() ? 'bg-yellow-400 text-white animate-pulse cursor-wait' : voiceSvc.isRecording() ? 'bg-red-500 hover:bg-red-600 text-white animate-pulse' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'"
+        [title]="voiceSvc.isTranscribing() ? 'Transcribing...' : voiceSvc.isRecording() ? 'Recording...' : 'Hold to dictate (or hold Alt)'"
+      >
+        {{ voiceSvc.isTranscribing() ? '⏳' : '🎤' }}
+      </button>
+      <button
+        (click)="sendMessage(null)"
+        [disabled]="(!currentInput().trim() && pendingImages().length === 0) || isUploading()"
+        class="send-button bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-lg disabled:bg-gray-300 transition-all"
+      >
+        Send
+      </button>
+    }
+  </div>
+</div>

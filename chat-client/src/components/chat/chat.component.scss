@@ -372,36 +372,3 @@
   font-style: italic;
 }
 
-textarea {
-  flex-grow: 1;
-  resize: none;
-  padding: 0.75rem;
-  border: 1px solid #cbd5e1;
-  border-radius: 2rem;
-  font-family: inherit;
-  font-size: 0.875rem;
-  line-height: 1.5;
-  min-height: 44px;
-  max-height: 200px;
-  // transition:
-  //   border-color 0.15s ease-in-out,
-  //   box-shadow 0.15s ease-in-out;
-  background-color: #303030;
-  color: white;
-  outline: none;
-  border-color: #ffffff0d;
-
-  &:focus {
-    outline: none;
-    box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
-  }
-
-  &:disabled {
-    color: #cbd5e1;
-    cursor: not-allowed;
-  }
-
-  &::placeholder {
-    color: #94a3b8;
-  }
-}

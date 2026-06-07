@@ -2,3 +2,8 @@ model_cache/
 compiled_blobs/
 ov_model/
 ov_model_base/
+ov_model_tiny/
+ov_model_small/
+ov_model_large_fr/
+compiled_blobs_*/
+*.log

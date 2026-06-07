@@ -62,3 +62,8 @@ class UpdateSystemPrompt(BaseModel):
     category: str | None = None
     content: str | None = None
     is_default: bool | None = None
+
+
+class CorrectRequest(BaseModel):
+    text: str
+    language: str | None = "fr"
