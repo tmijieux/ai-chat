@@ -30,7 +30,7 @@ class ListDirectoryTool(BaseTool):
         "required": ["path"],
     }
     requires_confirmation = False
-    measured_delta = 375
+    measured_delta = 385
 
     def label(self, args: dict) -> str:
         return f"DIRECTORY {args.get('path', '')}"

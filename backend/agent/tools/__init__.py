@@ -8,6 +8,7 @@ from .edit_file import EditFileTool
 from .run_shell import RunShellTool
 from .search_web import SearchWebTool
 from .summarize_subtask import SummarizeSubtaskTool
+from .subagent import SubAgentTool
 
 TOOL_REGISTRY: dict[str, BaseTool] = {
     t.name: t
@@ -21,6 +22,7 @@ TOOL_REGISTRY: dict[str, BaseTool] = {
         RunShellTool(),
         SearchWebTool(),
         SummarizeSubtaskTool(),
+        SubAgentTool(),
     ]
 }
 
