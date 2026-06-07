@@ -81,40 +81,54 @@ export class ChatInputComponent {
   }
 
   // Alt chosen for hold-to-record; Ctrl+Space is an alternative if Alt conflicts with OS/browser shortcuts.
+  // True while AltGraph is physically held down.
+  private _altHeld = false
+
   @HostListener('document:keydown', ['$event'])
   onKeydown(event: KeyboardEvent): void {
-    if (event.key !== 'Alt') {
+    if (event.key === 'AltGraph') {
+      if (this.voiceSvc.isRecording() || this._altTimer !== null) {
+        return
+      }
+      // Block if focus is in a text input other than our own textarea.
+      const active = document.activeElement
+      const isOtherInput = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement
+      if (isOtherInput && active !== this._textareaRef?.nativeElement) {
+        return
+      }
+      event.preventDefault()
+      this._altHeld = true
+      this._altTimer = setTimeout(() => {
+        this._altTimer = null
+        this._startPrefix = this.currentInput()
+        this.voiceSvc.startRecording().catch(() => {})
+      }, 500)
       return
     }
-    if (this.voiceSvc.isRecording() || this._altTimer !== null) {
-      return
+
+    // Any other key while AltGraph is held → cancel.
+    if (this._altHeld) {
+      if (this._altTimer !== null) {
+        clearTimeout(this._altTimer)
+        this._altTimer = null
+      } else {
+        this.voiceSvc.cancelRecording()
+      }
     }
-    if (!this._isTextareaFocused()) {
-      return
-    }
-    event.preventDefault()
-    this._altTimer = setTimeout(() => {
-      this._altTimer = null
-      this._startPrefix = this.currentInput()
-      this.voiceSvc.startRecording().catch(() => {})
-    }, 500)
   }
 
   @HostListener('document:keyup', ['$event'])
   onKeyup(event: KeyboardEvent): void {
-    if (event.key !== 'Alt') {
+    if (event.key !== 'AltGraph') {
       return
     }
+    this._altHeld = false
     if (this._altTimer !== null) {
       clearTimeout(this._altTimer)
       this._altTimer = null
       return
     }
     this.voiceSvc.stopRecording()
-  }
-
-  private _isTextareaFocused(): boolean {
-    return document.activeElement === this._textareaRef?.nativeElement
   }
 
   async sendMessage(event: Event | null): Promise<void> {
@@ -131,6 +145,7 @@ export class ChatInputComponent {
       .map((p) => p.id!)
     this.currentInput.set('')
     this.pendingImages.set([])
+    this.voiceSvc.dismissCorrection()
     this.submitted.emit({ text: input, imageIds })
   }
 
@@ -155,7 +170,7 @@ export class ChatInputComponent {
   }
 
   useCorrection(corrected: string): void {
-    this.currentInput.set(corrected)
+    this.currentInput.set((this._startPrefix + ' ' + corrected).trim())
     this.voiceSvc.dismissCorrection()
   }
 

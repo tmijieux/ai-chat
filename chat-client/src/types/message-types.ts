@@ -159,6 +159,7 @@ export type AgentEvent = {
   response_tokens?: number
   message?: string
   log_message?: string
+  finished_without_response?: boolean
 }
 
 // ---------------------------------------------------------------------------

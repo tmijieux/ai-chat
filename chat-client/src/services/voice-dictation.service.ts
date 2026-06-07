@@ -28,9 +28,14 @@ export class VoiceDictationService {
   readonly finalResult$ = new Subject<DictationResult>()
 
   dismissCorrection(): void {
+    this._correctionRequestId++
     this._lastCorrection.set(null)
   }
 
+  // Incremented each time a correction request is started or invalidated (send, dismiss, new
+  // recording). The post_correct callback compares its captured ID against this value to discard
+  // responses that arrived after the user already sent the message.
+  private _correctionRequestId = 0
   private _mediaRecorder: MediaRecorder | null = null
   private _stream: MediaStream | null = null
   private _audioChunks: Blob[] = []
@@ -40,16 +45,44 @@ export class VoiceDictationService {
   private _stopping = false
   // Set in onstop when we want the next partial completion to chain to /api/correct.
   private _finalPending = false
+  // True while getUserMedia is in-flight; lets stopRecording() signal intent before the stream exists.
+  private _acquiring = false
+
+  constructor() {
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        this.stopRecording()
+        this._acquiring = false
+      }
+    })
+  }
 
   async startRecording(): Promise<void> {
+    if (this._acquiring) {
+      return
+    }
+    this._acquiring = true
     this._stopping = false
     this._finalPending = false
     this._audioChunks = []
     this._chunksAtLastPartial = 0
     this._partialText.set('')
+    this._correctionRequestId++
     this._lastCorrection.set(null)
 
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    let stream: MediaStream
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    } finally {
+      this._acquiring = false
+    }
+
+    // stopRecording() was called while getUserMedia was pending — discard and bail.
+    if (this._stopping) {
+      stream!.getTracks().forEach((t) => t.stop())
+      return
+    }
+
     this._stream = stream
     this._mediaRecorder = new MediaRecorder(stream)
 
@@ -83,8 +116,32 @@ export class VoiceDictationService {
   }
 
   stopRecording(): void {
+    if (this._acquiring) {
+      this._stopping = true
+      return
+    }
     if (!this._isRecording()) {
       return
+    }
+    this._mediaRecorder?.stop()
+  }
+
+  cancelRecording(): void {
+    if (this._acquiring) {
+      this._stopping = true
+      return
+    }
+    if (!this._isRecording()) {
+      return
+    }
+    // Override onstop so it releases the stream without transcribing.
+    this._mediaRecorder!.onstop = () => {
+      this._stream?.getTracks().forEach((t) => t.stop())
+      this._isRecording.set(false)
+      this._isTranscribing.set(false)
+      this._partialText.set('')
+      this._partialSub?.unsubscribe()
+      this._partialSub = null
     }
     this._mediaRecorder?.stop()
   }
@@ -139,9 +196,10 @@ export class VoiceDictationService {
     this._isTranscribing.set(false)
     this.finalResult$.next({ raw, corrected: raw })
     if (!raw) { return }
+    const requestId = this._correctionRequestId
     firstValueFrom(this.api.post_correct(raw, 'fr'))
       .then(({ text }) => {
-        if (text && text !== raw) {
+        if (text && text !== raw && this._correctionRequestId === requestId) {
           this._lastCorrection.set({ raw, corrected: text })
         }
       })

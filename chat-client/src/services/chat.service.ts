@@ -53,6 +53,10 @@ export class ChatService {
   /** True while a non-agentic HTTP stream is open. */
   public readonly isLoading = this._isLoading.asReadonly()
 
+  private _isCompressing = signal(false)
+  /** True while the post-agent compression call is in flight. */
+  public readonly isCompressing = this._isCompressing.asReadonly()
+
   /** Delegates to AgentService so the component only needs to inject ChatService. */
   public readonly agentRunning = computed(() => this.agentSvc.running())
 
@@ -81,9 +85,11 @@ export class ChatService {
   // Conversation list (sidebar)
   // -------------------------------------------------------------------------
 
-  conversations = new RefreshableQuery(() => this.api.get_conversations())
+  conversations = new RefreshableQuery(() =>
+    this.api.get_conversations().pipe(retry({ count: 10, delay: 2000 })),
+  )
   lastWorkingDirectory = new RefreshableQuery(() =>
-    this.api.get_app_setting('last_working_directory'),
+    this.api.get_app_setting('last_working_directory').pipe(retry({ count: 10, delay: 2000 })),
   )
 
   // -------------------------------------------------------------------------
@@ -551,6 +557,12 @@ export class ChatService {
             ])
           })
         } else {
+          if (event.finished_without_response) {
+            this._messages.update((msgs) => [
+              ...msgs,
+              { kind: 'error', id: crypto.randomUUID(), message: 'L\'agent a terminé sans produire de réponse.' },
+            ])
+          }
           enqueue(() => this._computeTokenCountForLastMessage())
           enqueue(() => this._compressConversation())
           // Reload from DB to get has_children and sibling metadata, which are only computed
@@ -568,7 +580,12 @@ export class ChatService {
     if (!id) {
       return
     }
-    await firstValueFrom(this.api.compress_conversation(id))
+    this._isCompressing.set(true)
+    try {
+      await firstValueFrom(this.api.compress_conversation(id))
+    } finally {
+      this._isCompressing.set(false)
+    }
   }
 
   private async _reloadFromDb(): Promise<void> {

@@ -204,8 +204,9 @@ async def chat_with_tools(
         await session.emit({"type": "error", "message": f"Context limit reached during generation: {prompt_eval_count + eval_count}/{CTX_LIMIT} tokens. The response was cut off."})
         return True
 
-    if len(message["content"]) == 0 and len(tool_calls) == 0:
-        logger.warning("Degenerate response: thinking only, no content, no tool calls")
+    finished_without_response = len(message["content"]) == 0 and len(tool_calls) == 0
+    if finished_without_response:
+        logger.warning("Agent finished without response: no content, no tool calls")
 
     if len(message["content"]) > 0:
         messages[:] = [m for m in messages if not m.get("_transient")]
@@ -262,7 +263,7 @@ async def chat_with_tools(
     })
 
     _deduplicate_file_reads(messages)
-    return len(tool_calls) == 0
+    return len(tool_calls) == 0, finished_without_response
 
 
 async def run_agent(
@@ -274,9 +275,10 @@ async def run_agent(
     """Run the full agent loop until done, emitting events via session."""
     try:
         finished = False
+        finished_without_response = False
         while not finished:
-            finished = await chat_with_tools(messages, session, tools, working_directory)
-        await session.emit({"type": "done"})
+            finished, finished_without_response = await chat_with_tools(messages, session, tools, working_directory)
+        await session.emit({"type": "done", "finished_without_response": finished_without_response})
     except asyncio.CancelledError:
         await session.emit({"type": "error", "message": "Agent was aborted"})
     except aiohttp.ClientConnectorError as e:

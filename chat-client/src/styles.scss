@@ -401,6 +401,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   50% { opacity: 0.4; }
 }
 .animate-pulse { animation: pulse 1.2s ease-in-out infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.animate-spin { animation: spin 1s linear infinite; display: inline-block; }
 .transition-all { transition: all 0.15s ease; }
 .cursor-wait { cursor: wait; }
 
