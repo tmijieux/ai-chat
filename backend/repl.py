@@ -6,6 +6,27 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+
+def _drain_stdin() -> None:
+    """Discard any extra characters sitting in stdin (e.g. from a multi-line paste)."""
+    if sys.platform == "win32":
+        import msvcrt
+        import time
+        time.sleep(0.05)  # let paste finish arriving
+        while msvcrt.kbhit():
+            msvcrt.getwch()
+    else:
+        import select
+        while select.select([sys.stdin], [], [], 0)[0]:
+            sys.stdin.readline()
+
+
+def _read_line(prompt: str) -> str:
+    """Read one line and drain any paste overflow from stdin."""
+    line = input(prompt).strip()
+    _drain_stdin()
+    return line
+
 from agent.agent import AgentSession, run_agent
 from agent.pipeline import PipelineOrchestrator
 from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
@@ -67,10 +88,10 @@ async def _run_turn(
 
         if event["type"] == "tool_confirm":
             print(f"\n{YELLOW}[confirm] {event.get('tool_name', '')}\n{event.get('preview', '')}{RESET}")
-            answer = input("Approve? [y/n]: ").strip().lower()
+            answer = _read_line("Approve? [y/n]: ").lower()
             reason = None
             if answer != "y":
-                reason = input("Reason (optional): ").strip() or None
+                reason = _read_line("Reason (optional): ") or None
             session.resolve_confirm(event["tool_id"], answer == "y", reason)
         else:
             _print_event(event)
@@ -107,10 +128,10 @@ async def _run_pipeline_turn(
             stage = event.get("_pipeline_stage")
             tag = f"[{stage}] " if stage is not None else ""
             print(f"\n{YELLOW}{tag}[confirm] {event.get('tool_name', '')}\n{event.get('preview', '')}{RESET}")
-            answer = input("Approve? [y/n]: ").strip().lower()
+            answer = _read_line("Approve? [y/n]: ").lower()
             reason = None
             if answer != "y":
-                reason = input("Reason (optional): ").strip() or None
+                reason = _read_line("Reason (optional): ") or None
             session.resolve_confirm(event["tool_id"], answer == "y", reason)
         else:
             _print_event(event)
