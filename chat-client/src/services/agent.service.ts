@@ -1,7 +1,13 @@
 import { Injectable, signal } from '@angular/core'
 import { Observable, Subject } from 'rxjs'
 import { AgentEvent } from '../types/message-types'
-const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/agent/ws'
+
+export type AgentMode = 'classic' | 'pipeline'
+
+function wsUrl(mode: AgentMode): string {
+  const path = mode === 'pipeline' ? '/api/agent/pipeline/ws' : '/api/agent/ws'
+  return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + path
+}
 
 /**
  * Pure WebSocket transport for the agent loop.
@@ -19,9 +25,9 @@ export class AgentService {
   /** Raw event stream. ChatService subscribes to accumulate DisplayMessages. */
   public readonly events$: Observable<AgentEvent> = this._events$.asObservable()
 
-  start(userMessage: string, conversationId?: string, userMessageId?: string): void {
+  start(userMessage: string, conversationId?: string, userMessageId?: string, mode: AgentMode = 'classic'): void {
     this._running.set(true)
-    this.ws = new WebSocket(WS_URL)
+    this.ws = new WebSocket(wsUrl(mode))
 
     this.ws.onopen = () => {
       this.ws!.send(JSON.stringify({

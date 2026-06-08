@@ -22,6 +22,7 @@ class AgentSession:
         self._compression_event: asyncio.Event = asyncio.Event()
         self._compression_conv_id: str | None = None
         self.refresh_messages_callback: Callable[[str], Awaitable[list[dict]]] | None = None
+        self.finish_result: dict | None = None
 
     async def emit(self, event: dict) -> None:
         await self.outbound.put(event)
@@ -155,6 +156,7 @@ async def chat_with_tools(
     session: AgentSession,
     tools: list[dict],
     working_directory: str | None,
+    extra_tools: dict | None = None,
 ) -> bool:
     """
     One iteration of the LLM call + tool execution loop.
@@ -248,11 +250,12 @@ async def chat_with_tools(
 
             await session.emit({"type": "tool_call", "tool_id": call_id, "tool_name": tool_name, "arguments": tool_args})
 
-            if tool_name not in TOOL_REGISTRY:
+            effective_registry = {**TOOL_REGISTRY, **(extra_tools or {})}
+            if tool_name not in effective_registry:
                 result_dict = {"tool": tool_name, "status": "error", "error": {"message": f"Unknown tool: {tool_name}"}}
                 log_msg = None
             else:
-                tool_instance = TOOL_REGISTRY[tool_name]
+                tool_instance = effective_registry[tool_name]
                 result_dict = await tool_instance.execute(tool_args, session, working_directory)
                 log_msg = tool_instance.label(tool_args)
 

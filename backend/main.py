@@ -15,6 +15,7 @@ from database import init_db, get_db_session, AsyncSession
 import loaders as ld
 import tables as db
 from agent.agent import AgentSession, run_agent, _find_superseded_read_file_indices
+from agent.pipeline import PipelineOrchestrator
 from agent.compress import compress_messages
 from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
 from llm import backend
@@ -1215,4 +1216,77 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
             await websocket.send_json({"type": "error", "message": str(e)})
         except Exception:
             logger.exception("error when sending error message in websocket")
+            pass
+
+
+@app.websocket("/api/agent/pipeline/ws")
+async def pipeline_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get_db_session)):
+    """
+    WebSocket endpoint for the pipeline orchestrator.
+    Parallel alternative to /api/agent/ws for comparison.
+    First client message: {"message": "...", "conversation_id": "optional"}
+    """
+    await websocket.accept()
+    try:
+        init_data = await websocket.receive_json()
+        user_message: str = init_data.get("message", "")
+        conversation_id: str | None = init_data.get("conversation_id")
+        user_message_id: str | None = init_data.get("user_message_id")
+
+        conv: db.Conversation | None = None
+        branch: list[db.Message] = []
+
+        if conversation_id:
+            result = await sess.execute(
+                select(db.Conversation).where(db.Conversation.id == conversation_id)
+            )
+            conv = result.scalars().first()
+            if conv:
+                all_msgs_result = await sess.execute(
+                    select(db.Message).where(db.Message.conversation_id == conversation_id)
+                )
+                all_msgs = list(all_msgs_result.scalars().all())
+                branch = _build_active_branch_path(all_msgs, conv.active_message_id)
+                _deduplicate_branch_file_reads(branch)
+                await sess.flush()
+
+        settings = _parse_conv_settings(conv) if conv else ld.ConversationSettings()
+        working_directory = settings.working_directory
+
+        tools = get_ollama_tool_list(list(TOOL_REGISTRY.keys()))
+        messages = await _build_inference_context(branch, settings.active_prompt_id, sess)
+        if user_message_id is None:
+            messages.append({"role": "user", "content": user_message})
+
+        system_messages = [m for m in messages if m.get("role") == "system"]
+
+        session = AgentSession()
+        orchestrator = PipelineOrchestrator(
+            system_messages=system_messages,
+            working_directory=working_directory,
+            regular_tools=tools,
+        )
+        agent_task = asyncio.create_task(orchestrator.run(session, user_message, messages))
+
+        async def send_pipeline_events_to_websocket() -> None:
+            while True:
+                event = await session.outbound.get()
+                await websocket.send_json(event)
+                if event["type"] in ("done", "error"):
+                    return
+
+        send_task = asyncio.create_task(send_pipeline_events_to_websocket())
+        recv_task = asyncio.create_task(_ws_receive_messages(websocket, session, agent_task))
+
+        await send_task
+        recv_task.cancel()
+        agent_task.cancel()
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.exception("error in pipeline websocket handling")
+        try:
+            await websocket.send_json({"type": "error", "message": str(e)})
+        except Exception:
             pass

@@ -140,7 +140,7 @@ export type DiffLine = {
 
 export type ToolCallEntry = { id: string; name: string; args: Record<string, unknown> }
 
-export type AgentEvent =
+export type AgentEvent = (
   | { type: 'thinking' | 'content'; content: string }
   | { type: 'tool_call_start'; tool_id: string; tool_name: string }
   | { type: 'tool_call_chunk'; tool_id: string; chunk: string }
@@ -151,6 +151,7 @@ export type AgentEvent =
   | { type: 'ctx_update' | 'compressing'; ctx_tokens: number }
   | { type: 'done'; finished_without_response?: boolean }
   | { type: 'error'; message: string }
+) & { _pipeline_stage?: string }
 
 export type AgentEventType = AgentEvent['type']
 

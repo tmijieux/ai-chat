@@ -58,6 +58,13 @@ export class ChatService {
   /** True while the post-agent compression call is in flight. */
   public readonly isCompressing = this._isCompressing.asReadonly()
 
+  private _pipelineMode = signal(false)
+  /** When true, the next agent run uses the pipeline orchestrator instead of the classic loop. */
+  public readonly pipelineMode = this._pipelineMode.asReadonly()
+  togglePipelineMode(): void {
+    this._pipelineMode.update((v) => !v)
+  }
+
   /** Delegates to AgentService so the component only needs to inject ChatService. */
   public readonly agentRunning = computed(() => this.agentSvc.running())
 
@@ -252,7 +259,7 @@ export class ChatService {
 
     const settings = this._conversationSettings()
     this._subscribeToAgentEvents(newMsgId)
-    this.agentSvc.start(newContent, convId, newMsgId)
+    this.agentSvc.start(newContent, convId, newMsgId, this._pipelineMode() ? 'pipeline' : 'classic')
   }
 
   async deleteMessage(msgId: string, subtree: boolean): Promise<void> {
@@ -304,7 +311,7 @@ export class ChatService {
     persist.then(() => {
       const convId = this._conversationId()
       this._subscribeToAgentEvents(userMsg.id)
-      this.agentSvc.start(input, convId, userMsg.id)
+      this.agentSvc.start(input, convId, userMsg.id, this._pipelineMode() ? 'pipeline' : 'classic')
     })
   }
 
@@ -446,6 +453,9 @@ export class ChatService {
     }
 
     this._agentEventSub = this.agentSvc.events$.subscribe((event) => {
+      if (event._pipeline_stage !== undefined) {
+        return
+      }
       if (event.type === 'thinking' && event.content) {
         pendingThinkingContent += event.content
         if (idOfCurrentlyStreamingThinkingMessage) {
