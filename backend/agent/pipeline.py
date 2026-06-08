@@ -60,8 +60,15 @@ You MUST call finish_critique to submit your verdict. Do not write a text respon
 """
 
 _PLAN_SYSTEM = """\
-You are a task planner. Break the request into a minimal ordered list of atomic tasks.
-Each task must be small enough to complete in one agent run and have a concrete verification method.
+You are a task planner working with a model that needs extremely precise instructions.
+
+Rules for each task:
+- Touch exactly ONE file per task.
+- The description must be fully self-contained: include the exact file path, the exact insertion point (e.g. "after the closing </button> tag on line ~42"), the exact attribute names, method names, and class names to use. A developer with zero context must be able to execute it by reading only the description.
+- Keep each task under 15 lines of code change.
+- Prefer 5-8 small precise tasks over 2-3 vague large ones.
+- Verification must be concrete: "grep for X in file Y" or "read file Y and confirm element Z with attribute W exists" — never "verify it works".
+
 You MUST call finish_plan to submit the task list. Do not write a text response — call the tool instead.\
 """
 
