@@ -40,8 +40,8 @@ async def _serve_with_watcher(host: str, port: int) -> bool:
 
     async def watch_and_signal() -> None:
         nonlocal file_changed
-        from watchfiles import awatch
-        async for _ in awatch(watch_dir):
+        from watchfiles import awatch, PythonFilter
+        async for _ in awatch(watch_dir, watch_filter=PythonFilter()):
             file_changed = True
             shutdown_event.set()
             return
