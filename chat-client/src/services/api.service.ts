@@ -24,6 +24,10 @@ export class ApiService {
     return this.http.get<Conversation[]>(`${BASE_URL}/conversations`)
   }
 
+  get_conversation(id: string) {
+    return this.http.get<Conversation>(`${BASE_URL}/conversations/${id}`)
+  }
+
   post_conversation(title: string) {
     return this.http.post<Conversation>(`${BASE_URL}/conversations`, { title })
   }

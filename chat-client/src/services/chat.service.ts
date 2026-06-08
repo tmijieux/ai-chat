@@ -1,5 +1,5 @@
 import { Injectable, inject, signal, computed } from '@angular/core'
-import { BehaviorSubject, firstValueFrom, Observable, of, Subscription } from 'rxjs'
+import { BehaviorSubject, EMPTY, firstValueFrom, Observable, of, Subscription } from 'rxjs'
 import { catchError, retry, shareReplay, switchMap, tap } from 'rxjs/operators'
 import { throwError } from 'rxjs'
 import {
@@ -233,6 +233,12 @@ export class ChatService {
       const lastWithTokens = [...dbMessages].reverse().find((m) => m.token_count != null)
       this._promptTokens.set(lastWithTokens?.token_count ?? 0)
     })
+  }
+
+  selectConversationById(id: string): void {
+    this.api.get_conversation(id).pipe(
+      catchError(() => EMPTY),
+    ).subscribe((conv) => this.selectConversation(conv))
   }
 
   async editUserMessage(msgId: string, newContent: string): Promise<void> {

@@ -7,7 +7,7 @@ import {
   DisplayMessageWithMeta,
   TokenMeta,
 } from '../../types/message-types'
-import { ActivatedRoute, RouterLink } from '@angular/router'
+import { ActivatedRoute, Router, RouterLink } from '@angular/router'
 import { ConversationSettingsComponent } from '../conversation-settings/conversation-settings.component'
 import { CollapsibleBubbleComponent } from '../collapsible-bubble/collapsible-bubble.component'
 import { MarkdownComponent } from 'ngx-markdown'
@@ -31,6 +31,7 @@ import { AppStatusService } from '../../services/app-status.service'
 })
 export class ChatComponent implements OnDestroy {
   private route = inject(ActivatedRoute)
+  private router = inject(Router)
   readonly chatSvc = inject(ChatService)
   readonly appStatus = inject(AppStatusService)
 
@@ -148,17 +149,30 @@ export class ChatComponent implements OnDestroy {
       })
     })
 
+    // URL → Service: load conversation from URL on page load / back-forward navigation
     this.route.queryParamMap.subscribe((pm) => {
-      const convId = pm.get('conversationId')
-      if (convId) {
-        this.chatSvc.selectConversation({
-          id: convId,
-          title: '???',
-          created_at: '',
-          active_message_id: null,
-          settings: null,
-        })
+      const convId = pm.get('conversationId') ?? undefined
+      if (convId !== undefined && convId !== this.chatSvc.currentConversationId()) {
+        this.chatSvc.selectConversationById(convId)
+      } else if (convId === undefined && this.chatSvc.currentConversationId() !== undefined) {
+        this.chatSvc.startNewChat()
       }
+    })
+
+    // Service → URL: keep URL in sync when active conversation changes in-app
+    effect(() => {
+      const convId = this.chatSvc.currentConversationId()
+      untracked(() => {
+        const current = this.route.snapshot.queryParamMap.get('conversationId') ?? undefined
+        if (convId === current) {
+          return
+        }
+        this.router.navigate([], {
+          relativeTo: this.route,
+          queryParams: convId !== undefined ? { conversationId: convId } : {},
+          replaceUrl: true,
+        })
+      })
     })
   }
 

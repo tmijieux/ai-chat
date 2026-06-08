@@ -360,6 +360,20 @@ async def list_conversations(sess: AsyncSession = Depends(get_db_session)):
     ]
 
 
+@app.get("/api/conversations/{conversation_id}")
+async def get_conversation(conversation_id: str, sess: AsyncSession = Depends(get_db_session)):
+    conv = (await sess.scalars(select(db.Conversation).where(db.Conversation.id == conversation_id))).first()
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {
+        "id": conv.id,
+        "title": conv.title,
+        "settings": conv.settings,
+        "created_at": conv.created_at,
+        "active_message_id": conv.active_message_id,
+    }
+
+
 @app.post("/api/conversations")
 async def create_conversation(
     input: ld.NewConversation, sess: AsyncSession = Depends(get_db_session)
