@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """CLI REPL for the agent — mirrors the web client but runs in a terminal."""
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -53,21 +54,47 @@ def _print_event(event: dict) -> None:
         else:
             print(f"\n{GREEN}━━━ [synthesize] ━━━{RESET}")
 
+    stage_prefix = f"{GREY}[{stage}]{RESET} " if stage is not None else ""
+
     t = event["type"]
     if t == "thinking":
         print(f"{GREY}{event.get('content', '')}{RESET}", end="", flush=True)
     elif t == "content":
         print(event.get("content", ""), end="", flush=True)
     elif t == "tool_call_start":
-        print(f"\n{YELLOW}[{event.get('tool_name', '')}] ", end="", flush=True)
+        print(f"\n{stage_prefix}{YELLOW}[{event.get('tool_name', '')}] ", end="", flush=True)
     elif t == "tool_call_chunk":
         print(f"{YELLOW}{event.get('chunk', '')}{RESET}", end="", flush=True)
+    elif t == "tool_call":
+        print(flush=True)  # newline after tool call args finish streaming
+    elif t == "pipeline_summary":
+        label = event.get("label", "")
+        content = event.get("content", "")
+        notes = event.get("notes")
+        print(f"\n{GREEN}── {label} ──{RESET}")
+        print(content)
+        if notes:
+            print(f"{GREY}{notes}{RESET}")
     elif t == "tool_result":
         content = event.get("content", "")
-        preview = content[:300] + ("…" if len(content) > 300 else "")
-        print(f"\n{CYAN}[{event.get('tool_name', 'tool')}] {preview}{RESET}")
+        tool_name = event.get("tool_name", "")
+        try:
+            parsed = json.loads(content)
+        except (json.JSONDecodeError, ValueError):
+            parsed = None
+
+        if parsed is not None and tool_name == "explore_codebase" and parsed.get("status") == "success":
+            summary = parsed.get("summary", "")
+            snippets = parsed.get("snippets") or []
+            files = ", ".join(f"{s.get('file_path', '?')}:{s.get('start_line')}-{s.get('end_line')}" for s in snippets)
+            print(f"\n{stage_prefix}{CYAN}→ [explore] {summary}")
+            if files:
+                print(f"{stage_prefix}{CYAN}  snippets: {files}{RESET}")
+        else:
+            preview = content[:300] + ("…" if len(content) > 300 else "")
+            print(f"\n{stage_prefix}{CYAN}→ {preview}{RESET}")
     elif t == "iteration_end":
-        print(f"\n{GREY}[{event.get('prompt_tokens', 0)} prompt tokens]{RESET}")
+        print(f"\n{stage_prefix}{GREY}[{event.get('prompt_tokens', 0)} prompt tokens]{RESET}")
     elif t == "error":
         print(f"\n{RED}[error] {event.get('message')}{RESET}")
     elif t == "done":

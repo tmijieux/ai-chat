@@ -1,4 +1,5 @@
 import asyncio
+import uuid
 from pathlib import Path
 from .base import BaseTool, tool_error
 from agent.file_utils import file_in_directory, resolve_workspace_path, load_ignore_spec, is_path_ignored
@@ -58,6 +59,16 @@ class GlobFilesTool(BaseTool):
                     if p.is_file() and (include_ignored or not is_path_ignored(p, working_directory, spec))
                 ]
             )
-            return {"tool": self.name, "pattern": pattern, "path": path, "status": "success", "files": files, "file_count": len(files)}
+            result_id = str(uuid.uuid4())[:8]
+            session._search_result_ids.add(result_id)
+            return {
+                "tool": self.name,
+                "pattern": pattern,
+                "path": path,
+                "status": "success",
+                "result_id": result_id,
+                "files": files,
+                "file_count": len(files),
+            }
         except Exception as e:
             return tool_error(self.name, f"Error during glob: {e}")

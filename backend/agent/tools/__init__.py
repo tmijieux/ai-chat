@@ -9,6 +9,8 @@ from .run_shell import RunShellTool
 from .search_web import SearchWebTool
 from .summarize_subtask import SummarizeSubtaskTool
 from .subagent import SubAgentTool
+from .read_file_range import ReadFileRangeTool
+from .explore_codebase import ExploreCodebaseTool
 
 TOOL_REGISTRY: dict[str, BaseTool] = {
     t.name: t
@@ -17,6 +19,8 @@ TOOL_REGISTRY: dict[str, BaseTool] = {
         GlobFilesTool(),
         GrepFilesTool(),
         ReadFileTool(),
+        ReadFileRangeTool(),
+        ExploreCodebaseTool(),
         WriteFileTool(),
         EditFileTool(),
         RunShellTool(),

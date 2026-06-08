@@ -46,11 +46,12 @@ You MUST call finish_classify to submit your answer. Do not write a text respons
 """
 
 _AUGMENT_SYSTEM = """\
-You are a prompt augmentation agent. Enrich the user's request with concrete context from the codebase.
-Steps:
-1. Use read_file, glob_files, grep_files, list_directory to locate relevant files and understand the code structure.
-2. Once you have enough context, call finish_augmentation with the enriched prompt.
-You MUST call finish_augmentation to complete your task. Do not write a text summary — call the tool instead.\
+You are a prompt augmentation agent. Your only tool is explore_codebase(query).
+You have at most 3 turns. Each turn you either explore or submit — never both in the same turn.
+- Turn 1: explore the main subject.
+- Turn 2: if something critical is still missing, do ONE hyper-specific explore — name the exact file or symbol needed. Otherwise call finish_augmentation.
+- Turn 3: you MUST call finish_augmentation with whatever you have. No more explores.
+Do not write a text response — call the tool instead.\
 """
 
 _CRITIQUE_SYSTEM = """\
@@ -61,20 +62,45 @@ You MUST call finish_critique to submit your verdict. Do not write a text respon
 
 _PLAN_SYSTEM = """\
 You are a task planner working with a model that needs extremely precise instructions.
+The user message contains context already gathered from the codebase (file paths, method names, line numbers). Use it directly — do not re-explore what is already provided.
+Use grep_files only if a specific line number or attribute name is missing from the context.
+
+!! ONE FILE PER TASK — this is non-negotiable. If a change touches two files, it must be two separate tasks. A task that edits both a .ts and a .html file is INVALID. !!
 
 Rules for each task:
-- Touch exactly ONE file per task.
-- The description must be fully self-contained: include the exact file path, the exact insertion point (e.g. "after the closing </button> tag on line ~42"), the exact attribute names, method names, and class names to use. A developer with zero context must be able to execute it by reading only the description.
+- ONE file per task. No exceptions.
+- The description must be fully self-contained: exact file path, exact insertion point (e.g. "after the closing </button> tag on line 68"), exact attribute names, method names, class names, and signal names. A developer with zero context must be able to execute it from the description alone.
 - Keep each task under 15 lines of code change.
-- Prefer 5-8 small precise tasks over 2-3 vague large ones.
-- Verification must be concrete: "grep for X in file Y" or "read file Y and confirm element Z with attribute W exists" — never "verify it works".
+- Generate at minimum 5 tasks. If you have fewer than 5, you are being too coarse — split further.
+- Each task must describe exactly ONE action. If the description contains "and", "also", "then", or "but" connecting two actions, it must be split into separate tasks. Read each description and ask: does this do more than one thing? If yes, split it.
+- Verification must name a specific string to grep and a specific file — never "verify it works".
 
-You MUST call finish_plan to submit the task list. Do not write a text response — call the tool instead.\
+BAD task (two files — invalid):
+  "Add togglePipelineMode() to chat-input.component.ts and add a toggle button in chat-input.component.html"
+
+GOOD tasks (one file each — required):
+  Task A: "In chat-client/src/components/chat-input/chat-input.component.ts, after the closing brace of the constructor on line 61, add: togglePipelineMode(): void \{ this.chatSvc.togglePipelineMode() \}"
+  Task B: "In chat-client/src/components/chat-input/chat-input.component.html, after the closing </button> of the Send button on line 70, add a sibling <button> with (click)=\"togglePipelineMode()\", [class.active]=\"chatSvc.pipelineMode()\", class=\"pipeline-toggle-btn\", inner text 'Pipeline'."
+
+You MUST call finish_plan to submit the task list.\
+"""
+
+_EXECUTE_SYSTEM = """\
+You are a precise code executor. Your task is always small and exactly scoped.
+Rules:
+- Do EXACTLY what the task description says — nothing more, nothing less.
+- Do NOT refactor, rename, reformat, or touch anything outside the task scope.
+- Do NOT add extra features, comments, or improvements not asked for.
+- If the task says add one line, add one line. If it says edit one attribute, edit one attribute.
+When done, call finish_task.\
 """
 
 _VERIFY_SYSTEM = """\
-You are a verification agent. Check whether a task was completed correctly using the provided verification method.
+You are a verification agent. Check two things:
+1. Was the task completed correctly according to the verification method?
+2. Did the executor do MORE than the task asked? (scope creep — extra refactors, renames, reformats, unrelated changes)
 Use read_file, glob_files, and run_shell to inspect the actual state of the code or filesystem.
+If the task passed but scope creep was detected, set passed=false and describe the extra changes in issues.
 You MUST call finish_verify to submit your verdict. Do not write a text response — call the tool instead.\
 """
 
@@ -95,21 +121,43 @@ async def _run_stage_loop(
     extra_tools: dict,
     working_directory: str | None,
     stage_name: str,
+    max_iterations: int = MAX_STAGE_ITERATIONS,
+    numbered_name: str | None = None,
+    inject_turn_reminders: bool = False,
+    finish_tool_schema: dict | None = None,
 ) -> None:
     """Inner loop for a pipeline stage. Stops when the finish tool is called or no more tool calls."""
-    for iteration in range(MAX_STAGE_ITERATIONS):
+    display_name = numbered_name or stage_name
+    for iteration in range(max_iterations):
+        is_last_turn = (iteration == max_iterations - 1)
+        active_schemas = [finish_tool_schema] if (is_last_turn and finish_tool_schema is not None) else tool_schemas
         done, _ = await chat_with_tools(
-            stage_messages, sub_session, tool_schemas, working_directory, extra_tools=extra_tools
+            stage_messages, sub_session, active_schemas, working_directory, extra_tools=extra_tools
         )
         if sub_session.finish_result is not None:
             break
         if done:
             logger.warning(
                 "[pipeline:%s] model stopped at iteration %d without calling finish tool",
-                stage_name,
+                display_name,
                 iteration,
             )
             break
+        if inject_turn_reminders:
+            turns_used = iteration + 1
+            turns_left = max_iterations - turns_used
+            if turns_left == 0:
+                reminder = f"[Turn {turns_used}/{max_iterations} complete. No turns remaining — you will be terminated. Call the finish tool NOW with whatever you found.]"
+            elif turns_left == 1:
+                reminder = f"[Turn {turns_used}/{max_iterations} complete. NEXT TURN IS YOUR LAST — call ONLY the finish tool, no other tool calls. Submit what you have found so far, mark it inconclusive if needed.]"
+            elif turns_left == 2:
+                reminder = f"[Turn {turns_used}/{max_iterations} complete. {turns_left} turns remaining. Do your last search NOW — the turn after must be finish_explore only.]"
+            else:
+                reminder = f"[Turn {turns_used}/{max_iterations} complete. {turns_left} turns remaining.]"
+            stage_messages.append({"role": "user", "content": reminder})
+    else:
+        logger.warning("[pipeline:%s] max iterations (%d) reached without calling finish tool", display_name, max_iterations)
+        await sub_session.emit({"type": "error", "message": f"[pipeline:{display_name}] max iterations ({max_iterations}) reached without calling finish tool"})
     await sub_session.outbound.put({"type": "_stage_done"})
 
 
@@ -120,6 +168,8 @@ async def run_stage(
     finish_tool,
     parent_session: AgentSession,
     working_directory: str | None,
+    max_iterations: int = MAX_STAGE_ITERATIONS,
+    inject_turn_reminders: bool = False,
 ) -> dict:
     """
     Run a single pipeline stage. Loops until the finish tool is called.
@@ -132,21 +182,34 @@ async def run_stage(
     all_schemas = regular_schemas + [_finish_tool_schema(finish_tool)]
     extra_tools = {finish_tool.name: finish_tool}
 
-    logger.info("[pipeline] starting stage: %s", stage_name)
+    count = parent_session._sub_stage_counters.get(stage_name, 0) + 1
+    parent_session._sub_stage_counters[stage_name] = count
+    numbered_name = f"{stage_name}#{count}"
 
+    logger.info("[pipeline] starting stage: %s (call #%d)", stage_name, count)
+
+    finish_schema = _finish_tool_schema(finish_tool)
     loop_task = asyncio.create_task(
-        _run_stage_loop(sub_session, stage_messages, all_schemas, extra_tools, working_directory, stage_name)
+        _run_stage_loop(sub_session, stage_messages, all_schemas, extra_tools, working_directory, stage_name, max_iterations, numbered_name, inject_turn_reminders, finish_schema)
     )
 
     while True:
         event = await sub_session.outbound.get()
         if event["type"] == "_stage_done":
             break
-        await parent_session.emit({**event, "_pipeline_stage": stage_name})
+        existing = event.get("_pipeline_stage")
+        tag = f"{numbered_name}.{existing}" if existing else numbered_name
+        await parent_session.emit({**event, "_pipeline_stage": tag})
 
     await loop_task
 
-    result = sub_session.finish_result or {}
+    if sub_session.finish_result is None:
+        msg = f"[pipeline:{numbered_name}] stage did not call its finish tool — aborting"
+        logger.error(msg)
+        await parent_session.emit({"type": "error", "message": msg, "_pipeline_stage": numbered_name})
+        raise RuntimeError(msg)
+
+    result = sub_session.finish_result
     logger.info("[pipeline] stage %s done — result keys: %s", stage_name, list(result.keys()))
     return result
 
@@ -216,13 +279,16 @@ class PipelineOrchestrator:
         augment_result = await run_stage(
             "augment",
             [{"role": "system", "content": _AUGMENT_SYSTEM}, {"role": "user", "content": user_message}],
-            ["read_file", "glob_files", "grep_files", "list_directory"],
+            ["explore_codebase"],
             FinishAugmentation(),
             session,
             wd,
+            max_iterations=3,
+            inject_turn_reminders=True,
         )
         augmented_prompt = augment_result.get("augmented_prompt") or user_message
         context_notes = augment_result.get("context_notes") or ""
+        await session.emit({"type": "pipeline_summary", "label": "augmented prompt", "content": augmented_prompt, "notes": context_notes or None})
 
         # Stage 3: Critique
         critique_input = (
@@ -239,15 +305,19 @@ class PipelineOrchestrator:
             wd,
         )
         final_prompt = critique_result.get("final_prompt") or augmented_prompt
+        issues = critique_result.get("issues") or []
+        await session.emit({"type": "pipeline_summary", "label": "final prompt", "content": final_prompt, "notes": ("issues: " + "; ".join(issues)) if issues else None})
 
         # Stage 4: Plan
         plan_result = await run_stage(
             "plan",
             [{"role": "system", "content": _PLAN_SYSTEM}, {"role": "user", "content": final_prompt}],
-            [],
+            ["grep_files", "read_file_range"],
             FinishPlan(),
             session,
             wd,
+            max_iterations=5,
+            inject_turn_reminders=True,
         )
         tasks = [
             PipelineTask(
@@ -280,11 +350,10 @@ class PipelineOrchestrator:
                     else ""
                 )
                 execute_messages = [
-                    *self._system_messages,
+                    {"role": "system", "content": _EXECUTE_SYSTEM},
                     {
                         "role": "user",
                         "content": (
-                            f"Execute the following task. When done, call finish_task.\n\n"
                             f"Task: {task.description}\n\n"
                             f"Full context:\n{final_prompt}"
                             f"{retry_note}"

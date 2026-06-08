@@ -1,4 +1,4 @@
-from agent.tools.base import BaseTool
+from agent.tools.base import BaseTool, tool_error
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -82,9 +82,12 @@ class FinishCritique(BaseFinishTool):
     }
 
 
+MIN_PLAN_TASKS = 5
+
+
 class FinishPlan(BaseFinishTool):
     name = "finish_plan"
-    description = "Output the complete ordered list of atomic tasks to execute."
+    description = "Output the complete ordered list of atomic tasks to execute. Minimum 5 tasks required — the call will be rejected if fewer are submitted."
     parameters = {
         "type": "object",
         "properties": {
@@ -102,11 +105,33 @@ class FinishPlan(BaseFinishTool):
                     },
                     "required": ["id", "description", "verification_method"],
                 },
-                "description": "Ordered list of atomic tasks. Prefer fewer tasks over more.",
+                "description": f"Ordered list of atomic tasks. Minimum {MIN_PLAN_TASKS} tasks required.",
             },
         },
         "required": ["tasks"],
     }
+
+    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
+        """Reject if too few tasks or if any description contains multiple actions."""
+        tasks = args.get("tasks") or []
+        if len(tasks) < MIN_PLAN_TASKS:
+            return tool_error(
+                self.name,
+                f"Too few tasks: {len(tasks)} submitted, minimum is {MIN_PLAN_TASKS}. Split further — each file change must be its own task.",
+            )
+        multi_action_markers = [" and ", " also ", " then ", " but also "]
+        offenders = [
+            t.get("id", "?")
+            for t in tasks
+            if any(marker in (t.get("description") or "").lower() for marker in multi_action_markers)
+        ]
+        if offenders:
+            return tool_error(
+                self.name,
+                f"Tasks {', '.join(offenders)} describe multiple actions (contains 'and'/'also'/'then'). Split each into one action per task.",
+            )
+        session.finish_result = args
+        return {"tool": self.name, "status": "success"}
 
 
 class FinishTask(BaseFinishTool):
@@ -125,6 +150,34 @@ class FinishTask(BaseFinishTool):
             },
         },
         "required": ["status", "result"],
+    }
+
+
+class FinishExplore(BaseFinishTool):
+    name = "finish_explore"
+    description = "Output the file locations found during exploration. The system will read the actual code — do not copy code content yourself."
+    parameters = {
+        "type": "object",
+        "properties": {
+            "snippets": {
+                "type": "array",
+                "description": "Locations of relevant code blocks found via grep/glob. One entry per block.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {"type": "string", "description": "Relative path to the file."},
+                        "start_line": {"type": "integer", "description": "First line of the block (1-indexed)."},
+                        "end_line": {"type": "integer", "description": "Last line of the block (1-indexed)."},
+                    },
+                    "required": ["file_path", "start_line", "end_line"],
+                },
+            },
+            "summary": {
+                "type": "string",
+                "description": "Brief description of what was found and why it is relevant.",
+            },
+        },
+        "required": ["snippets", "summary"],
     }
 
 

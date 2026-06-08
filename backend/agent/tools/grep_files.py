@@ -1,5 +1,6 @@
 import asyncio
 import re
+import uuid
 from pathlib import Path
 from .base import BaseTool, tool_error
 from agent.file_utils import file_in_directory, resolve_workspace_path, load_ignore_spec, is_path_ignored
@@ -13,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 class GrepFilesTool(BaseTool):
     name = "grep_files"
-    description = "Search file contents with a regex pattern. Returns matching lines with file path and line numbers. Use -A/-B to extract code snippets around matches — prefer this over read_file when you need a specific function or symbol. Requires a workspace directory to be configured in conversation settings."
+    description = "Search file contents with a regex pattern. Returns matching lines with file path and line numbers. Use -B/-A to read the surrounding lines of a match — this is the primary way to read file content: grep for a known symbol/class/function and use -B/-A to extract the full block. Requires a workspace directory to be configured in conversation settings."
     parameters = {
         "type": "object",
         "properties": {
@@ -133,12 +134,15 @@ class GrepFilesTool(BaseTool):
         except Exception as e:
             return tool_error(self.name, f"Error during grep: {e}")
 
+        result_id = str(uuid.uuid4())[:8]
+        session._search_result_ids.add(result_id)
         return {
             "tool": self.name,
             "pattern": pattern,
             "path": path,
             "glob_pattern": glob_pattern,
             "status": "success",
+            "result_id": result_id,
             "matches": matches,
             "total": total_match_count,
             "truncated": total_match_count >= max_matches,

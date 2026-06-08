@@ -23,6 +23,8 @@ class AgentSession:
         self._compression_conv_id: str | None = None
         self.refresh_messages_callback: Callable[[str], Awaitable[list[dict]]] | None = None
         self.finish_result: dict | None = None
+        self._search_result_ids: set[str] = set()
+        self._sub_stage_counters: dict[str, int] = {}
 
     async def emit(self, event: dict) -> None:
         await self.outbound.put(event)
