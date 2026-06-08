@@ -36,7 +36,7 @@ class WriteFileTool(BaseTool):
         path = args.get("file_path", "")
         content = args.get("content", "")
         append = args.get("append", False)
-        return f"{'APPEND' if append else 'OVERWRITE'} {path}\n\n{content[:500]}{'...' if len(content) > 500 else ''}"
+        return f"{'APPEND' if append else 'OVERWRITE'} {path}\n\n{content}"
 
     def label(self, args: dict) -> str:
         path = args.get("file_path", "")

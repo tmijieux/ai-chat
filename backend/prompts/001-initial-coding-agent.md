@@ -45,6 +45,7 @@ You have access to the following tools to complete your tasks:
 - run_shell(command): Runs a shell command.
 - search_web(query): Searches the internet for info.
 - summarize_subtask(task, content): Compresses large content via LLM.
+- subagent(task): Delegates a research or analysis subtask to a sub-agent with its own tool-calling loop (read-only tools: list_directory, glob_files, grep_files, read_file, summarize_subtask). Use to explore a codebase or gather information without expanding the main context.
 
 # RULES
 - Use these tools only. Do not suggest manual steps.

@@ -1,7 +1,7 @@
 
 # App Mission
 
-Local AI chat interface backed by Ollama, designed to support agentic coding workflows on low-memory devices with a 16 384-token context window. The central design constraint is that context is scarce — every feature either helps the user *see* where tokens are going or helps the agent *preserve* as many useful tokens as possible.
+Local AI chat interface backed by llama-server (OpenAI-compatible API, running locally), designed to support agentic coding workflows on low-memory devices with a 16 384-token context window. The central design constraint is that context is scarce — every feature either helps the user *see* where tokens are going or helps the agent *preserve* as many useful tokens as possible.
 
 # Domain Glossary
 
@@ -91,14 +91,10 @@ Tool result bubbles currently render raw JSON in a `<pre>` block. Planned improv
 **Not yet implemented** (compressed_summary display is already live).
 
 ## Edit File Diff Preview
-**Planned improvement.** The `edit_file` confirmation card currently shows a plain-text `--- OLD --- / --- NEW ---` preview. Target: render a colored unified diff with actual file line numbers — red lines for removals (`-`), green lines for additions (`+`), gray/neutral for unchanged context lines.
 
-Implementation sketch:
-- **Backend** (`edit_file.py:execute()`): after reading `current_content` (which already happens before `request_confirm()`), compute the start line of `old_string` in the file (`current_content[:idx].count('\n') + 1`), then run `difflib.unified_diff` on the before/after file slices to produce diff lines with correct `@@` offsets. Pass a `diff_lines: list[{type, text}]` structure into `request_confirm()` alongside the existing plain-text `preview` (kept as fallback). Note: `validate()` is not the right place — it lacks `working_directory` and doesn't read the file.
-- **Agent event** (`agent.py` / `main.py`): `tool_confirm` WS event gains an optional `diff_lines` field.
-- **Frontend** (`agent.service.ts`): parse `diff_lines` from the event into the `AgentUiMessage`.
-- **Frontend** (`chat.component.html`): when `diff_lines` is present on a `tool_confirm` message, render a colored diff block (monospace, red bg for `-` lines, green bg for `+`, transparent for context) instead of the plain `<pre>`.
-- **Scope**: only `edit_file` needs this; `write_file` and `run_shell` keep their existing plain-text previews.
+✅ The `edit_file` confirmation card renders a colored unified diff with actual file line numbers — red lines for removals (`-`), green lines for additions (`+`), gray/neutral for unchanged context lines.
+
+Backend (`edit_file.py`) computes `diff_lines` via `difflib.unified_diff` before `request_confirm()`. The `tool_confirm` WebSocket event carries an optional `diff_lines` field. Frontend renders the colored diff block when present; falls back to plain `<pre>` preview otherwise. Only `edit_file` produces a diff — `write_file` and `run_shell` keep plain-text previews.
 
 ## Tool
 A self-contained agent capability implemented as a single Python file in `backend/agent/tools/`. Each tool subclasses a common base class that defines: `name`, `description`, `parameters` (JSON schema), `requires_confirmation`, `validate(args) → preview`, and `execute(args) → result`. The `validate` phase runs before user confirmation; `execute` runs after. All tools are explicitly registered in `backend/agent/tools/__init__.py`.
@@ -151,11 +147,25 @@ Stateful models use one-token-at-a-time decode with internal KV cache (`_decode_
 
 **Streaming partials:** `VoiceDictationService` collects 200ms chunks via `MediaRecorder`. After every 3 new chunks (≈600ms), `_maybeFirePartial()` sends the full accumulated blob to `POST /api/transcribe` and updates `partialText` signal. On release: the last in-flight partial (or a new call if none) becomes the final, then chains to `/api/correct`. Frontend effect in `ChatInputComponent` writes `_startPrefix + partial` to `currentInput` on every partial update.
 
-**Overlay + diff (not yet implemented):** On recording start, a `contenteditable` div appears absolutely positioned over the textarea, pre-filled with the current text and cursor at the same position. Partials update the overlay live. After the final + correction, a word-level LCS diff between `raw` and `corrected` is rendered: 1–2 changed words get `<span class="diff-word">` (orange bg), 3+ consecutive changed words get `<span class="diff-block">` — clicking either toggles between corrected and raw. Dismissal: Enter/send serializes overlay text to `currentInput` and hides the overlay; any printable key does the same then inserts the key at the cursor.
 
 **Mic button states (not yet implemented):** Four states driven by signals — idle (gray, `title="Hold to dictate (or hold Alt)"`), idle with textarea selection (gray + replace-hint indicator), recording (red pulse), transcribing (yellow pulse). Selection state tracked via `selectionchange` event on the textarea.
 
 **30-second limit (not yet implemented):** Whisper's mel spectrogram window is fixed at 30s — audio beyond that is silently truncated. The mic button shows a progress indicator as recording approaches 30s and auto-stops at 28s with a visual warning.
+
+## Backend Readiness
+
+Both LLM and Whisper backends load in parallel in background threads after API startup — the API accepts requests immediately without waiting for either.
+
+`GET /api/status` returns `{ llm: bool, whisper: bool }`. The frontend `AppStatusService` polls this every 2s until both flags are true, then stops. Two signals — `llmReady` and `whisperReady` — drive UI state:
+- **Send button** — disabled until `llmReady`.
+- **Mic button** — disabled until `whisperReady`; shows ⏳ icon while loading.
+- **Status banner** — visible in the chat area until both ready, listing what's still loading by name.
+
+Startup API calls (system prompts, agent tools) retry up to 10 times with 2s delay, covering the full LLM load window.
+
+## Date Injection
+
+The current date (`YYYY-MM-DD` UTC) is prepended to the active system prompt content at inference time in `_build_inference_context`. This ensures the agent always knows the current date without it being baked into any prompt template.
 
 ## Known Bugs
 - **`is_default` uniqueness not enforced**: Setting a new prompt as default does not clear the previous default. Backend must clear the flag atomically.
@@ -170,12 +180,12 @@ Framework-level compression pipeline that runs after each completed agent run. T
 
 **Stage 1 — Usefulness classification + deterministic compaction** ✅: a single batch LLM call receives the current user message, an optional one-sentence conversation summary, and for each tool call: `(tool_name, key_args, result_metadata, following_thinking)` — never the full tool output. Returns `compress | keep` per tool call plus an updated conversation summary. Compressed results get a compact one-liner (`glob_files("**/*ome-box*") → 0 files`) stored in `compressed_summary` and shown in the UI instead. `message.content` is never modified. Tools in `_SKIP_CLASSIFY = {write_file, edit_file}` are never classified. Thinking messages always kept verbatim.
 
-**Stage 2 — Reference file summarization** ✅: for each `keep` `read_file` result exceeding ~2 000 chars, an LLM call produces an API surface summary (module purpose, function signatures, key constants, imports). Stored as `compressed_summary` with a `[compressed: N lines → ~M tokens]` header. Target: 400–800 tokens.
+**Stage 2 — Reference file summarization** ✅: for each `keep` `read_file` result exceeding ~2 000 chars, an LLM call produces an API surface summary (module purpose, function signatures, key constants, imports). Stored as `compressed_summary` with a `[compressed: N lines → ~M tokens]` header. Target: 400–800 tokens. `search_web` results with total body content exceeding ~2 000 chars are also LLM-summarized in Stage 2, producing a concise summary of the search findings.
 
 **Not yet implemented:**
 - **Active file tracking**: the file currently being written/edited should never be summarized in Stage 2. Currently all `read_file` results are eligible. Design open: "last file touched" only protects the most recent edit in a multi-file run; "all files edited in the run" protects more but prevents compression even when edits are complete. Prompt engineering (instruct agent to re-read before editing) may reduce the problem.
 - **Conversation title update**: after the first agent run, generate a short goal-framed title from the first user message via a small LLM call (not from the compression summary, which is agent-centric). Only update once — subsequent runs preserve the title. Update only if the title is still the auto-generated default (first 20 chars of first message), so manual renames are never overwritten.
-- **On-demand compression**: `agent.py:241` already detects `ctx_after > CTX_LIMIT` after each tool result and emits an error. Instead of failing immediately, the agent should: (1) attempt compression of all eligible tool-role messages in the full conversation history, (2) re-count tokens, (3) continue the run if now within budget. If still over: emit an error telling the user to manually delete old tool results or start a new conversation. No new event type needed — uses the existing error bubble.
+- **Mid-loop context compression** ✅: when `ctx_after > CTX_LIMIT` after a tool result, the agent emits the `tool_result` event first (so the frontend saves it to DB), then emits a `compressing` event. The frontend compresses the conversation via `POST /api/conversations/{id}/compress?protect_last=true` (preventing the overflowing result from being compacted itself), then sends `compression_done` over WebSocket. The backend resumes by patching in-memory tool messages with their compressed summaries, matched by `tool_call_id` — preserving assistant messages with `tool_calls` that are not persisted to DB. If still over limit after compression, emits an error.
 - **Oversized output summarization** for non-`read_file` tools (e.g. `run_shell` with large stdout).
 
 Never compressed by Stage 2: `write_file`, `edit_file`, `run_shell` results; thinking messages.

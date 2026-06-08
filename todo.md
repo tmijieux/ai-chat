@@ -22,6 +22,10 @@
 
 - **Per-iteration compression**: run compression/summarization when required (file too big)
 
+## Backend / Infrastructure
+
+- **Fix uvicorn reload on Windows with ProactorEventLoop** — WinError 87 on socket accept when using reload=True. Pattern: parent spawns child subprocess (env flag `RELOADER=yes`), child runs `uvicorn.Server` directly (no `reload=True`) + `watchfiles.awatch` concurrently, sets `server.should_exit = True` on file change, exits with code 3, parent restarts. See `my_quart_reloader()` in the other quart project for the analog.
+
 ## Bugs
 
 - **`is_default` uniqueness**: setting a new default prompt must atomically clear the previous one (see [[is_default]])

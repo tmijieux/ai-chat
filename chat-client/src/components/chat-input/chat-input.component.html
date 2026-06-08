@@ -46,6 +46,12 @@
       </button>
     } @else {
       <button
+        (click)="voiceSvc.toggleLang()"
+        [disabled]="voiceSvc.isRecording() || voiceSvc.isTranscribing()"
+        class="px-2 py-3 rounded-lg text-xs font-bold transition-all bg-gray-100 hover:bg-gray-200 text-white disabled:opacity-40"
+        [title]="'Dictation language: ' + voiceSvc.lang() + ' (click or Ctrl+Shift+L to switch)'"
+      >{{ voiceSvc.lang().toUpperCase() }}</button>
+      <button
         (mousedown)="onMicMousedown($event)"
         [disabled]="!appStatus.whisperReady()"
         class="send-button px-4 py-3 rounded-lg transition-all"

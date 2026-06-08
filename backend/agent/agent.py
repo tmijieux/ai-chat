@@ -2,7 +2,7 @@ import json
 import asyncio
 import logging
 import aiohttp
-from typing import Any
+from typing import Any, Callable, Awaitable
 
 from .tools import TOOL_REGISTRY, get_ollama_tool_list
 from llm import backend
@@ -19,6 +19,9 @@ class AgentSession:
     def __init__(self):
         self.outbound: asyncio.Queue[dict] = asyncio.Queue()
         self._pending_confirms: dict[str, asyncio.Future] = {}
+        self._compression_event: asyncio.Event = asyncio.Event()
+        self._compression_conv_id: str | None = None
+        self.refresh_messages_callback: Callable[[str], Awaitable[list[dict]]] | None = None
 
     async def emit(self, event: dict) -> None:
         await self.outbound.put(event)
@@ -46,6 +49,16 @@ class AgentSession:
         future = self._pending_confirms.pop(tool_id, None)
         if future and not future.done():
             future.set_result((approved, reason))
+
+    async def await_compression(self) -> str | None:
+        """Suspend the agent loop until the frontend sends compression_done."""
+        self._compression_event.clear()
+        await self._compression_event.wait()
+        return self._compression_conv_id
+
+    def resume_after_compression(self, conv_id: str) -> None:
+        self._compression_conv_id = conv_id
+        self._compression_event.set()
 
 
 def _find_superseded_read_file_indices(pairs: list[tuple[str, str]]) -> list[int]:
@@ -153,6 +166,7 @@ async def chat_with_tools(
     ctx_before_generation = await backend.count_tokens(prepared, tools)
     max_tokens = CTX_LIMIT - ctx_before_generation
     print(f"[tokens] context before generation: {ctx_before_generation}/{CTX_LIMIT}, max_tokens={max_tokens}")
+    await session.emit({"type": "ctx_update", "ctx_tokens": ctx_before_generation})
 
     message: dict[str, Any] = {"role": "assistant", "content": "", "thinking": ""}
     tool_calls_acc: dict[int, dict] = {}  # index → {id, name, arguments_str}
@@ -202,7 +216,7 @@ async def chat_with_tools(
 
     if done_reason == "length":
         await session.emit({"type": "error", "message": f"Context limit reached during generation: {prompt_eval_count + eval_count}/{CTX_LIMIT} tokens. The response was cut off."})
-        return True
+        return True, False
 
     finished_without_response = len(message["content"]) == 0 and len(tool_calls) == 0
     if finished_without_response:
@@ -226,6 +240,7 @@ async def chat_with_tools(
     if len(tool_calls) > 0:
         ctx_before = await backend.count_tokens(backend.prepare_messages(messages), tools)
         print(f"[tokens] context before tool execution: {ctx_before}/{CTX_LIMIT}")
+        await session.emit({"type": "ctx_update", "ctx_tokens": ctx_before})
         for tool_call in tool_calls:
             tool_name: str = tool_call.get("function", {}).get("name", "")
             tool_args: dict = tool_call.get("function", {}).get("arguments", {})
@@ -247,9 +262,22 @@ async def chat_with_tools(
 
             ctx_after = await backend.count_tokens(backend.prepare_messages(messages), tools)
             print(f"[tokens] context after tool result '{tool_name}': {ctx_after}/{CTX_LIMIT}")
+            await session.emit({"type": "ctx_update", "ctx_tokens": ctx_after})
             if ctx_after > CTX_LIMIT:
-                await session.emit({"type": "error", "message": f"Context limit exceeded after tool result from '{tool_name}': {ctx_after}/{CTX_LIMIT} tokens"})
-                return True
+                # Emit tool_result first so frontend saves it to DB before compressing
+                await session.emit({"type": "tool_result", "tool_id": call_id, "tool_name": tool_name, "content": tool_output, "log_message": log_msg})
+                await session.emit({"type": "compressing", "ctx_tokens": ctx_after, "ctx_limit": CTX_LIMIT})
+                conv_id = await session.await_compression()
+                if conv_id is not None and session.refresh_messages_callback is not None:
+                    refreshed = await session.refresh_messages_callback(conv_id)
+                    messages[:] = refreshed
+                ctx_after_compress = await backend.count_tokens(backend.prepare_messages(messages), tools)
+                print(f"[tokens] context after compression: {ctx_after_compress}/{CTX_LIMIT}")
+                await session.emit({"type": "ctx_update", "ctx_tokens": ctx_after_compress})
+                if ctx_after_compress > CTX_LIMIT:
+                    await session.emit({"type": "error", "message": f"Context still exceeds limit after compression: {ctx_after_compress}/{CTX_LIMIT} tokens"})
+                    return True, False
+                continue
 
             await session.emit({"type": "tool_result", "tool_id": call_id, "tool_name": tool_name, "content": tool_output, "log_message": log_msg})
 

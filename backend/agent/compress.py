@@ -7,6 +7,7 @@ from llm.base import LLMBackend
 logger = logging.getLogger(__name__)
 
 COMPRESS_THRESHOLD_CHARS = 2000  # ~500 tokens
+CHUNK_MAX_CHARS = 32_000  # ~8k tokens per chunk, leaves headroom for agent context
 
 _SKIP_CLASSIFY = {"write_file", "edit_file"}
 
@@ -40,6 +41,8 @@ def _key_args(result: dict) -> str:
         return repr(result.get("pattern", ""))
     if tool == "run_shell":
         return repr((result.get("command") or "")[:80])
+    if tool == "search_web":
+        return repr((result.get("query") or "")[:80])
     return ""
 
 
@@ -61,6 +64,10 @@ def _result_metadata(result: dict) -> dict:
         meta["exit_code"] = result.get("exit_code", 0)
         output = result.get("output") or result.get("stdout") or ""
         meta["line_count"] = len(output.splitlines())
+    elif tool == "search_web":
+        results_list = result.get("results") or []
+        meta["result_count"] = len(results_list)
+        meta["total_chars"] = sum(len(r.get("content") or "") for r in results_list)
     return meta
 
 
@@ -85,6 +92,9 @@ def _compact_summary(result: dict) -> str:
         code = meta.get("exit_code", "?")
         n = meta.get("line_count", 0)
         return f'run_shell({key}) → exit {code}, {n} line{"s" if n != 1 else ""}'
+    if tool == "search_web":
+        n = meta.get("result_count", 0)
+        return f'search_web({key}) → {n} result{"s" if n != 1 else ""}'
     return f'{tool}({key}) → {meta.get("status", "?")}'
 
 
@@ -224,6 +234,98 @@ Be terse. No examples. No prose beyond descriptions.\
 """
 
 
+_SUMMARIZE_SHELL_SYSTEM = """\
+Summarize the following shell command output (one chunk of a potentially larger output).
+Focus on: errors, warnings, key results, important file paths or values, exit signals.
+Be terse. Preserve exact error messages and stack traces verbatim. No prose beyond the summary.\
+"""
+
+
+_SUMMARIZE_SEARCH_SYSTEM = """\
+Summarize the following web search results for use in a coding agent context.
+Keep only facts, code snippets, API references, and technical details relevant to the query.
+Be terse. No prose beyond the summary. Output plain text.\
+"""
+
+
+def _split_by_lines(text: str, max_chars: int) -> list[str]:
+    """Split text into chunks of at most max_chars characters, breaking only on line boundaries."""
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for line in text.splitlines(keepends=True):
+        if current_len + len(line) > max_chars and len(current) > 0:
+            chunks.append("".join(current))
+            current = []
+            current_len = 0
+        current.append(line)
+        current_len += len(line)
+    if len(current) > 0:
+        chunks.append("".join(current))
+    return chunks
+
+
+async def _summarize_shell_output(result: dict, backend: LLMBackend) -> str:
+    """Summarize a run_shell tool result, splitting large output into chunks if needed."""
+    command_raw = result.get("command")
+    command = (command_raw if command_raw is not None else "")[:80]
+
+    raw_output = result.get("output")
+    if raw_output is None or raw_output == "":
+        error_dict = result.get("error")
+        if error_dict is None:
+            error_dict = {}
+        raw_output = error_dict.get("message")
+        if raw_output is None:
+            raw_output = ""
+
+    exit_code = 0 if result.get("status") == "success" else 1
+    chunks = _split_by_lines(raw_output, CHUNK_MAX_CHARS)
+    chunk_count = len(chunks)
+    summaries = []
+    for i, chunk in enumerate(chunks):
+        header = f"[chunk {i + 1}/{chunk_count}]\n" if chunk_count > 1 else ""
+        summary = await _llm_complete(header + chunk, backend, system=_SUMMARIZE_SHELL_SYSTEM)
+        summaries.append(summary)
+
+    combined = "\n\n---\n\n".join(summaries) if chunk_count > 1 else summaries[0]
+    estimated_tokens = len(combined) // 4
+    logger.info(
+        "summarize_shell %r: %d chunk(s) → %d chars (~%d tokens)",
+        command, chunk_count, len(combined), estimated_tokens,
+    )
+    return (
+        f"[compressed: run_shell({repr(command)}) → exit {exit_code}, "
+        f"{len(raw_output.splitlines())} lines, {chunk_count} chunk(s) → ~{estimated_tokens} tokens]\n"
+        + combined
+    )
+
+
+async def _summarize_search_results(result: dict, backend: LLMBackend) -> str:
+    query = result.get("query", "unknown")
+    results_list = result.get("results") or []
+
+    parts = []
+    for r in results_list:
+        url = r.get("url", "")
+        body = r.get("content") or ""
+        if body:
+            parts.append(f"URL: {url}\n{body}")
+
+    prompt = f"Query: {query}\n\n" + "\n\n---\n\n".join(parts)
+
+    t0 = time.perf_counter()
+    summary = await _llm_complete(prompt, backend, system=_SUMMARIZE_SEARCH_SYSTEM)
+    elapsed = time.perf_counter() - t0
+    est_tokens = len(summary) // 4
+    logger.info(
+        "summarize_search %r: %.1fs → %d chars (~%d tokens)",
+        query[:40], elapsed, len(summary), est_tokens,
+    )
+
+    return f"[compressed: search_web({repr(query)}) → {len(results_list)} result(s) → ~{est_tokens} tokens]\n{summary}"
+
+
 async def _summarize_file(result: dict, backend: LLMBackend) -> str:
     path = result.get("path", "unknown")
     content = result.get("file_content") or ""
@@ -252,6 +354,7 @@ async def compress_messages(
     user_message: str,
     conversation_summary: str | None,
     backend: LLMBackend,
+    protect_last: bool = False,
 ) -> tuple[list[dict[str, str]], str]:
     """
     Classify and compress a list of tool result messages.
@@ -303,6 +406,9 @@ async def compress_messages(
         pairs, user_message, conversation_summary, backend
     )
 
+    if protect_last and pairs:
+        labels[str(pairs[-1]["index"])] = "keep"
+
     compressions: list[dict[str, str]] = []
 
     for p in pairs:
@@ -334,6 +440,30 @@ async def compress_messages(
                     len(file_content),
                 )
                 compressed_summary = await _summarize_file(result, backend)
+        elif label == "keep" and result.get("tool") == "search_web":
+            results_list = result.get("results") or []
+            total_chars = sum(len(r.get("content") or "") for r in results_list)
+            if total_chars > COMPRESS_THRESHOLD_CHARS:
+                logger.info(
+                    "useful search_web over threshold (%d chars) → summarizing",
+                    total_chars,
+                )
+                compressed_summary = await _summarize_search_results(result, backend)
+        elif label == "keep" and result.get("tool") == "run_shell":
+            raw_output = result.get("output")
+            if raw_output is None:
+                error_dict = result.get("error")
+                if error_dict is None:
+                    error_dict = {}
+                raw_output = error_dict.get("message")
+                if raw_output is None:
+                    raw_output = ""
+            if len(raw_output) > COMPRESS_THRESHOLD_CHARS:
+                logger.info(
+                    "useful run_shell over threshold (%d chars) → chunked summarization",
+                    len(raw_output),
+                )
+                compressed_summary = await _summarize_shell_output(result, backend)
 
         if compressed_summary is not None:
             compressions.append({

@@ -291,6 +291,7 @@
                       placeholder="Reason for rejection (optional)…"
                       [value]="rejectReason()"
                       (input)="rejectReason.set($any($event.target).value)"
+                      (keydown.enter)="onRejectKeydown($event, msg.tool_id)"
                     ></textarea>
                     <div class="flex gap-2">
                       <button

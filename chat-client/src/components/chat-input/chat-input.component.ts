@@ -86,6 +86,14 @@ export class ChatInputComponent {
 
   @HostListener('document:keydown', ['$event'])
   onKeydown(event: KeyboardEvent): void {
+    if (event.key === 'L' && event.ctrlKey && event.shiftKey && !event.altKey) {
+      event.preventDefault()
+      if (!this.voiceSvc.isRecording() && !this.voiceSvc.isTranscribing()) {
+        this.voiceSvc.toggleLang()
+      }
+      return
+    }
+
     if (event.key === 'AltGraph') {
       if (this.voiceSvc.isRecording() || this._altTimer !== null) {
         return
@@ -172,6 +180,7 @@ export class ChatInputComponent {
   useCorrection(corrected: string): void {
     this.currentInput.set((this._startPrefix + ' ' + corrected).trim())
     this.voiceSvc.dismissCorrection()
+    this._textareaRef?.nativeElement.focus()
   }
 
   removeImage(img: PendingImage): void {

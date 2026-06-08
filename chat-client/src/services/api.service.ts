@@ -85,11 +85,12 @@ export class ApiService {
     )
   }
 
-  compress_conversation(id: string) {
+  compress_conversation(id: string, protect_last = false) {
     return this.http.post<{
       compressions: { message_id: string; compressed_summary: string }[]
       new_summary: string
-    }>(`${BASE_URL}/conversations/${id}/compress`, {})
+      ctx_tokens: number
+    }>(`${BASE_URL}/conversations/${id}/compress`, {}, { params: protect_last ? { protect_last: 'true' } : {} })
   }
 
   get_system_prompts() {

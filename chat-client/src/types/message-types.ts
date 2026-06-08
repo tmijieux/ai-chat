@@ -131,36 +131,23 @@ export type ConversationTree = {
 // Agent WebSocket event types
 // ---------------------------------------------------------------------------
 
-export type AgentEventType =
-  | 'thinking'
-  | 'content'
-  | 'tool_call'
-  | 'tool_confirm'
-  | 'tool_result'
-  | 'iteration_end'
-  | 'done'
-  | 'error'
-
 export type DiffLine = {
   type: 'added' | 'removed' | 'context' | 'header'
   text: string
   line?: number | null
 }
 
-export type AgentEvent = {
-  type: AgentEventType
-  content?: string
-  tool_id?: string
-  tool_name?: string
-  arguments?: Record<string, unknown>
-  preview?: string
-  diff_lines?: DiffLine[]
-  prompt_tokens?: number
-  response_tokens?: number
-  message?: string
-  log_message?: string
-  finished_without_response?: boolean
-}
+export type AgentEvent =
+  | { type: 'thinking' | 'content'; content: string }
+  | { type: 'tool_call'; tool_id: string; tool_name: string; arguments: Record<string, unknown> }
+  | { type: 'tool_confirm'; tool_id: string; tool_name: string; arguments: Record<string, unknown>; preview: string; diff_lines?: DiffLine[] }
+  | { type: 'tool_result'; tool_id: string; tool_name: string; content: string; log_message?: string }
+  | { type: 'iteration_end'; prompt_tokens: number; response_tokens: number }
+  | { type: 'ctx_update' | 'compressing'; ctx_tokens: number }
+  | { type: 'done'; finished_without_response?: boolean }
+  | { type: 'error'; message: string }
+
+export type AgentEventType = AgentEvent['type']
 
 // ---------------------------------------------------------------------------
 // Unified display message — single type rendered in the template.

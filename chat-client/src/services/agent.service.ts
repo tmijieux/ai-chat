@@ -58,6 +58,12 @@ export class AgentService {
     }
   }
 
+  compressionDone(conversationId: string): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: 'compression_done', conversation_id: conversationId }))
+    }
+  }
+
   abort(): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: 'abort' }))

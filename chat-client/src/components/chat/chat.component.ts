@@ -201,7 +201,7 @@ export class ChatComponent implements OnDestroy {
       const r = JSON.parse(content)
       if (r.tool !== 'write_file' && r.tool !== 'edit_file') return null
       const icon = r.status === 'success' ? '✓' : '✗'
-      const msg = r.message ? ` — ${r.message}` : ''
+      const msg = r.error?.message ? ` — ${r.error.message}` : (r.message ? ` — ${r.message}` : '')
       return { icon, text: `${r.tool}: ${r.path ?? ''}${msg}` }
     } catch {
       return null
@@ -245,6 +245,14 @@ export class ChatComponent implements OnDestroy {
   startReject(toolId: string): void {
     this.rejectingToolId.set(toolId)
     this.rejectReason.set('')
+  }
+
+  onRejectKeydown(event: Event, toolId: string): void {
+    const ke = event as KeyboardEvent
+    if (!ke.shiftKey) {
+      ke.preventDefault()
+      this.sendRejection(toolId)
+    }
   }
 
   sendRejection(toolId: string): void {

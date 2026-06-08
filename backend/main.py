@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import datetime
 import io
@@ -5,7 +6,6 @@ import math
 import uuid
 import logging
 import json
-import asyncio
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -197,7 +197,9 @@ async def _build_inference_context(
             )
         ).first()
         if p is not None:
-            messages.append({"role": "system", "content": p.content})
+            today = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")
+            content = f"Today's date: {today}\n\n{p.content}"
+            messages.append({"role": "system", "content": content})
 
     # Batch-fetch image attachments for all branch messages
     branch_ids = [m.id for m in branch]
@@ -906,7 +908,11 @@ async def count_conversation_tokens(id: str, sess: AsyncSession = Depends(get_db
 
 
 @app.post("/api/conversations/{id}/compress")
-async def compress_conversation(id: str, sess: AsyncSession = Depends(get_db_session)):
+async def compress_conversation(
+    id: str,
+    protect_last: bool = False,
+    sess: AsyncSession = Depends(get_db_session),
+):
     conv = (await sess.scalars(select(db.Conversation).where(db.Conversation.id == id))).first()
     if conv is None:
         raise HTTPException(404)
@@ -929,7 +935,7 @@ async def compress_conversation(id: str, sess: AsyncSession = Depends(get_db_ses
     candidate_dicts = [{"id": m.id, "role": m.role, "content": m.content, "thinking": m.thinking} for m in candidates]
 
     compressions, new_summary = await compress_messages(
-        candidate_dicts, all_dicts, user_message, None, backend
+        candidate_dicts, all_dicts, user_message, None, backend, protect_last=protect_last
     )
 
     for c in compressions:
@@ -940,7 +946,16 @@ async def compress_conversation(id: str, sess: AsyncSession = Depends(get_db_ses
             msg.compressed_summary = c["compressed_summary"]
 
     await sess.flush()
-    return {"compressions": compressions, "new_summary": new_summary}
+
+    compressed_branch = _build_active_branch_path(
+        list((await sess.scalars(select(db.Message).where(db.Message.conversation_id == id))).all()),
+        conv.active_message_id,
+    )
+    compressed_dicts = [{"role": m.role, "content": m.compressed_summary if m.compressed_summary else m.content, "thinking": m.thinking} for m in compressed_branch]
+    tools_list = get_ollama_tool_list(list(TOOL_REGISTRY.values()))
+    ctx_tokens = await backend.count_tokens(backend.prepare_messages(compressed_dicts), tools_list)
+
+    return {"compressions": compressions, "new_summary": new_summary, "ctx_tokens": ctx_tokens}
 
 
 # ---------------------------------------------------------------------------
@@ -953,6 +968,8 @@ async def _ws_receive_messages(websocket: WebSocket, session: AgentSession, agen
             data = await websocket.receive_json()
             if data.get("type") == "confirm":
                 session.resolve_confirm(data["tool_id"], data["approved"], data.get("reason"))
+            elif data.get("type") == "compression_done":
+                session.resume_after_compression(data.get("conversation_id", ""))
             elif data.get("type") == "abort":
                 agent_task.cancel()
                 return
@@ -960,7 +977,7 @@ async def _ws_receive_messages(websocket: WebSocket, session: AgentSession, agen
         agent_task.cancel()
 
 
-_STT_CORRECTION_SYSTEM = (
+_STT_CORRECTION_SYSTEM_FR = (
     "You are a speech-to-text correction assistant for a French-speaking developer using an agentic coding assistant.\n"
     "The assistant has tools to operate on files and projects: read_file, list_directory, glob_files, grep_files, edit_file, write_file, run_shell.\n"
     "The user dictates commands and questions in French, heavily mixed with English technical terms: "
@@ -971,12 +988,12 @@ _STT_CORRECTION_SYSTEM = (
     "Use semantic coherence and typical developer vocabulary to infer the intended word — "
     "a phrase like 'lis le fichier et demi' makes no sense but 'lis le fichier README' does.\n"
     "Correct only obvious STT errors. Do not rephrase, translate, or add anything. "
+    "If the input is a question or a command, output the corrected question or command — never answer it. "
     "Do NOT sanitize, soften, or replace crude language — if the user said 'merde', keep 'merde'. Your job is dictation correction, not content moderation. "
     "Return only the corrected text, nothing else."
 )
 
-
-_STT_EXAMPLES = [
+_STT_EXAMPLES_FR = [
     ("Lis le fichier Redmi et explique-moi ce qu'il fait.",
      "Lis le fichier README et explique-moi ce qu'il fait."),
     ("Lance la commande nope install dans le terminal.",
@@ -989,14 +1006,48 @@ _STT_EXAMPLES = [
      "Listons les fichiers à la racine du dépôt git."),
     ("Fais un commit dans le tripoGit.",
      "Fais un commit dans le dépôt git."),
+    ("Qu'est-ce que fait la fonction rend deux ?",
+     "Qu'est-ce que fait la fonction render ?"),
+]
+
+_STT_CORRECTION_SYSTEM_EN = (
+    "You are a speech-to-text correction assistant for an English-speaking developer using an agentic coding assistant.\n"
+    "The assistant has tools to operate on files and projects: read_file, list_directory, glob_files, grep_files, edit_file, write_file, run_shell.\n"
+    "The user dictates commands and questions in English, with technical terms: "
+    "filenames, function names, variable names, class names, CLI commands, package names, git terms, framework names.\n"
+    "The STT model sometimes mishears technical terms as phonetically similar words or nonsense. "
+    "Use semantic coherence and typical developer vocabulary to infer the intended word.\n"
+    "Correct only obvious STT errors. Do not rephrase or add anything. "
+    "If the input is a question or a command, output the corrected question or command — never answer it. "
+    "Do NOT sanitize or soften language. Your job is dictation correction, not content moderation. "
+    "Return only the corrected text, nothing else."
+)
+
+_STT_EXAMPLES_EN = [
+    ("Read the read me file and explain what it does.",
+     "Read the README file and explain what it does."),
+    ("Run in pee em install in the terminal.",
+     "Run npm install in the terminal."),
+    ("Edit the function render component dot T S.",
+     "Edit the function renderComponent.ts."),
+    ("Make a get commit on the main branch.",
+     "Make a git commit on the main branch."),
+    ("What does the greet user function do?",
+     "What does the greetUser function do?"),
 ]
 
 
 async def _correct_stt(text: str, language: str | None) -> str:
     import aiohttp
     from llm.llama_server import LLAMA_CHAT_URL, MODEL_NAME
-    messages = [{"role": "system", "content": _STT_CORRECTION_SYSTEM}]
-    for user_ex, assistant_ex in _STT_EXAMPLES:
+    if language == "en":
+        system = _STT_CORRECTION_SYSTEM_EN
+        examples = _STT_EXAMPLES_EN
+    else:
+        system = _STT_CORRECTION_SYSTEM_FR
+        examples = _STT_EXAMPLES_FR
+    messages = [{"role": "system", "content": system}]
+    for user_ex, assistant_ex in examples:
         messages.append({"role": "user", "content": user_ex})
         messages.append({"role": "assistant", "content": assistant_ex})
     messages.append({"role": "user", "content": text})
@@ -1081,6 +1132,49 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
             messages.append({"role": "user", "content": user_message})
 
         session = AgentSession()
+
+        async def _refresh_messages(conv_id: str) -> list[dict]:
+            # Fetch which tool messages were compressed in DB, match by tool_call_id.
+            # We update in-memory rather than rebuilding from scratch so that assistant
+            # messages with tool_calls are preserved (they are not persisted to DB).
+            compressed_rows = (await sess.execute(
+                select(db.Message)
+                .where(db.Message.conversation_id == conv_id)
+                .where(db.Message.context_excluded == True)
+                .where(db.Message.compressed_summary.isnot(None))
+            )).scalars().all()
+
+            call_id_to_summary: dict[str, str] = {}
+            for m in compressed_rows:
+                try:
+                    content = json.loads(m.content or "{}")
+                    call_id = content.get("tool_call_id")
+                    if call_id and m.compressed_summary:
+                        call_id_to_summary[call_id] = m.compressed_summary
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+            for msg in messages:
+                if msg.get("role") != "tool":
+                    continue
+                try:
+                    content_dict = json.loads(msg.get("content", "{}"))
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                call_id = content_dict.get("tool_call_id")
+                if call_id and call_id in call_id_to_summary:
+                    msg["content"] = json.dumps({
+                        "tool": content_dict.get("tool", "tool"),
+                        "status": "compressed",
+                        "summary": call_id_to_summary[call_id],
+                        "tool_call_id": call_id,
+                    })
+
+            return messages
+
+        if conversation_id:
+            session.refresh_messages_callback = _refresh_messages
+
         agent_task = asyncio.create_task(run_agent(session, messages, tools, working_directory))
 
         async def send_events_to_websocket() -> None:

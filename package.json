@@ -3,8 +3,8 @@
   "private": true,
   "scripts": {
     "start": "npm run dev",
-    "dev": "concurrently --names backend,frontend --prefix-colors cyan,magenta \"cd backend && venv\\\\Scripts\\\\uvicorn main:app --reload\" \"cd chat-client && npm start\"",
-    "backend": "cd backend && venv\\Scripts\\uvicorn main:app --reload",
+    "dev": "concurrently --names backend,frontend --prefix-colors cyan,magenta \"cd backend && venv\\\\Scripts\\\\python serve.py\" \"cd chat-client && npm start\"",
+    "backend": "cd backend && venv\\Scripts\\python serve.py",
     "frontend": "cd chat-client && npm start"
   },
   "devDependencies": {

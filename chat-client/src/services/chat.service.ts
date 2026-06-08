@@ -544,6 +544,24 @@ export class ChatService {
         }
         toolResultIdsFromPreviousIteration = toolResultIdsFromCurrentIteration
         toolResultIdsFromCurrentIteration = []
+      } else if (event.type === 'ctx_update') {
+        this._promptTokens.set(event.ctx_tokens ?? 0)
+      } else if (event.type === 'compressing') {
+        const convId = this._conversationId()
+        if (convId) {
+          enqueue(async () => {
+            this._isCompressing.set(true)
+            try {
+              const result = await firstValueFrom(this.api.compress_conversation(convId, true))
+              if (result.ctx_tokens != null) {
+                this._promptTokens.set(result.ctx_tokens)
+              }
+            } finally {
+              this._isCompressing.set(false)
+            }
+            this.agentSvc.compressionDone(convId)
+          })
+        }
       } else if (event.type === 'done' || event.type === 'error') {
         this._messages.update((msgs) => msgs.filter((m) => m.kind !== 'tool_confirm'))
         if (event.type === 'error') {

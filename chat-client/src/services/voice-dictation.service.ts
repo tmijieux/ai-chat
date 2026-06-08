@@ -20,11 +20,17 @@ export class VoiceDictationService {
   private _isTranscribing = signal(false)
   private _partialText = signal('')
   private _lastCorrection = signal<DictationCorrection | null>(null)
+  private _lang = signal<'fr' | 'en'>('fr')
 
   readonly isRecording = this._isRecording.asReadonly()
   readonly isTranscribing = this._isTranscribing.asReadonly()
   readonly partialText = this._partialText.asReadonly()
   readonly lastCorrection = this._lastCorrection.asReadonly()
+  readonly lang = this._lang.asReadonly()
+
+  toggleLang(): void {
+    this._lang.set(this._lang() === 'fr' ? 'en' : 'fr')
+  }
   readonly finalResult$ = new Subject<DictationResult>()
 
   dismissCorrection(): void {
@@ -163,7 +169,7 @@ export class VoiceDictationService {
     this._chunksAtLastPartial = this._audioChunks.length
     const blob = new Blob(this._audioChunks, { type: 'audio/webm' })
 
-    this._partialSub = this.api.post_transcribe(blob, 'fr').subscribe({
+    this._partialSub = this.api.post_transcribe(blob, this._lang()).subscribe({
       next: ({ text }) => {
         this._partialSub = null
         if (isFinal) {
@@ -197,7 +203,7 @@ export class VoiceDictationService {
     this.finalResult$.next({ raw, corrected: raw })
     if (!raw) { return }
     const requestId = this._correctionRequestId
-    firstValueFrom(this.api.post_correct(raw, 'fr'))
+    firstValueFrom(this.api.post_correct(raw, this._lang()))
       .then(({ text }) => {
         if (text && text !== raw && this._correctionRequestId === requestId) {
           this._lastCorrection.set({ raw, corrected: text })
