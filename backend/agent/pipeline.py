@@ -39,35 +39,36 @@ class PipelineTask:
 # ---------------------------------------------------------------------------
 
 _CLASSIFY_SYSTEM = """\
-You are a request classifier. Decide if the user request is simple or complex.
-Simple: greetings, factual questions, single-turn explanations that need no file access.
+You are a request classifier. Classify the user request as simple or complex.
+Simple: greetings, factual questions, explanations that need no file access.
 Complex: tasks requiring reading/writing files, multi-step code changes, or research across a codebase.
-Call finish_classify immediately — do not ask follow-up questions.\
+You MUST call finish_classify to submit your answer. Do not write a text response — the only valid output is the tool call.\
 """
 
 _AUGMENT_SYSTEM = """\
-You are a prompt augmentation agent. Clarify and expand the user's request with concrete context from the codebase.
-Use the available tools to locate relevant files, understand the project structure, and identify the exact code to change.
-Then call finish_augmentation with an enriched prompt that includes specific file paths, function names, and any context a future agent will need.\
+You are a prompt augmentation agent. Enrich the user's request with concrete context from the codebase.
+Steps:
+1. Use read_file, glob_files, grep_files, list_directory to locate relevant files and understand the code structure.
+2. Once you have enough context, call finish_augmentation with the enriched prompt.
+You MUST call finish_augmentation to complete your task. Do not write a text summary — call the tool instead.\
 """
 
 _CRITIQUE_SYSTEM = """\
-You are a critical reviewer. You receive an original user request and an augmented version of it.
-Check that the augmented prompt correctly captures the user's intent, references real files/functions that actually exist, and is specific enough for a planner to act on.
-Call finish_critique with the corrected prompt (or the original augmented prompt if it is already correct) and a list of issues found.\
+You are a critical reviewer. You receive an original request and an augmented version.
+Check: does the augmented prompt correctly capture the intent? Do the file paths and function names actually exist?
+You MUST call finish_critique to submit your verdict. Do not write a text response — call the tool instead.\
 """
 
 _PLAN_SYSTEM = """\
-You are a task planner. Break the given request into a minimal ordered list of atomic, concrete tasks.
-Each task must be small enough to complete in a single agent run.
-Each task must have a clear verification method — a concrete way to check it was done correctly (e.g. "run grep to confirm function exists", "run the tests", "read the edited file and confirm the change").
-Call finish_plan with the task list. Prefer fewer tasks over more — do not split unnecessarily.\
+You are a task planner. Break the request into a minimal ordered list of atomic tasks.
+Each task must be small enough to complete in one agent run and have a concrete verification method.
+You MUST call finish_plan to submit the task list. Do not write a text response — call the tool instead.\
 """
 
 _VERIFY_SYSTEM = """\
 You are a verification agent. Check whether a task was completed correctly using the provided verification method.
 Use read_file, glob_files, and run_shell to inspect the actual state of the code or filesystem.
-Call finish_verify with your verdict.\
+You MUST call finish_verify to submit your verdict. Do not write a text response — call the tool instead.\
 """
 
 
