@@ -31,6 +31,7 @@ class PipelineTask:
     verification_method: str
     status: Literal["pending", "in_progress", "done", "failed"] = "pending"
     result: str | None = None
+    verify_issues: str | None = None
     retry_count: int = 0
 
 
@@ -344,11 +345,10 @@ class PipelineOrchestrator:
                 if attempt > 0:
                     logger.info("[pipeline] retrying task %s (attempt %d)", task.id, attempt + 1)
 
-                retry_note = (
-                    f"\n\nPrevious attempt failed: {task.result}"
-                    if attempt > 0 and task.result is not None
-                    else ""
-                )
+                if attempt > 0 and task.verify_issues is not None:
+                    retry_note = f"\n\nPrevious attempt failed verification: {task.verify_issues}"
+                else:
+                    retry_note = ""
                 execute_messages = [
                     {"role": "system", "content": _EXECUTE_SYSTEM},
                     {
@@ -399,9 +399,10 @@ class PipelineOrchestrator:
                     success = True
                     break
 
+                task.verify_issues = verify_result.get("issues") or ""
                 task.retry_count += 1
                 logger.info(
-                    "[pipeline] task %s verify failed: %s", task.id, verify_result.get("issues", "")
+                    "[pipeline] task %s verify failed: %s", task.id, task.verify_issues
                 )
 
             if not success:
