@@ -157,7 +157,7 @@ async def chat_with_tools(
     tools: list[dict],
     working_directory: str | None,
     extra_tools: dict | None = None,
-) -> bool:
+) -> tuple[bool,bool]:
     """
     One iteration of the LLM call + tool execution loop.
     Returns True when the agent is done (no tool calls were made).
