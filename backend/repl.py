@@ -18,27 +18,35 @@ GREEN  = "\033[32m"
 RED    = "\033[31m"
 RESET  = "\033[0m"
 
+_active_stage: list[str | None] = [None]  # mutable cell to track current stage across calls
+
 
 def _print_event(event: dict) -> None:
-    """Print a single agent event, with stage prefix for pipeline events."""
+    """Print a single agent event. Prints a stage header when the pipeline stage changes."""
     stage = event.get("_pipeline_stage")
-    prefix = f"{GREEN}[{stage}] {RESET}" if stage is not None else ""
+
+    if stage != _active_stage[0]:
+        _active_stage[0] = stage
+        if stage is not None:
+            print(f"\n{GREEN}━━━ [{stage}] ━━━{RESET}")
+        else:
+            print(f"\n{GREEN}━━━ [synthesize] ━━━{RESET}")
 
     t = event["type"]
     if t == "thinking":
-        print(f"{prefix}{GREY}{event.get('content', '')}{RESET}", end="", flush=True)
+        print(f"{GREY}{event.get('content', '')}{RESET}", end="", flush=True)
     elif t == "content":
-        print(f"{prefix}{event.get('content', '')}", end="", flush=True)
+        print(event.get("content", ""), end="", flush=True)
     elif t == "tool_call_start":
-        print(f"\n{prefix}{YELLOW}[{event.get('tool_name', '')}] ", end="", flush=True)
+        print(f"\n{YELLOW}[{event.get('tool_name', '')}] ", end="", flush=True)
     elif t == "tool_call_chunk":
         print(f"{YELLOW}{event.get('chunk', '')}{RESET}", end="", flush=True)
     elif t == "tool_result":
         content = event.get("content", "")
         preview = content[:300] + ("…" if len(content) > 300 else "")
-        print(f"\n{prefix}{CYAN}[{event.get('tool_name', 'tool')}] {preview}{RESET}")
+        print(f"\n{CYAN}[{event.get('tool_name', 'tool')}] {preview}{RESET}")
     elif t == "iteration_end":
-        print(f"\n{prefix}{GREY}[{event.get('prompt_tokens', 0)} prompt tokens]{RESET}")
+        print(f"\n{GREY}[{event.get('prompt_tokens', 0)} prompt tokens]{RESET}")
     elif t == "error":
         print(f"\n{RED}[error] {event.get('message')}{RESET}")
     elif t == "done":
@@ -78,7 +86,8 @@ async def _run_pipeline_turn(
     tools: list[dict],
     working_directory: str | None,
 ) -> None:
-    """Pipeline turn — stages are shown with [stage] prefix. History is not carried forward."""
+    """Pipeline turn — stage headers print when the stage changes. History is not carried forward."""
+    _active_stage[0] = "INIT"  # force header to print on the first event
     orchestrator = PipelineOrchestrator(
         system_messages=[m for m in messages if m.get("role") == "system"],
         working_directory=working_directory,
