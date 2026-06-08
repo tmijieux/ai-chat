@@ -2,7 +2,7 @@ import aiofiles
 import difflib
 import re as _re
 from pathlib import Path
-from .base import BaseTool, tool_error
+from .base import BaseTool, tool_error, tool_rejected
 from agent.file_utils import file_in_directory, resolve_workspace_path
 from typing import TYPE_CHECKING
 
@@ -111,7 +111,7 @@ class EditFileTool(BaseTool):
         preview = self.make_validation_text_for_user_confirmation(args)
         approved, user_msg = await session.request_confirm(f"edit-{path}", self.name, args, preview, diff_lines=diff_lines)
         if not approved:
-            return tool_error(self.name, "User aborted the edit", user_message=user_msg)
+            return tool_rejected(self.name, reason=user_msg)
 
         try:
             if replace_all:

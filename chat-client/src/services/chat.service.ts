@@ -12,6 +12,7 @@ import {
   Message,
   MessageForQuery,
   SystemPromptTemplate,
+  ToolCallEntry,
 } from '../types/message-types'
 import { ApiService } from './api.service'
 import { AgentService } from './agent.service'
@@ -63,6 +64,10 @@ export class ChatService {
   private _promptTokens = signal(0)
   /** Latest prompt_tokens from the most recent agent iteration_end. */
   public readonly promptTokens = this._promptTokens.asReadonly()
+
+  private _callingTool = signal<string | null>(null)
+  /** Name of the tool whose arguments are currently being streamed; null when idle. */
+  public readonly callingTool = this._callingTool.asReadonly()
 
   /** Current streaming phase, derived from the last message in the list. */
   public readonly phase = computed<'thinking' | 'responding' | null>(() => {
@@ -366,6 +371,7 @@ export class ChatService {
 
     let idOfCurrentlyStreamingAssistantMessage: string | null = null
     let pendingContentText = ''
+    let pendingToolCalls: ToolCallEntry[] = []
 
     // The prompt_token count reported by Ollama in iteration_end is the number of tokens in the
     // messages sent to that iteration — which includes the tool results from the previous iteration.
@@ -381,7 +387,7 @@ export class ChatService {
         .catch((err) => console.error('Save error:', err))
     }
 
-    const saveAssistant = (id: string, content: string, thinking: string) => {
+    const saveAssistant = (id: string, content: string, thinking: string, toolCalls: ToolCallEntry[]) => {
       enqueue(() =>
         firstValueFrom(
           this.api.post_message(conv.id, {
@@ -389,6 +395,7 @@ export class ChatService {
             role: 'assistant',
             content,
             thinking: thinking || undefined,
+            tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
           }),
         ),
       )
@@ -421,7 +428,15 @@ export class ChatService {
       idOfCurrentlyStreamingAssistantMessage = null
       pendingContentText = ''
       pendingThinkingContent = ''
-      saveAssistant(id, content, thinking)
+      const toolCalls = pendingToolCalls
+      pendingToolCalls = []
+      // Patch the in-memory message with tool_calls so the UI shows them immediately
+      this._messages.update((msgs) =>
+        msgs.map((m) =>
+          m.id === id && m.kind === 'assistant' ? { ...m, tool_calls: toolCalls.length > 0 ? toolCalls : undefined } : m,
+        ),
+      )
+      saveAssistant(id, content, thinking, toolCalls)
     }
 
     this._agentEventSub = this.agentSvc.events$.subscribe((event) => {
@@ -470,6 +485,10 @@ export class ChatService {
             },
           ])
         }
+      } else if (event.type === 'tool_call_start') {
+        this._callingTool.set(event.tool_name)
+      } else if (event.type === 'tool_call') {
+        pendingToolCalls.push({ id: event.tool_id, name: event.tool_name, args: event.arguments })
       } else if (event.type === 'tool_confirm') {
         this._messages.update((msgs) => [
           ...msgs,
@@ -485,6 +504,7 @@ export class ChatService {
           },
         ])
       } else if (event.type === 'tool_result') {
+        this._callingTool.set(null)
         markThinkingMessageAsDoneAndClearIt()
         const resultId = `result-${event.tool_id}`
         const resultContent = event.content ?? ''
@@ -503,7 +523,7 @@ export class ChatService {
         if (pendingThinkingContent) {
           const thinking = pendingThinkingContent
           pendingThinkingContent = ''
-          saveAssistant(crypto.randomUUID(), '', thinking)
+          saveAssistant(crypto.randomUUID(), '', thinking, [])
         }
         enqueue(() =>
           firstValueFrom(
@@ -563,6 +583,7 @@ export class ChatService {
           })
         }
       } else if (event.type === 'done' || event.type === 'error') {
+        this._callingTool.set(null)
         this._messages.update((msgs) => msgs.filter((m) => m.kind !== 'tool_confirm'))
         if (event.type === 'error') {
           const errorText = event.message ?? 'An error occurred'
@@ -661,6 +682,7 @@ export class ChatService {
             id: m.id,
             content: m.content,
             thinking: m.thinking ?? undefined,
+            tool_calls: m.tool_calls ?? undefined,
             token_count: m.token_count,
             token_delta: m.token_delta,
             context_excluded: m.context_excluded,

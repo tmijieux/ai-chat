@@ -5,6 +5,14 @@ if TYPE_CHECKING:
     from agent.agent import AgentSession
 
 
+def tool_rejected(tool_name: str, reason: str | None = None) -> dict:
+    """Return a result indicating the user declined to run this tool."""
+    result: dict = {"tool": tool_name, "status": "rejected"}
+    if reason:
+        result["reason"] = reason
+    return result
+
+
 def tool_error(tool_name: str, error: str, user_message: str | None = None, **extra) -> dict:
     result: dict = {
         "tool": tool_name,

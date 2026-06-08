@@ -226,6 +226,19 @@
               } @else if (msg.streaming) {
                 <div class="p-4 bg-assistant-bubble shadow-md rounded-lg">...</div>
               }
+              @if (msg.tool_calls && msg.tool_calls.length > 0) {
+                <app-collapsible-bubble wrapperClass="bg-card border-card">
+                  <span header>tool calls ({{ msg.tool_calls.length }})</span>
+                  <div class="tool-calls-list">
+                    @for (tc of msg.tool_calls; track tc.id) {
+                      <div class="tool-call-entry">
+                        <code class="tool-call-name">{{ tc.name }}</code>
+                        <pre class="tool-call-args">{{ tc.args | json }}</pre>
+                      </div>
+                    }
+                  </div>
+                </app-collapsible-bubble>
+              }
               @if (msg.token_meta) {
                 <div class="p-absolute bottom-0 right-0 z-50">
                   <ng-container
@@ -357,8 +370,12 @@
                   }
                 </span>
                 @if (msg.compressed_summary) {
-                  <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-200">{{ msg.compressed_summary }}</pre>
-                } @else {
+                  <div class="tool-tabs border-t border-gray-200">
+                    <button [class.active]="toolTab(msg.id) === 'output'" (click)="setToolTab(msg.id, 'output')">Output</button>
+                    <button [class.active]="toolTab(msg.id) === 'summary'" (click)="setToolTab(msg.id, 'summary')">Summary</button>
+                  </div>
+                }
+                @if (!msg.compressed_summary || toolTab(msg.id) === 'output') {
                   @let grep = parseGrepResult(msg.content);
                   @let simple = formatSimpleToolResult(msg.content);
                   @let shell = formatShellResult(msg.content);
@@ -398,6 +415,8 @@
                   } @else {
                     <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-200">{{ msg.content }}</pre>
                   }
+                } @else {
+                  <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-200">{{ msg.compressed_summary }}</pre>
                 }
               </app-collapsible-bubble>
               @if (msg.token_meta) {
@@ -457,6 +476,13 @@
       <div class="flex justify-start w-800px">
         <div class="flex items-center gap-2 px-3 py-1 text-xs opacity-50">
           <span class="animate-pulse">●</span> responding
+        </div>
+      </div>
+    }
+    @if (chatSvc.callingTool()) {
+      <div class="flex justify-start w-800px">
+        <div class="flex items-center gap-2 px-3 py-1 text-xs opacity-50">
+          <span class="animate-pulse">●</span> calling {{ chatSvc.callingTool() }}…
         </div>
       </div>
     }

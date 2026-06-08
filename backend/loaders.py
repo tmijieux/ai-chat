@@ -17,6 +17,8 @@ class NewMessage(BaseModel):
     token_delta: int | None = None
     log_message: str | None = None
     image_ids: list[str] = []
+    # [{id, name, args}] — assistant messages that invoked tools
+    tool_calls: list | None = None
 
 
 class UpdateTokenCount(BaseModel):

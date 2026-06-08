@@ -74,6 +74,17 @@ def _result_metadata(result: dict) -> dict:
 def _compact_summary(result: dict) -> str:
     tool = result.get("tool", "unknown")
     key = _key_args(result)
+    status = result.get("status", "unknown")
+
+    if status == "rejected":
+        reason = result.get("reason") or ""
+        suffix = f": {reason[:120]}" if reason else ""
+        return f'{tool}({key}) → rejected{suffix}'
+
+    if status == "error":
+        error_msg = (result.get("error") or {}).get("message", "error")
+        return f'{tool}({key}) → error: {error_msg[:120]}'
+
     meta = _result_metadata(result)
 
     if tool == "glob_files":

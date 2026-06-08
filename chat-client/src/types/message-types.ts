@@ -32,6 +32,7 @@ export type Message = {
   exclusion_reason?: string | null
   compressed_summary?: string | null
   log_message?: string | null
+  tool_calls?: ToolCallEntry[] | null
   created_at?: string
   sibling_count?: number
   sibling_index?: number
@@ -137,8 +138,12 @@ export type DiffLine = {
   line?: number | null
 }
 
+export type ToolCallEntry = { id: string; name: string; args: Record<string, unknown> }
+
 export type AgentEvent =
   | { type: 'thinking' | 'content'; content: string }
+  | { type: 'tool_call_start'; tool_id: string; tool_name: string }
+  | { type: 'tool_call_chunk'; tool_id: string; chunk: string }
   | { type: 'tool_call'; tool_id: string; tool_name: string; arguments: Record<string, unknown> }
   | { type: 'tool_confirm'; tool_id: string; tool_name: string; arguments: Record<string, unknown>; preview: string; diff_lines?: DiffLine[] }
   | { type: 'tool_result'; tool_id: string; tool_name: string; content: string; log_message?: string }
@@ -186,6 +191,7 @@ export type DisplayMessage =
       id: string
       content: string
       thinking?: string
+      tool_calls?: ToolCallEntry[] | null
       /** True while the HTTP stream is still open (non-agentic mode). */
       streaming?: boolean
       token_count?: number | null

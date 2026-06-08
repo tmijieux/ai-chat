@@ -1,6 +1,6 @@
 import aiofiles
 from pathlib import Path
-from .base import BaseTool, tool_error
+from .base import BaseTool, tool_error, tool_rejected
 from agent.file_utils import file_in_directory, resolve_workspace_path
 from typing import TYPE_CHECKING
 
@@ -58,7 +58,7 @@ class WriteFileTool(BaseTool):
         preview = self.make_validation_text_for_user_confirmation(args)
         approved, user_msg = await session.request_confirm(f"write-{path}", self.name, args, preview)
         if not approved:
-            return tool_error(self.name, "User aborted the file write", user_message=user_msg)
+            return tool_rejected(self.name, reason=user_msg)
 
         try:
             absolute_path.parent.mkdir(parents=True, exist_ok=True)

@@ -372,3 +372,70 @@
   font-style: italic;
 }
 
+// -------------------------------------------------------------------------
+// Tool calls list (inside assistant bubble)
+// -------------------------------------------------------------------------
+
+.tool-calls-list {
+  font-family: 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.75rem;
+  padding: 0.5rem 0;
+}
+
+.tool-call-entry {
+  border-top: 1px solid #1e293b;
+  padding: 0.4rem 0.75rem;
+
+  &:first-child {
+    border-top: none;
+  }
+}
+
+.tool-call-name {
+  display: block;
+  color: #818cf8;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.tool-call-args {
+  margin: 0;
+  color: #94a3b8;
+  white-space: pre-wrap;
+  font-size: 0.7rem;
+  overflow: auto;
+  max-height: 12rem;
+}
+
+// -------------------------------------------------------------------------
+// Output / Summary tabs on tool result bubbles
+// -------------------------------------------------------------------------
+
+.tool-tabs {
+  display: flex;
+  gap: 0;
+  padding: 0.25rem 0.5rem;
+  background: #0f172a;
+
+  button {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.6rem;
+    border-radius: 0.25rem;
+    border: 1px solid transparent;
+    color: #64748b;
+    cursor: pointer;
+    background: transparent;
+    transition: color 0.15s, border-color 0.15s;
+
+    &:hover {
+      color: #94a3b8;
+    }
+
+    &.active {
+      color: #a5b4fc;
+      border-color: #334155;
+      background: #1e293b;
+    }
+  }
+}
+

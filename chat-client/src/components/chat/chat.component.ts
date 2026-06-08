@@ -52,6 +52,20 @@ export class ChatComponent implements OnDestroy {
 
   // Raw markdown toggle
   private rawModeIds = signal(new Set<string>())
+
+  // Tool result tab state: 'output' | 'summary', default 'summary' when compressed
+  private toolTabState = signal(new Map<string, 'output' | 'summary'>())
+
+  toolTab(msgId: string): 'output' | 'summary' {
+    return this.toolTabState().get(msgId) ?? 'summary'
+  }
+
+  setToolTab(msgId: string, tab: 'output' | 'summary'): void {
+    const m = new Map(this.toolTabState())
+    m.set(msgId, tab)
+    this.toolTabState.set(m)
+  }
+
   readonly CTX_LIMIT = 2 ** 15
 
   isRaw(msgId: string): boolean {
@@ -200,6 +214,10 @@ export class ChatComponent implements OnDestroy {
     try {
       const r = JSON.parse(content)
       if (r.tool !== 'write_file' && r.tool !== 'edit_file') return null
+      if (r.status === 'rejected') {
+        const reason = r.reason ? ` — ${r.reason}` : ''
+        return { icon: '✗', text: `${r.tool}: rejected${reason}` }
+      }
       const icon = r.status === 'success' ? '✓' : '✗'
       const msg = r.error?.message ? ` — ${r.error.message}` : (r.message ? ` — ${r.message}` : '')
       return { icon, text: `${r.tool}: ${r.path ?? ''}${msg}` }
@@ -212,6 +230,9 @@ export class ChatComponent implements OnDestroy {
     try {
       const r = JSON.parse(content)
       if (r.tool !== 'run_shell') return null
+      if (r.status === 'rejected') {
+        return { icon: '✗ rejected', output: r.reason ?? '' }
+      }
       const ok = r.status === 'success'
       const icon = ok ? '✓ exit 0' : '✗ exit 1'
       const output = ok ? (r.output ?? '') : (r.error?.message ?? '')

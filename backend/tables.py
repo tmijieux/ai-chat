@@ -30,6 +30,8 @@ class Message(Base):
     exclusion_reason = column(String, nullable=True)
     compressed_summary = column(Text, nullable=True)
     log_message = column(String, nullable=True)
+    # JSON array of {id, name, args} — populated on assistant messages that made tool calls
+    tool_calls = column(Text, nullable=True)
 
 
 class Image(Base):

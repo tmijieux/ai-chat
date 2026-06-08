@@ -2,7 +2,7 @@ import asyncio
 import subprocess
 import shutil
 import sys
-from .base import BaseTool, tool_error
+from .base import BaseTool, tool_error, tool_rejected
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -72,7 +72,7 @@ class RunShellTool(BaseTool):
         preview = self.make_validation_text_for_user_confirmation(args)
         approved, user_msg = await session.request_confirm(f"shell-{id(args)}", self.name, args, preview)
         if not approved:
-            return tool_error(self.name, "User aborted the command", user_message=user_msg)
+            return tool_rejected(self.name, reason=user_msg)
 
         try:
             if _IS_WINDOWS and shell_mode == "bash":
