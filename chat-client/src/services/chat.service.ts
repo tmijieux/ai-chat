@@ -511,6 +511,8 @@ export class ChatService {
         ])
       } else if (event.type === 'tool_result') {
         this._callingTool.set(null)
+        // Capture before markThinkingMessageAsDoneAndClearIt clears it
+        const thinkingIdBeforeResult = idOfCurrentlyStreamingThinkingMessage
         markThinkingMessageAsDoneAndClearIt()
         const resultId = `result-${event.tool_id}`
         const resultContent = event.content ?? ''
@@ -526,7 +528,26 @@ export class ChatService {
           },
         ])
         stopStreamingTheAssistantMessageSaveItAndClearIt()
-        if (pendingThinkingContent) {
+        // If there was no streaming assistant message (thinking → tool with no text content),
+        // pendingToolCalls was never cleared. Attach them to the thinking bubble they belong to.
+        if (pendingToolCalls.length > 0) {
+          const orphanedToolCalls = pendingToolCalls
+          pendingToolCalls = []
+          if (thinkingIdBeforeResult !== null) {
+            this._messages.update((msgs) =>
+              msgs.map((m) =>
+                m.id === thinkingIdBeforeResult && m.kind === 'thinking'
+                  ? { ...m, tool_calls: orphanedToolCalls }
+                  : m,
+              ),
+            )
+          }
+          if (pendingThinkingContent) {
+            const thinking = pendingThinkingContent
+            pendingThinkingContent = ''
+            saveAssistant(crypto.randomUUID(), '', thinking, orphanedToolCalls)
+          }
+        } else if (pendingThinkingContent) {
           const thinking = pendingThinkingContent
           pendingThinkingContent = ''
           saveAssistant(crypto.randomUUID(), '', thinking, [])
@@ -701,6 +722,7 @@ export class ChatService {
             id: m.id,
             content: m.thinking,
             done: true,
+            tool_calls: m.tool_calls ?? undefined,
             ...siblingMeta,
           })
         }

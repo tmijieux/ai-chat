@@ -251,10 +251,25 @@
 
           <!-- Live streaming thinking block (agent run only) -->
           @if (msg.kind === 'thinking') {
-            <app-collapsible-bubble [streaming]="!msg.done">
-              <span header>Thinking...</span>
-              <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-700 opacity-80">{{ msg.content }}</pre>
-            </app-collapsible-bubble>
+            <div class="flex flex-col max-w-3xl gap-2">
+              <app-collapsible-bubble [streaming]="!msg.done">
+                <span header>Thinking...</span>
+                <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-700 opacity-80">{{ msg.content }}</pre>
+              </app-collapsible-bubble>
+              @if (msg.tool_calls && msg.tool_calls.length > 0) {
+                <app-collapsible-bubble wrapperClass="bg-card border-card">
+                  <span header>tool calls ({{ msg.tool_calls.length }})</span>
+                  <div class="tool-calls-list">
+                    @for (tc of msg.tool_calls; track tc.id) {
+                      <div class="tool-call-entry">
+                        <code class="tool-call-name">{{ tc.name }}</code>
+                        <pre class="tool-call-args">{{ tc.args | json }}</pre>
+                      </div>
+                    }
+                  </div>
+                </app-collapsible-bubble>
+              }
+            </div>
           }
 
           <!-- Tool confirmation card -->

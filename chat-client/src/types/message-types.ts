@@ -204,6 +204,7 @@ export type DisplayMessage =
       content: string
       /** False while still streaming; true once the block is complete. */
       done: boolean
+      tool_calls?: ToolCallEntry[] | null
     } & SiblingMeta)
   | ({
       kind: 'tool_confirm'

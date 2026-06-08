@@ -98,14 +98,14 @@ class EditFileTool(BaseTool):
                         m = _re.match(r'@@ -(\d+)', raw)
                         if m:
                             cur_old = start_line + int(m.group(1)) - 1
-                        diff_lines.append({'type': 'header', 'text': raw})
+                        diff_lines.append({'type': 'header', 'text': raw.rstrip('\n')})
                     elif raw.startswith('-'):
-                        diff_lines.append({'type': 'removed', 'line': cur_old, 'text': raw[1:]})
+                        diff_lines.append({'type': 'removed', 'line': cur_old, 'text': raw[1:].rstrip('\n')})
                         cur_old += 1
                     elif raw.startswith('+'):
-                        diff_lines.append({'type': 'added', 'line': None, 'text': raw[1:]})
+                        diff_lines.append({'type': 'added', 'line': None, 'text': raw[1:].rstrip('\n')})
                     else:
-                        diff_lines.append({'type': 'context', 'line': cur_old, 'text': raw[1:]})
+                        diff_lines.append({'type': 'context', 'line': cur_old, 'text': raw[1:].rstrip('\n')})
                         cur_old += 1
 
         preview = self.make_validation_text_for_user_confirmation(args)
