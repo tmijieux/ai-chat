@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 MAX_TASK_RETRIES = 2
 MAX_STAGE_ITERATIONS = 12
+MAX_COMPILE_RETRIES = 3
 
 
 @dataclass
@@ -85,7 +86,15 @@ GOOD tasks (one file each — required):
   Task A: "In chat-client/src/components/chat-input/chat-input.component.ts, after the closing brace of the constructor on line 61, add: togglePipelineMode(): void \{ this.chatSvc.togglePipelineMode() \}"
   Task B: "In chat-client/src/components/chat-input/chat-input.component.html, after the closing </button> of the Send button on line 70, add a sibling <button> with (click)=\"togglePipelineMode()\", [class.active]=\"chatSvc.pipelineMode()\", class=\"pipeline-toggle-btn\", inner text 'Pipeline'."
 
+If the project has a compile or type-check step (e.g. TypeScript, Python, Java), set compile_command to the exact shell command that checks the whole project (e.g. "cd chat-client && npx tsc --noEmit"). It will be run automatically after all tasks complete.
 You MUST call finish_plan to submit the task list.\
+"""
+
+_COMPILE_FIX_SYSTEM = """\
+You are a TypeScript compilation error fixer.
+You receive the exact output of `tsc --noEmit`. Each error includes a file path and line number.
+Fix ONLY the errors listed — do not refactor, rename, reformat, or touch anything outside the failing lines.
+Read the failing file at the reported line, make the minimal change to fix the error, then call finish_task.\
 """
 
 _EXECUTE_SYSTEM = """\
@@ -123,6 +132,27 @@ def _build_code_context(snippets: list[dict], working_directory: str) -> str:
         if code is not None:
             parts.append(f"[{file_path} lines {start_line}-{end_line}]\n{code}")
     return "\n\n".join(parts)
+
+
+async def _run_compile_command(command: str, working_directory: str, session: AgentSession) -> tuple[bool, str]:
+    """Request user confirmation then run a compile/type-check command. Returns (success, output)."""
+    approved, _ = await session.request_confirm(
+        tool_id=f"compile-{id(command)}",
+        tool_name="compile_check",
+        arguments={"command": command},
+        preview=f"$ {command}",
+    )
+    if not approved:
+        return False, "Compile check skipped by user."
+    proc = await asyncio.create_subprocess_shell(
+        command,
+        cwd=working_directory,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    stdout, _ = await proc.communicate()
+    output = stdout.decode("utf-8", errors="replace").strip()
+    return proc.returncode == 0, output
 
 
 # ---------------------------------------------------------------------------
@@ -349,6 +379,7 @@ class PipelineOrchestrator:
             max_iterations=5,
             inject_turn_reminders=True,
         )
+        compile_command: str | None = plan_result.get("compile_command") or None
         tasks = [
             PipelineTask(
                 id=t.get("id") or str(i),
@@ -435,6 +466,30 @@ class PipelineOrchestrator:
                 task.status = "failed"
 
             task_results.append(task)
+
+        # Compile check + fix loop
+        if compile_command is not None and wd is not None:
+            compile_ok, compile_errors = await _run_compile_command(compile_command, wd, session)
+            for compile_attempt in range(MAX_COMPILE_RETRIES):
+                if compile_ok:
+                    break
+                logger.info("[pipeline] compilation failed (attempt %d/%d)", compile_attempt + 1, MAX_COMPILE_RETRIES)
+                await session.emit({"type": "pipeline_summary", "label": f"compile errors (attempt {compile_attempt + 1})", "content": compile_errors, "notes": None})
+                await run_stage(
+                    "compile_fix",
+                    [
+                        {"role": "system", "content": _COMPILE_FIX_SYSTEM},
+                        {"role": "user", "content": f"Fix these compiler errors:\n\n{compile_errors}"},
+                    ],
+                    list(TOOL_REGISTRY.keys()),
+                    FinishTask(),
+                    session,
+                    wd,
+                )
+                compile_ok, compile_errors = await _run_compile_command(compile_command, wd, session)
+            if not compile_ok:
+                await session.emit({"type": "error", "message": f"[pipeline] compilation still failing after {MAX_COMPILE_RETRIES} fix attempts:\n{compile_errors}"})
+                return
 
         # Synthesize: inject pipeline context into the final agent run
         task_summary = "\n".join(

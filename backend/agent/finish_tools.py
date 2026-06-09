@@ -137,6 +137,10 @@ class FinishPlan(BaseFinishTool):
                 },
                 "description": f"Ordered list of atomic tasks. Minimum {MIN_PLAN_TASKS} tasks required.",
             },
+            "compile_command": {
+                "type": "string",
+                "description": "Shell command to compile/type-check the project after all tasks complete (e.g. 'cd chat-client && npx tsc --noEmit', 'python -m py_compile src/main.py'). Omit if no compilation step applies.",
+            },
         },
         "required": ["tasks"],
     }
