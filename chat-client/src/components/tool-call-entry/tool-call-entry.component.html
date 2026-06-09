@@ -1,6 +1,9 @@
 <code class="tool-call-name">{{ tc().name }}</code>
 @if (diffLines() && diffLines()!.length > 0) {
   <app-diff-block [lines]="diffLines()!" />
+  @if (tc().args['replace_all']) {
+    <div class="replace-all-flag">replace_all: true</div>
+  }
 } @else {
   <pre class="tool-confirm-preview">{{ formatArgs(tc().args) }}</pre>
 }

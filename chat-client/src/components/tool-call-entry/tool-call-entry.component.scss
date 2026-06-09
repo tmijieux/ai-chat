@@ -2,6 +2,13 @@
   display: contents;
 }
 
+.replace-all-flag {
+  font-size: 0.7rem;
+  color: #94a3b8;
+  font-family: 'Fira Code', 'Cascadia Code', monospace;
+  padding: 0.2rem 0.4rem;
+}
+
 .tool-call-name {
   display: block;
   color: #818cf8;
