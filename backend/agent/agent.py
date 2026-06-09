@@ -67,7 +67,7 @@ class AgentSession:
 
 _TOOL_CALL_BLOCK_RE = re.compile(r'<tool_call>(.*?)</tool_call>', re.DOTALL)
 _FUNCTION_RE = re.compile(r'<function=(\w+)>(.*?)</function>', re.DOTALL)
-_PARAMETER_RE = re.compile(r'<parameter=(\w+)>(.*?)</parameter>', re.DOTALL)
+_PARAMETER_RE = re.compile(r'<parameter=(\w+)>\n?(.*?)\n?</parameter>', re.DOTALL)
 
 
 def _parse_embedded_tool_call(block_content: str) -> dict | None:
