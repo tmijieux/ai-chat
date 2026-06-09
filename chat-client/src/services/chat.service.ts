@@ -395,10 +395,21 @@ export class ChatService {
 
     let saveQueue: Promise<void> = Promise.resolve()
     const enqueue = (fn: () => Promise<unknown>) => {
-      saveQueue = saveQueue
-        .then(() => fn())
-        .then(() => {})
-        .catch((err) => console.error('Save error:', err))
+      saveQueue = saveQueue.then(async () => {
+        const MAX_ATTEMPTS = 4
+        for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+          try {
+            await fn()
+            return
+          } catch (err) {
+            if (attempt === MAX_ATTEMPTS - 1) {
+              console.error('Save failed after retries:', err)
+              return
+            }
+            await new Promise<void>((resolve) => setTimeout(resolve, 300 * (attempt + 1)))
+          }
+        }
+      })
     }
 
     const saveAssistant = (id: string, content: string, thinking: string, toolCalls: ToolCallEntry[]) => {

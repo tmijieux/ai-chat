@@ -547,6 +547,10 @@ async def add_message(
     parent_id = message.parent_id if message.parent_id is not None else conv.active_message_id
 
     msg_id = message.id
+    existing = await sess.get(db.Message, msg_id)
+    if existing is not None:
+        return {"id": msg_id, "parent_id": existing.parent_id}
+
     sess.add(
         db.Message(
             id=msg_id,
