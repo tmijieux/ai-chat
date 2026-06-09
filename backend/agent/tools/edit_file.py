@@ -1,5 +1,6 @@
 import aiofiles
 import difflib
+import json
 import re as _re
 from pathlib import Path
 from .base import BaseTool, tool_error, tool_rejected
@@ -78,7 +79,22 @@ class EditFileTool(BaseTool):
             return tool_error(self.name, f"Error reading file: {e}")
 
         if old_string not in current_content:
-            return tool_error(self.name, "old_string not found in file")
+            # The model sometimes copies strings verbatim from read_file tool results, where
+            # content is JSON-encoded inside the outer JSON response. This causes one extra
+            # level of escaping (e.g. actual " becomes \" in old_string). Try decoding once.
+            try:
+                decoded_old = json.loads('"' + old_string + '"')
+            except (json.JSONDecodeError, ValueError):
+                return tool_error(self.name, "old_string not found in file")
+            if decoded_old == old_string or decoded_old not in current_content:
+                return tool_error(self.name, "old_string not found in file")
+            old_string = decoded_old
+            args = {**args, "old_string": old_string}
+            try:
+                new_string = json.loads('"' + new_string + '"')
+                args = {**args, "new_string": new_string}
+            except (json.JSONDecodeError, ValueError):
+                pass
 
         idx = current_content.find(old_string)
 
