@@ -155,26 +155,26 @@
   display: flex;
   gap: 0;
   padding: 0.25rem 0.5rem;
-  background: #0f172a;
+  background: #111c18;
 
   button {
     font-size: 0.7rem;
     padding: 0.15rem 0.6rem;
     border-radius: 0.25rem;
     border: 1px solid transparent;
-    color: #64748b;
+    color: #4a7060;
     cursor: pointer;
     background: transparent;
     transition: color 0.15s, border-color 0.15s;
 
     &:hover {
-      color: #94a3b8;
+      color: #86efac;
     }
 
     &.active {
-      color: #a5b4fc;
-      border-color: #334155;
-      background: #1e293b;
+      color: #86efac;
+      border-color: #1e3a2e;
+      background: #1a2e22;
     }
   }
 }
