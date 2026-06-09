@@ -26,3 +26,15 @@ After successfully implementing an approved plan, create a git commit immediatel
 - **No implicit boolean conversions** — use explicit comparisons: `if x is None` or `if x == ""`, never `if not x` for strings or optional values.
 - **No boolean lazy evaluation for fallbacks** — never `x or default` to substitute a missing value; use explicit `if x is None` checks instead.
 - **Docstrings on every function** — document both purpose and important details about implementation. One sentence is enough for simple helpers.
+
+
+# CSS
+Try to maximize utilisation of functionnal style("tailwind-like")  everywhere css is required  (see styles.scss)
+The aim is to understand layout and look just by looking at the template most of the time.
+Avoid BEM style.
+
+# Angular 
+Generally prefer factorizing in new components rather than <ng-template>
+because it helps with keeping component small (in code-behind as well)
+It also help the reading comprehension when small component encapsulate 
+small non-leaky well-named abstraction, then you dont have to read them.
