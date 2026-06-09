@@ -414,7 +414,7 @@ class PipelineOrchestrator:
                             ),
                         },
                     ],
-                    ["read_file", "glob_files", "run_shell"],
+                    ["read_file", "glob_files", "grep_files", "run_shell"],
                     FinishVerify(),
                     session,
                     wd,
