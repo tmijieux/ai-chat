@@ -99,30 +99,29 @@ class EditFileTool(BaseTool):
         idx = current_content.find(old_string)
 
         diff_lines = None
-        if not replace_all:
-            start_line = current_content[:idx].count('\n') + 1
-            old_sl = old_string.splitlines(True)
-            new_sl = new_string.splitlines(True)
-            raw_diff = list(difflib.unified_diff(old_sl, new_sl, n=3, lineterm=''))
-            if raw_diff:
-                diff_lines = []
-                cur_old = start_line
-                for raw in raw_diff:
-                    if raw.startswith('---') or raw.startswith('+++'):
-                        continue
-                    if raw.startswith('@@'):
-                        m = _re.match(r'@@ -(\d+)', raw)
-                        if m:
-                            cur_old = start_line + int(m.group(1)) - 1
-                        diff_lines.append({'type': 'header', 'text': raw.rstrip('\n')})
-                    elif raw.startswith('-'):
-                        diff_lines.append({'type': 'removed', 'line': cur_old, 'text': raw[1:].rstrip('\n')})
-                        cur_old += 1
-                    elif raw.startswith('+'):
-                        diff_lines.append({'type': 'added', 'line': None, 'text': raw[1:].rstrip('\n')})
-                    else:
-                        diff_lines.append({'type': 'context', 'line': cur_old, 'text': raw[1:].rstrip('\n')})
-                        cur_old += 1
+        start_line = current_content[:idx].count('\n') + 1
+        old_sl = old_string.splitlines(True)
+        new_sl = new_string.splitlines(True)
+        raw_diff = list(difflib.unified_diff(old_sl, new_sl, n=3, lineterm=''))
+        if raw_diff:
+            diff_lines = []
+            cur_old = start_line
+            for raw in raw_diff:
+                if raw.startswith('---') or raw.startswith('+++'):
+                    continue
+                if raw.startswith('@@'):
+                    m = _re.match(r'@@ -(\d+)', raw)
+                    if m:
+                        cur_old = start_line + int(m.group(1)) - 1
+                    diff_lines.append({'type': 'header', 'text': raw.rstrip('\n')})
+                elif raw.startswith('-'):
+                    diff_lines.append({'type': 'removed', 'line': cur_old, 'text': raw[1:].rstrip('\n')})
+                    cur_old += 1
+                elif raw.startswith('+'):
+                    diff_lines.append({'type': 'added', 'line': None, 'text': raw[1:].rstrip('\n')})
+                else:
+                    diff_lines.append({'type': 'context', 'line': cur_old, 'text': raw[1:].rstrip('\n')})
+                    cur_old += 1
 
         preview = self.make_validation_text_for_user_confirmation(args)
         approved, user_msg = await session.request_confirm(f"edit-{path}", self.name, args, preview, diff_lines=diff_lines)
