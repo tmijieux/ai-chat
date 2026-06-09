@@ -44,7 +44,8 @@ class FinishAugmentation(BaseFinishTool):
     name = "finish_augmentation"
     description = (
         "Output the augmented prompt after gathering context from the codebase. "
-        "Call this once you have explored enough files to clarify the user's request."
+        "Call this once you have explored enough files to clarify the user's request. "
+        "The snippets field is REQUIRED — list every file location you found so the system can read the actual code."
     )
     parameters = {
         "type": "object",
@@ -57,14 +58,30 @@ class FinishAugmentation(BaseFinishTool):
                 "type": "string",
                 "description": "Key facts discovered: relevant files, patterns, existing code structure.",
             },
+            "snippets": {
+                "type": "array",
+                "description": "File locations needed to plan and implement the requested changes. One entry per relevant code block. Exclude exploration dead-ends.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {"type": "string", "description": "Relative path to the file."},
+                        "start_line": {"type": "integer", "description": "First line of the block (1-indexed)."},
+                        "end_line": {"type": "integer", "description": "Last line of the block (1-indexed)."},
+                    },
+                    "required": ["file_path", "start_line", "end_line"],
+                },
+            },
         },
-        "required": ["augmented_prompt"],
+        "required": ["augmented_prompt", "snippets"],
     }
 
 
 class FinishCritique(BaseFinishTool):
     name = "finish_critique"
-    description = "Output critique of the augmented prompt and the final corrected prompt to use for planning."
+    description = (
+        "Output critique of the augmented prompt and the final corrected prompt to use for planning. "
+        "The snippets field is REQUIRED — return only the snippet coordinates actually needed to plan and implement the changes (prune irrelevant ones, keep all relevant ones unchanged)."
+    )
     parameters = {
         "type": "object",
         "properties": {
@@ -77,8 +94,21 @@ class FinishCritique(BaseFinishTool):
                 "items": {"type": "string"},
                 "description": "Issues found in the augmented prompt. Empty list if none.",
             },
+            "snippets": {
+                "type": "array",
+                "description": "Snippet coordinates needed to plan and implement the changes. Prune any that are not relevant. Keep file_path, start_line, end_line unchanged from the input.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {"type": "string"},
+                        "start_line": {"type": "integer"},
+                        "end_line": {"type": "integer"},
+                    },
+                    "required": ["file_path", "start_line", "end_line"],
+                },
+            },
         },
-        "required": ["final_prompt", "issues"],
+        "required": ["final_prompt", "issues", "snippets"],
     }
 
 

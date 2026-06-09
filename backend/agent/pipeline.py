@@ -15,6 +15,7 @@ from agent.finish_tools import (
     FinishVerify,
 )
 from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
+from agent.tools.explore_codebase import _read_lines
 
 logger = logging.getLogger(__name__)
 
@@ -52,19 +53,20 @@ You have at most 3 turns. Each turn you either explore or submit — never both 
 - Turn 1: explore the main subject.
 - Turn 2: if something critical is still missing, do ONE hyper-specific explore — name the exact file or symbol needed. Otherwise call finish_augmentation.
 - Turn 3: you MUST call finish_augmentation with whatever you have. No more explores.
+In finish_augmentation, the snippets field is REQUIRED. List the file locations (file_path, start_line, end_line) needed to plan and implement the changes — the system will read the actual code from those coordinates.
 Do not write a text response — call the tool instead.\
 """
 
 _CRITIQUE_SYSTEM = """\
-You are a critical reviewer. You receive an original request and an augmented version.
-Check: does the augmented prompt correctly capture the intent? Do the file paths and function names actually exist?
+You are a critical reviewer. You receive an original request, an augmented prompt, and code snippets already read from the codebase.
+Check: does the augmented prompt correctly capture the intent? Do the file paths and function names match the provided code?
+In finish_critique, the snippets field is REQUIRED. Return only the snippet coordinates actually needed to plan and implement the changes — prune irrelevant ones, keep relevant ones unchanged (same file_path, start_line, end_line).
 You MUST call finish_critique to submit your verdict. Do not write a text response — call the tool instead.\
 """
 
 _PLAN_SYSTEM = """\
 You are a task planner working with a model that needs extremely precise instructions.
-The user message contains context already gathered from the codebase (file paths, method names, line numbers). Use it directly — do not re-explore what is already provided.
-Use grep_files only if a specific line number or attribute name is missing from the context.
+The user message contains the exact code snippets needed for this task — file paths, line numbers, and actual code content. Use them directly. You have no search tools — call finish_plan immediately after reasoning through the tasks.
 
 !! ONE FILE PER TASK — this is non-negotiable. If a change touches two files, it must be two separate tasks. A task that edits both a .ts and a .html file is INVALID. !!
 
@@ -104,6 +106,23 @@ Use read_file, glob_files, and run_shell to inspect the actual state of the code
 If the task passed but scope creep was detected, set passed=false and describe the extra changes in issues.
 You MUST call finish_verify to submit your verdict. Do not write a text response — call the tool instead.\
 """
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _build_code_context(snippets: list[dict], working_directory: str) -> str:
+    """Read snippet coordinates and return formatted code blocks for prompt injection."""
+    parts = []
+    for snippet in snippets:
+        file_path = snippet.get("file_path", "")
+        start_line = snippet.get("start_line", 1)
+        end_line = snippet.get("end_line", start_line)
+        code = _read_lines(file_path, start_line, end_line, working_directory)
+        if code is not None:
+            parts.append(f"[{file_path} lines {start_line}-{end_line}]\n{code}")
+    return "\n\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -288,14 +307,15 @@ class PipelineOrchestrator:
             inject_turn_reminders=True,
         )
         augmented_prompt = augment_result.get("augmented_prompt") or user_message
-        context_notes = augment_result.get("context_notes") or ""
-        await session.emit({"type": "pipeline_summary", "label": "augmented prompt", "content": augmented_prompt, "notes": context_notes or None})
+        augment_snippets = augment_result.get("snippets") or []
+        augment_code_context = _build_code_context(augment_snippets, wd) if wd else ""
+        await session.emit({"type": "pipeline_summary", "label": "augmented prompt", "content": augmented_prompt, "notes": None})
 
         # Stage 3: Critique
         critique_input = (
             f"Original request: {user_message}\n\n"
             f"Augmented prompt:\n{augmented_prompt}\n\n"
-            f"Context notes:\n{context_notes}"
+            f"Code snippets:\n{augment_code_context}"
         )
         critique_result = await run_stage(
             "critique",
@@ -307,13 +327,18 @@ class PipelineOrchestrator:
         )
         final_prompt = critique_result.get("final_prompt") or augmented_prompt
         issues = critique_result.get("issues") or []
+        critique_snippets = critique_result.get("snippets") or augment_snippets
+        critique_code_context = _build_code_context(critique_snippets, wd) if wd else ""
         await session.emit({"type": "pipeline_summary", "label": "final prompt", "content": final_prompt, "notes": ("issues: " + "; ".join(issues)) if issues else None})
 
         # Stage 4: Plan
+        plan_input = final_prompt
+        if critique_code_context:
+            plan_input += f"\n\n--- Code context ---\n{critique_code_context}"
         plan_result = await run_stage(
             "plan",
-            [{"role": "system", "content": _PLAN_SYSTEM}, {"role": "user", "content": final_prompt}],
-            ["grep_files", "read_file_range"],
+            [{"role": "system", "content": _PLAN_SYSTEM}, {"role": "user", "content": plan_input}],
+            [],
             FinishPlan(),
             session,
             wd,
