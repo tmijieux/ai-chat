@@ -208,7 +208,7 @@
 
           <!-- Assistant message (non-agentic streaming or DB-loaded) -->
           @if (msg.kind === 'assistant') {
-            <div class="max-w-3xl w-full p-relative">
+            <div class="max-w-3xl w-full min-w-0 p-relative">
               <div class="grouped-bubble rounded-xl overflow-hidden shadow-sm w-full bg-thinking-bubble p-relative">
                 @if (msg.thinking) {
                   <app-collapsible-bubble [flat]="true" [streaming]="!!(msg.streaming && !msg.content)">
@@ -252,7 +252,7 @@
 
           <!-- Live streaming thinking block (agent run only) -->
           @if (msg.kind === 'thinking') {
-            <div class="max-w-3xl w-full">
+            <div class="max-w-3xl w-full min-w-0">
               <div class="grouped-bubble rounded-xl overflow-hidden shadow-sm w-full bg-thinking-bubble p-relative">
                 <app-collapsible-bubble [flat]="true" [streaming]="!msg.done">
                   <span header>Thinking...@if (msg.is_degenerate) { <span class="ml-2 text-xs text-red-400 font-normal">(stopped without response)</span>}</span>
