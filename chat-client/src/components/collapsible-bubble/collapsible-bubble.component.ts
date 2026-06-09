@@ -4,7 +4,7 @@ import { Component, input, signal } from '@angular/core'
   selector: 'app-collapsible-bubble',
   standalone: true,
   template: `
-    <div class="collapsible-wrap" [class]="wrapperClass()">
+    <div class="rounded-xl overflow-hidden shadow-sm w-full" [class]="wrapperClass()">
       <div class="collapsible-header" (click)="opened.set(!opened())">
         <span class="collapsible-label"><ng-content select="[header]" /></span>
         @if (streaming()) {

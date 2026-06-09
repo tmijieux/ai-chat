@@ -98,20 +98,23 @@ export class ChatComponent implements OnDestroy {
     return this.chatSvc.toolFrameworkOverhead() + toolTokens + stackingOverhead
   })
 
-  // Enrich each message with token metadata and turn-boundary flag.
-  readonly messagesWithMeta = computed<(DisplayMessageWithMeta & { turnStart: boolean })[]>(() => {
+  // Enrich each message with token metadata and layout flags.
+  readonly messagesWithMeta = computed<
+    (DisplayMessageWithMeta & { turnStart: boolean; toolResultStart: boolean })[]
+  >(() => {
     const msgs = this.chatSvc.messages()
     const promptTokens = this.activePrompt()?.token_count ?? 0
     const toolsTokens = this.activeToolsTokenCount() ?? 0
     let prevTokenCount: number | null = promptTokens + toolsTokens
     return msgs.map((msg, i) => {
       const turnStart = i > 0 && msg.kind === 'user'
+      const toolResultStart = i > 0 && msg.kind === 'tool_result'
       if (msg.kind !== 'user' && msg.kind !== 'assistant' && msg.kind !== 'tool_result') {
-        return { ...msg, turnStart }
+        return { ...msg, turnStart, toolResultStart }
       }
       const tokenCount = msg.token_count ?? null
       if (tokenCount == null) {
-        return { ...msg, turnStart }
+        return { ...msg, turnStart, toolResultStart }
       }
       const tokenMeta: TokenMeta = {
         token_count: tokenCount,
@@ -119,7 +122,7 @@ export class ChatComponent implements OnDestroy {
         token_pct: Math.round((tokenCount / this.CTX_LIMIT) * 100),
       }
       prevTokenCount = tokenCount
-      return { ...msg, token_meta: tokenMeta, turnStart }
+      return { ...msg, token_meta: tokenMeta, turnStart, toolResultStart }
     })
   })
 

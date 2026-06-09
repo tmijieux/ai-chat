@@ -125,7 +125,7 @@
 
     <!-- messages list-->
     @for (msg of messagesWithMeta(); track msg.id) {
-      <div class="msg-row w-800px" [class.has-siblings]="(msg.sibling_count ?? 1) > 1" [class.turn-start]="msg.turnStart">
+      <div class="msg-row w-800px p-relative" [class.has-siblings]="(msg.sibling_count ?? 1) > 1" [class.mt-6]="msg.turnStart" [class.mt-3]="msg.toolResultStart">
         <!-- Sibling navigator (above message) -->
         @if ((msg.sibling_count ?? 1) > 1) {
           <div
