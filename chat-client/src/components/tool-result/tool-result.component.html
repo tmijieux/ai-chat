@@ -1,0 +1,97 @@
+<div class="p-relative w-full max-w-2xl">
+  <app-collapsible-bubble wrapperClass="bg-card border-card">
+    <span header>
+      @if (msg().log_message) {
+        <code class="tool-result-label">{{ msg().log_message }}{{ grepHeaderSuffix(msg().content, msg().compressed_summary) }}</code>
+      } @else {
+        Tool result
+        @if (msg().tool_name) {
+          : <code class="tool-result-label">{{ msg().tool_name }}</code>
+        }
+      }
+      @if (msg().context_excluded) {
+        @if (msg().compressed_summary) {
+          <span class="ml-2 text-xs text-warning italic">compressed</span>
+        } @else {
+          <span class="ml-2 text-xs text-muted italic">excluded from context</span>
+        }
+      }
+    </span>
+    @if (msg().compressed_summary) {
+      <div class="tool-tabs border-t border-gray-200">
+        <button [class.active]="tab === 'output'" (click)="setTab('output')">Output</button>
+        <button [class.active]="tab === 'summary'" (click)="setTab('summary')">Summary</button>
+      </div>
+    }
+    @if (!msg().compressed_summary || tab === 'output') {
+      @let grep = parseGrepResult(msg().content);
+      @let simple = formatSimpleToolResult(msg().content);
+      @let shell = formatShellResult(msg().content);
+      @let readFile = formatReadFileResult(msg().content);
+      @let listDir = formatListDirResult(msg().content);
+      @if (grep) {
+        <div class="grep-result border-t border-gray-200">
+          @if (grep.total === 0) {
+            <div class="grep-truncated p-3">No matches</div>
+          } @else {
+            @for (file of grep.files; track file.name) {
+              <div class="grep-file-name">{{ file.name }}</div>
+              @for (line of file.lines; track line.no) {
+                <div class="grep-line" [class.grep-match]="line.match">
+                  <span class="grep-lineno">{{ line.no }}</span>
+                  <span class="grep-sep">|</span>
+                  <span class="grep-text">{{ line.text }}</span>
+                </div>
+              }
+            }
+            @if (grep.truncated) {
+              <div class="grep-truncated">… truncated ({{ grep.total }} total matches)</div>
+            }
+          }
+        </div>
+      } @else if (simple) {
+        <div class="tool-result-simple border-t border-gray-200">
+          <span class="tool-result-icon">{{ simple.icon }}</span> {{ simple.text }}
+        </div>
+      } @else if (shell) {
+        <div class="border-t border-gray-200">
+          <div class="tool-result-simple">
+            <span class="tool-result-icon">{{ shell.icon }}</span>
+          </div>
+          @if (shell.output) {
+            <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap">{{ shell.output }}</pre>
+          }
+        </div>
+      } @else if (readFile) {
+        <div class="border-t border-gray-200">
+          <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap">{{ readFile.fileContent }}</pre>
+        </div>
+      } @else if (listDir) {
+        <div class="tool-result-list border-t border-gray-200">
+          @for (entry of listDir.entries; track entry) {
+            <div class="tool-result-list-entry">{{ entry }}</div>
+          }
+        </div>
+      } @else {
+        <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-200">{{ msg().content }}</pre>
+      }
+    } @else {
+      <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-200">{{ msg().compressed_summary }}</pre>
+    }
+  </app-collapsible-bubble>
+  @if (msg().token_meta) {
+    <div class="p-absolute bottom-0 right-0 z-50">
+      <div class="token-meta">
+        ⓘ
+        <div class="token-tooltip">
+          @if (msg().token_meta!.token_count != null) {
+            <div>Context: {{ msg().token_meta!.token_count | number: '1.0-0' }} / {{ CTX_LIMIT }} ({{ msg().token_meta!.token_pct }}%)</div>
+          }
+          @if (msg().token_meta!.token_delta != null) {
+            <div>This message: ~{{ msg().token_meta!.token_delta | number: '1.0-0' }} tokens</div>
+          }
+        </div>
+      </div>
+    </div>
+  }
+</div>

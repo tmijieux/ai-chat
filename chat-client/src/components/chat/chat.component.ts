@@ -13,6 +13,7 @@ import { CollapsibleBubbleComponent } from '../collapsible-bubble/collapsible-bu
 import { MarkdownComponent } from 'ngx-markdown'
 import { ChatInputComponent } from '../chat-input/chat-input.component'
 import { AppStatusService } from '../../services/app-status.service'
+import { ToolResultComponent } from '../tool-result/tool-result.component'
 
 @Component({
   selector: 'app-chat',
@@ -24,6 +25,7 @@ import { AppStatusService } from '../../services/app-status.service'
     CollapsibleBubbleComponent,
     MarkdownComponent,
     ChatInputComponent,
+    ToolResultComponent,
   ],
   templateUrl: './chat.component.html',
   styleUrls: ['./chat.component.scss'],
@@ -53,19 +55,6 @@ export class ChatComponent implements OnDestroy {
 
   // Raw markdown toggle
   private rawModeIds = signal(new Set<string>())
-
-  // Tool result tab state: 'output' | 'summary', default 'summary' when compressed
-  private toolTabState = signal(new Map<string, 'output' | 'summary'>())
-
-  toolTab(msgId: string): 'output' | 'summary' {
-    return this.toolTabState().get(msgId) ?? 'summary'
-  }
-
-  setToolTab(msgId: string, tab: 'output' | 'summary'): void {
-    const m = new Map(this.toolTabState())
-    m.set(msgId, tab)
-    this.toolTabState.set(m)
-  }
 
   readonly CTX_LIMIT = 2 ** 15
 
@@ -193,79 +182,6 @@ export class ChatComponent implements OnDestroy {
       el.scrollTop = el.scrollHeight
     }
     this.autoScrollEnabled.set(true)
-  }
-
-  // -------------------------------------------------------------------------
-  // Tool result parsing helpers
-  // -------------------------------------------------------------------------
-
-  parseGrepResult(content: string): {
-    files: { name: string; lines: { no: number; text: string; match: boolean }[] }[]
-    pattern: string
-    total: number
-    truncated: boolean
-  } | null {
-    try {
-      const r = JSON.parse(content)
-      if (r.tool !== 'grep_files' || !Array.isArray(r.matches)) return null
-      const map = new Map<string, { no: number; text: string; match: boolean }[]>()
-      for (const m of r.matches) {
-        if (!map.has(m.file)) map.set(m.file, [])
-        map.get(m.file)!.push({ no: m.line, text: m.content, match: !!m.match })
-      }
-      return {
-        files: [...map.entries()].map(([name, lines]) => ({ name, lines })),
-        pattern: r.pattern ?? '',
-        total: r.total ?? 0,
-        truncated: !!r.truncated,
-      }
-    } catch {
-      return null
-    }
-  }
-
-  formatSimpleToolResult(content: string): { icon: string; text: string } | null {
-    try {
-      const r = JSON.parse(content)
-      if (r.tool !== 'write_file' && r.tool !== 'edit_file') return null
-      if (r.status === 'rejected') {
-        const reason = r.reason ? ` — ${r.reason}` : ''
-        return { icon: '✗', text: `${r.tool}: rejected${reason}` }
-      }
-      const icon = r.status === 'success' ? '✓' : '✗'
-      const msg = r.error?.message ? ` — ${r.error.message}` : (r.message ? ` — ${r.message}` : '')
-      return { icon, text: `${r.tool}: ${r.path ?? ''}${msg}` }
-    } catch {
-      return null
-    }
-  }
-
-  formatShellResult(content: string): { icon: string; output: string } | null {
-    try {
-      const r = JSON.parse(content)
-      if (r.tool !== 'run_shell') return null
-      if (r.status === 'rejected') {
-        return { icon: '✗ rejected', output: r.reason ?? '' }
-      }
-      const ok = r.status === 'success'
-      const icon = ok ? '✓ exit 0' : '✗ exit 1'
-      const output = ok ? (r.output ?? '') : (r.error?.message ?? '')
-      return { icon, output }
-    } catch {
-      return null
-    }
-  }
-
-  grepHeaderSuffix(content: string, compressed: string | null | undefined): string {
-    if (compressed) return ''
-    try {
-      const r = JSON.parse(content)
-      if (r.tool !== 'grep_files' || r.total == null) return ''
-      const n: number = r.total
-      return ` → ${n} ${n === 1 ? 'match' : 'matches'}`
-    } catch {
-      return ''
-    }
   }
 
   // -------------------------------------------------------------------------
