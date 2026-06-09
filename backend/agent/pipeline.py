@@ -217,6 +217,10 @@ async def run_stage(
         event = await sub_session.outbound.get()
         if event["type"] == "_stage_done":
             break
+        if event.get("type") == "tool_confirm":
+            tool_id = event.get("tool_id")
+            if tool_id and tool_id in sub_session._pending_confirms:
+                parent_session._pending_confirms[tool_id] = sub_session._pending_confirms[tool_id]
         existing = event.get("_pipeline_stage")
         tag = f"{numbered_name}.{existing}" if existing else numbered_name
         await parent_session.emit({**event, "_pipeline_stage": tag})
