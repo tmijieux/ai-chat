@@ -1,7 +1,11 @@
 /* Global app styles - Zoneless change detection */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
 :root {
   font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
-  box-sizing: border-box;
   color: white;
 }
 
