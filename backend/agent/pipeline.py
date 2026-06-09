@@ -374,19 +374,16 @@ class PipelineOrchestrator:
                 if attempt > 0:
                     logger.info("[pipeline] retrying task %s (attempt %d)", task.id, attempt + 1)
 
-                if attempt > 0 and task.verify_issues is not None:
-                    retry_note = f"\n\nPrevious attempt failed verification: {task.verify_issues}"
-                else:
-                    retry_note = ""
+                retry_prefix = (
+                    f"Previous attempt failed verification:\n{task.verify_issues}\n\n"
+                    if attempt > 0 and task.verify_issues is not None
+                    else ""
+                )
                 execute_messages = [
                     {"role": "system", "content": _EXECUTE_SYSTEM},
                     {
                         "role": "user",
-                        "content": (
-                            f"Task: {task.description}\n\n"
-                            f"Full context:\n{final_prompt}"
-                            f"{retry_note}"
-                        ),
+                        "content": f"{retry_prefix}Task: {task.description}",
                     },
                 ]
                 execute_result = await run_stage(
