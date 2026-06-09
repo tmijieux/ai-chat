@@ -126,6 +126,16 @@ export class ChatComponent implements OnDestroy {
     })
   })
 
+  formatToolArgs(args: Record<string, unknown>): string {
+    return Object.entries(args)
+      .map(([key, value]) => {
+        const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+        const truncated = text.length > 300 ? text.slice(0, 300) + '…' : text
+        return `${key}: ${truncated}`
+      })
+      .join('\n\n')
+  }
+
   toolCallNames(toolCalls: ToolCallEntry[] | null | undefined): string {
     if (toolCalls === null || toolCalls === undefined || toolCalls.length === 0) {
       return 'tool calls'

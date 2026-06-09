@@ -234,7 +234,7 @@
                       @for (tc of msg.tool_calls; track tc.id) {
                         <div class="tool-call-entry">
                           <code class="tool-call-name">{{ tc.name }}</code>
-                          <pre class="tool-call-args">{{ tc.args | json }}</pre>
+                          <pre class="tool-confirm-preview">{{ formatToolArgs(tc.args) }}</pre>
                         </div>
                       }
                     </div>
@@ -266,7 +266,7 @@
                       @for (tc of msg.tool_calls; track tc.id) {
                         <div class="tool-call-entry">
                           <code class="tool-call-name">{{ tc.name }}</code>
-                          <pre class="tool-call-args">{{ tc.args | json }}</pre>
+                          <pre class="tool-confirm-preview">{{ formatToolArgs(tc.args) }}</pre>
                         </div>
                       }
                     </div>
@@ -369,7 +369,7 @@
 
           <!-- Tool result (collapsible) -->
           @if (msg.kind === 'tool_result') {
-            <app-tool-result [msg]="msg" />
+            <app-tool-result [msg]="msg" class="w-full max-w-2xl" />
           }
         </div>
 
