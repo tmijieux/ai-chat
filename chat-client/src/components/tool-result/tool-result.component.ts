@@ -109,32 +109,51 @@ export class ToolResultComponent {
     }
   }
 
-  formatReadFileResult(content: string): { path: string; fileContent: string } | null {
+  /** Handles read_file (generates line numbers) and read_file_range (parses "N: text" format). */
+  formatFileContent(content: string): { lines: { no: number; text: string }[] } | null {
     try {
       const r = JSON.parse(content)
-      if (r.tool !== 'read_file') {
-        return null
-      }
       if (r.status !== 'success') {
         return null
       }
-      return { path: r.path ?? '', fileContent: r.file_content ?? '' }
+      if (r.tool === 'read_file') {
+        const lines = ((r.file_content as string) ?? '').split('\n').map((text, i) => ({
+          no: i + 1,
+          text,
+        }))
+        return { lines }
+      }
+      if (r.tool === 'read_file_range') {
+        const lines = ((r.content as string) ?? '')
+          .split('\n')
+          .filter((l) => l !== '')
+          .map((l) => {
+            const m = l.match(/^(\d+): (.*)$/)
+            return m ? { no: parseInt(m[1], 10), text: m[2] } : { no: 0, text: l }
+          })
+        return { lines }
+      }
+      return null
     } catch {
       return null
     }
   }
 
-  formatListDirResult(content: string): { path: string; entries: string[] } | null {
+  /** Handles list_directory (newline-separated content) and glob_files (files array). */
+  formatFileList(content: string): { entries: string[] } | null {
     try {
       const r = JSON.parse(content)
-      if (r.tool !== 'list_directory') {
-        return null
-      }
       if (r.status !== 'success') {
         return null
       }
-      const entries = ((r.content as string) ?? '').split('\n').filter((line) => line !== '')
-      return { path: r.path ?? '', entries }
+      if (r.tool === 'list_directory') {
+        const entries = ((r.content as string) ?? '').split('\n').filter((l) => l !== '')
+        return { entries }
+      }
+      if (r.tool === 'glob_files') {
+        return { entries: Array.isArray(r.files) ? r.files : [] }
+      }
+      return null
     } catch {
       return null
     }

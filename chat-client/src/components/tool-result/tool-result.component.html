@@ -27,8 +27,8 @@
       @let grep = parseGrepResult(msg().content);
       @let simple = formatSimpleToolResult(msg().content);
       @let shell = formatShellResult(msg().content);
-      @let readFile = formatReadFileResult(msg().content);
-      @let listDir = formatListDirResult(msg().content);
+      @let fileContent = formatFileContent(msg().content);
+      @let fileList = formatFileList(msg().content);
       @if (grep) {
         <div class="grep-result border-t border-gray-200">
           @if (grep.total === 0) {
@@ -62,13 +62,19 @@
             <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap">{{ shell.output }}</pre>
           }
         </div>
-      } @else if (readFile) {
-        <div class="border-t border-gray-200">
-          <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap">{{ readFile.fileContent }}</pre>
+      } @else if (fileContent) {
+        <div class="grep-result border-t border-gray-200">
+          @for (line of fileContent.lines; track line.no) {
+            <div class="grep-line">
+              <span class="grep-lineno">{{ line.no }}</span>
+              <span class="grep-sep">|</span>
+              <span class="grep-text">{{ line.text }}</span>
+            </div>
+          }
         </div>
-      } @else if (listDir) {
+      } @else if (fileList) {
         <div class="tool-result-list border-t border-gray-200">
-          @for (entry of listDir.entries; track entry) {
+          @for (entry of fileList.entries; track entry) {
             <div class="tool-result-list-entry">{{ entry }}</div>
           }
         </div>
