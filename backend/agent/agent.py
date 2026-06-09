@@ -1,6 +1,7 @@
 import json
 import asyncio
 import logging
+import re
 import aiohttp
 from typing import Any, Callable, Awaitable
 
@@ -62,6 +63,47 @@ class AgentSession:
     def resume_after_compression(self, conv_id: str) -> None:
         self._compression_conv_id = conv_id
         self._compression_event.set()
+
+
+_TOOL_CALL_BLOCK_RE = re.compile(r'<tool_call>(.*?)</tool_call>', re.DOTALL)
+_FUNCTION_RE = re.compile(r'<function=(\w+)>(.*?)</function>', re.DOTALL)
+_PARAMETER_RE = re.compile(r'<parameter=(\w+)>(.*?)</parameter>', re.DOTALL)
+
+
+def _parse_embedded_tool_call(block_content: str) -> dict | None:
+    """Parse <function=NAME><parameter=K>V</parameter>…</function> into name + arguments dict."""
+    func_match = _FUNCTION_RE.search(block_content)
+    if func_match is None:
+        return None
+    name = func_match.group(1)
+    func_body = func_match.group(2)
+    arguments = {m.group(1): m.group(2) for m in _PARAMETER_RE.finditer(func_body)}
+    return {"name": name, "arguments": arguments}
+
+
+def _extract_tool_calls_from_thinking(thinking: str) -> list[dict]:
+    """
+    Recover tool calls that the model emitted inside the thinking block without closing </think>.
+    Qwen3 uses <tool_call><function=NAME><parameter=K>V</parameter>…</function></tool_call>.
+    Returns tool call dicts in the same shape as the normal stream-assembled list,
+    marked with _recovered=True so the caller can emit tool_call_start manually.
+    """
+    result = []
+    for index, block_match in enumerate(_TOOL_CALL_BLOCK_RE.finditer(thinking)):
+        parsed = _parse_embedded_tool_call(block_match.group(1))
+        if parsed is None or parsed["name"] == "":
+            continue
+        result.append({
+            "id": f"tc-recovered-{index}",
+            "function": {"name": parsed["name"], "arguments": parsed["arguments"]},
+            "_recovered": True,
+        })
+    return result
+
+
+def _strip_tool_call_blocks(thinking: str) -> str:
+    """Remove <tool_call>…</tool_call> blocks from thinking before storing it in LLM context."""
+    return _TOOL_CALL_BLOCK_RE.sub("", thinking).strip()
 
 
 def _find_superseded_read_file_indices(pairs: list[tuple[str, str]]) -> list[int]:
@@ -222,6 +264,14 @@ async def chat_with_tools(
         await session.emit({"type": "error", "message": f"Context limit reached during generation: {prompt_eval_count + eval_count}/{CTX_LIMIT} tokens. The response was cut off."})
         return True, False
 
+    # Recover tool calls embedded in thinking when the model forgot to close </think> first.
+    # Only attempt recovery when both regular content and stream-parsed tool calls are absent.
+    if len(tool_calls) == 0 and len(message["content"]) == 0 and len(message["thinking"]) > 0:
+        recovered = _extract_tool_calls_from_thinking(message["thinking"])
+        if recovered:
+            logger.warning("Recovering %d tool call(s) embedded in thinking block", len(recovered))
+            tool_calls = recovered
+
     finished_without_response = len(message["content"]) == 0 and len(tool_calls) == 0
     if finished_without_response:
         logger.warning("Agent finished without response: no content, no tool calls")
@@ -232,14 +282,14 @@ async def chat_with_tools(
             message["tool_calls"] = tool_calls
         messages.append(message)
     elif len(message["thinking"]) > 0 or len(tool_calls) > 0:
+        # Strip embedded <tool_call> blocks from thinking stored in context — the model already
+        # sees them as tool_calls entries, keeping the raw XML would confuse it.
+        thinking_for_context = _strip_tool_call_blocks(message["thinking"]) if tool_calls and tool_calls[0].get("_recovered") else message["thinking"]
         messages.append({
-            "role": "assistant", 
-            "content": f"<think>{message['thinking']}</think>", 
-            "tool_calls": tool_calls
+            "role": "assistant",
+            "content": f"<think>{thinking_for_context}</think>",
+            "tool_calls": tool_calls,
         })
-        # old code (transient hack):
-        # messages.append({"role": "assistant", , "_transient": True})
-
 
     if len(tool_calls) > 0:
         ctx_before = await backend.count_tokens(backend.prepare_messages(messages), tools)
@@ -249,6 +299,10 @@ async def chat_with_tools(
             tool_name: str = tool_call.get("function", {}).get("name", "")
             tool_args: dict = tool_call.get("function", {}).get("arguments", {})
             call_id: str = tool_call.get("id", f"tc-{id(tool_call)}")
+
+            # Recovered tool calls never got a tool_call_start during streaming — emit it now.
+            if tool_call.get("_recovered"):
+                await session.emit({"type": "tool_call_start", "tool_id": call_id, "tool_name": tool_name})
 
             await session.emit({"type": "tool_call", "tool_id": call_id, "tool_name": tool_name, "arguments": tool_args})
 
