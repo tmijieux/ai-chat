@@ -233,25 +233,7 @@
                     <div class="tool-calls-list">
                       @for (tc of msg.tool_calls; track tc.id) {
                         <div class="tool-call-entry">
-                          <code class="tool-call-name">{{ tc.name }}</code>
-                          @let diffLines = toolCallDiffLines(tc);
-                          @if (diffLines && diffLines.length > 0) {
-                            <div class="diff-block">
-                              @for (dl of diffLines; track $index) {
-                                @if (dl.type === 'removed') {
-                                  <div class="diff-line diff-removed">
-                                    <span class="diff-lineno">{{ dl.line }}</span><span class="diff-op">-</span>{{ dl.text }}
-                                  </div>
-                                } @else {
-                                  <div class="diff-line diff-added">
-                                    <span class="diff-lineno"></span><span class="diff-op">+</span>{{ dl.text }}
-                                  </div>
-                                }
-                              }
-                            </div>
-                          } @else {
-                            <pre class="tool-confirm-preview">{{ formatToolArgs(tc.args) }}</pre>
-                          }
+                          <app-tool-call-entry [tc]="tc" />
                         </div>
                       }
                     </div>
@@ -282,25 +264,7 @@
                     <div class="tool-calls-list">
                       @for (tc of msg.tool_calls; track tc.id) {
                         <div class="tool-call-entry">
-                          <code class="tool-call-name">{{ tc.name }}</code>
-                          @let diffLines = toolCallDiffLines(tc);
-                          @if (diffLines && diffLines.length > 0) {
-                            <div class="diff-block">
-                              @for (dl of diffLines; track $index) {
-                                @if (dl.type === 'removed') {
-                                  <div class="diff-line diff-removed">
-                                    <span class="diff-lineno">{{ dl.line }}</span><span class="diff-op">-</span>{{ dl.text }}
-                                  </div>
-                                } @else {
-                                  <div class="diff-line diff-added">
-                                    <span class="diff-lineno"></span><span class="diff-op">+</span>{{ dl.text }}
-                                  </div>
-                                }
-                              }
-                            </div>
-                          } @else {
-                            <pre class="tool-confirm-preview">{{ formatToolArgs(tc.args) }}</pre>
-                          }
+                          <app-tool-call-entry [tc]="tc" />
                         </div>
                       }
                     </div>

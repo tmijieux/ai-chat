@@ -1,0 +1,70 @@
+:host {
+  display: contents;
+}
+
+.tool-call-name {
+  display: block;
+  color: #818cf8;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.tool-confirm-preview {
+  font-size: 0.75rem;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 0.25rem;
+  padding: 0.5rem;
+  overflow: auto;
+  max-height: 10rem;
+  white-space: pre-wrap;
+  color: #cbd5e1;
+  margin: 0;
+}
+
+.diff-block {
+  font-family: 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.75rem;
+  overflow: auto;
+  max-height: 300px;
+  border-radius: 4px;
+  background: #0f172a;
+  border: 1px solid #334155;
+  padding-bottom: 0.875rem;
+}
+
+.diff-line {
+  display: flex;
+  padding: 1px 0;
+  white-space: pre;
+  line-height: 1.5;
+}
+
+.diff-lineno {
+  color: #475569;
+  min-width: 4ch;
+  text-align: right;
+  padding: 0 6px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.diff-op {
+  width: 1.2ch;
+  padding-right: 4px;
+  flex-shrink: 0;
+}
+
+.diff-added {
+  background: rgba(134, 239, 172, 0.08);
+  color: #86efac;
+
+  .diff-op { color: #4ade80; }
+}
+
+.diff-removed {
+  background: rgba(252, 165, 165, 0.08);
+  color: #fca5a5;
+
+  .diff-op { color: #f87171; }
+}
