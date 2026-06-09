@@ -28,6 +28,15 @@ def _read_line(prompt: str) -> str:
     _drain_stdin()
     return line
 
+
+def _read_yn(prompt: str) -> str:
+    """Read exactly 'y' or 'n', re-asking on empty or invalid input."""
+    while True:
+        answer = input(prompt).strip().lower()
+        if answer in ("y", "n"):
+            return answer
+        print("Please enter 'y' or 'n'.")
+
 from agent.agent import AgentSession, run_agent
 from agent.pipeline import PipelineOrchestrator
 from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
@@ -115,7 +124,7 @@ async def _run_turn(
 
         if event["type"] == "tool_confirm":
             print(f"\n{YELLOW}[confirm] {event.get('tool_name', '')}\n{event.get('preview', '')}{RESET}")
-            answer = _read_line("Approve? [y/n]: ").lower()
+            answer = _read_yn("Approve? [y/n]: ")
             reason = None
             if answer != "y":
                 reason = _read_line("Reason (optional): ") or None
@@ -155,7 +164,7 @@ async def _run_pipeline_turn(
             stage = event.get("_pipeline_stage")
             tag = f"[{stage}] " if stage is not None else ""
             print(f"\n{YELLOW}{tag}[confirm] {event.get('tool_name', '')}\n{event.get('preview', '')}{RESET}")
-            answer = _read_line("Approve? [y/n]: ").lower()
+            answer = _read_yn("Approve? [y/n]: ")
             reason = None
             if answer != "y":
                 reason = _read_line("Reason (optional): ") or None
