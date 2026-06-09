@@ -1,9 +1,11 @@
 import { Component, computed, input } from '@angular/core'
 import { DiffLine, ToolCallEntry } from '../../types/message-types'
+import { DiffBlockComponent } from '../diff-block/diff-block.component'
 
 @Component({
   selector: 'app-tool-call-entry',
   standalone: true,
+  imports: [DiffBlockComponent],
   templateUrl: './tool-call-entry.component.html',
   styleUrls: ['./tool-call-entry.component.scss'],
 })

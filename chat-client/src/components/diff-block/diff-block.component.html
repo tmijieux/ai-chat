@@ -1,0 +1,21 @@
+<div class="diff-block">
+  @for (dl of lines(); track $index) {
+    @if (dl.type === 'header') {
+      <div class="diff-line diff-header">
+        <span class="diff-lineno"></span><span class="diff-op"> </span>{{ dl.text }}
+      </div>
+    } @else if (dl.type === 'removed') {
+      <div class="diff-line diff-removed">
+        <span class="diff-lineno">{{ dl.line }}</span><span class="diff-op">-</span>{{ dl.text }}
+      </div>
+    } @else if (dl.type === 'added') {
+      <div class="diff-line diff-added">
+        <span class="diff-lineno"></span><span class="diff-op">+</span>{{ dl.text }}
+      </div>
+    } @else {
+      <div class="diff-line diff-context">
+        <span class="diff-lineno">{{ dl.line }}</span><span class="diff-op"> </span>{{ dl.text }}
+      </div>
+    }
+  }
+</div>

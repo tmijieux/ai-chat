@@ -1,18 +1,6 @@
 <code class="tool-call-name">{{ tc().name }}</code>
 @if (diffLines() && diffLines()!.length > 0) {
-  <div class="diff-block">
-    @for (dl of diffLines()!; track $index) {
-      @if (dl.type === 'removed') {
-        <div class="diff-line diff-removed">
-          <span class="diff-lineno">{{ dl.line }}</span><span class="diff-op">-</span>{{ dl.text }}
-        </div>
-      } @else {
-        <div class="diff-line diff-added">
-          <span class="diff-lineno"></span><span class="diff-op">+</span>{{ dl.text }}
-        </div>
-      }
-    }
-  </div>
+  <app-diff-block [lines]="diffLines()!" />
 } @else {
   <pre class="tool-confirm-preview">{{ formatArgs(tc().args) }}</pre>
 }

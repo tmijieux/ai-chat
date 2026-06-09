@@ -16,6 +16,7 @@ import { ChatInputComponent } from '../chat-input/chat-input.component'
 import { AppStatusService } from '../../services/app-status.service'
 import { ToolResultComponent } from '../tool-result/tool-result.component'
 import { ToolCallEntryComponent } from '../tool-call-entry/tool-call-entry.component'
+import { DiffBlockComponent } from '../diff-block/diff-block.component'
 
 @Component({
   selector: 'app-chat',
@@ -29,6 +30,7 @@ import { ToolCallEntryComponent } from '../tool-call-entry/tool-call-entry.compo
     ChatInputComponent,
     ToolResultComponent,
     ToolCallEntryComponent,
+    DiffBlockComponent,
   ],
   templateUrl: './chat.component.html',
   styleUrls: ['./chat.component.scss'],
