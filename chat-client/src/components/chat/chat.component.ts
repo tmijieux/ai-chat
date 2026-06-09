@@ -60,11 +60,18 @@ export class ChatComponent implements OnDestroy {
 
   // Raw markdown toggle
   private rawModeIds = signal(new Set<string>())
+  readonly copiedMsgId = signal<string | null>(null)
 
   readonly CTX_LIMIT = 2 ** 15
 
   isRaw(msgId: string): boolean {
     return this.rawModeIds().has(msgId)
+  }
+
+  copyContent(content: string, msgId: string): void {
+    navigator.clipboard.writeText(content)
+    this.copiedMsgId.set(msgId)
+    setTimeout(() => { this.copiedMsgId.set(null) }, 1500)
   }
 
   toggleRaw(msgId: string): void {

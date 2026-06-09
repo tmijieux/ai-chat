@@ -219,7 +219,12 @@
                 @if (msg.content) {
                   <div class="p-4 bg-assistant-bubble w-full prose-bubble">
                     @if (isRaw(msg.id)) {
-                      <pre class="whitespace-pre-wrap text-sm m-0">{{ msg.content }}</pre>
+                      <div class="p-relative">
+                        <button class="raw-copy-btn" (click)="copyContent(msg.content, msg.id)">
+                          {{ copiedMsgId() === msg.id ? '✓' : 'Copy' }}
+                        </button>
+                        <pre class="whitespace-pre-wrap text-sm m-0">{{ msg.content }}</pre>
+                      </div>
                     } @else {
                       <markdown [data]="msg.content" />
                     }
