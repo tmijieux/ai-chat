@@ -97,7 +97,7 @@
     </div>
   </div>
 
-  <div #scrollContainer class="flex-grow v-scroll p-6 flex flex-col gap-6 items-center p-relative" (scroll)="onScrollContainer($event)">
+  <div #scrollContainer class="flex-grow v-scroll p-6 flex flex-col gap-2 items-center p-relative" (scroll)="onScrollContainer($event)">
     <!-- system prompt bubble -->
     @let prompt = activePrompt();
     @if (!!prompt) {
@@ -125,7 +125,7 @@
 
     <!-- messages list-->
     @for (msg of messagesWithMeta(); track msg.id) {
-      <div class="msg-row w-800px" [class.has-siblings]="(msg.sibling_count ?? 1) > 1">
+      <div class="msg-row w-800px" [class.has-siblings]="(msg.sibling_count ?? 1) > 1" [class.turn-start]="msg.turnStart">
         <!-- Sibling navigator (above message) -->
         @if ((msg.sibling_count ?? 1) > 1) {
           <div
@@ -228,7 +228,7 @@
               }
               @if (msg.tool_calls && msg.tool_calls.length > 0) {
                 <app-collapsible-bubble wrapperClass="bg-card border-card">
-                  <span header>tool calls ({{ msg.tool_calls.length }})</span>
+                  <span header>{{ toolCallNames(msg.tool_calls) }}</span>
                   <div class="tool-calls-list">
                     @for (tc of msg.tool_calls; track tc.id) {
                       <div class="tool-call-entry">
@@ -258,7 +258,7 @@
               </app-collapsible-bubble>
               @if (msg.tool_calls && msg.tool_calls.length > 0) {
                 <app-collapsible-bubble wrapperClass="bg-card border-card">
-                  <span header>tool calls ({{ msg.tool_calls.length }})</span>
+                  <span header>{{ toolCallNames(msg.tool_calls) }}</span>
                   <div class="tool-calls-list">
                     @for (tc of msg.tool_calls; track tc.id) {
                       <div class="tool-call-entry">

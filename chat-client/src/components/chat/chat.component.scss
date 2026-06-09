@@ -23,6 +23,10 @@
 .msg-row {
   position: relative;
 
+  &.turn-start {
+    margin-top: 1.5rem;
+  }
+
   .msg-row-actions {
     position: absolute;
     top: 2px;

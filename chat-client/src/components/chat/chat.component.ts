@@ -6,6 +6,7 @@ import {
   ConversationSettings,
   DisplayMessageWithMeta,
   TokenMeta,
+  ToolCallEntry,
 } from '../../types/message-types'
 import { ActivatedRoute, Router, RouterLink } from '@angular/router'
 import { ConversationSettingsComponent } from '../conversation-settings/conversation-settings.component'
@@ -97,19 +98,20 @@ export class ChatComponent implements OnDestroy {
     return this.chatSvc.toolFrameworkOverhead() + toolTokens + stackingOverhead
   })
 
-  // Enrich each message with token metadata for the tooltip display.
-  readonly messagesWithMeta = computed<DisplayMessageWithMeta[]>(() => {
+  // Enrich each message with token metadata and turn-boundary flag.
+  readonly messagesWithMeta = computed<(DisplayMessageWithMeta & { turnStart: boolean })[]>(() => {
     const msgs = this.chatSvc.messages()
     const promptTokens = this.activePrompt()?.token_count ?? 0
     const toolsTokens = this.activeToolsTokenCount() ?? 0
     let prevTokenCount: number | null = promptTokens + toolsTokens
-    return msgs.map((msg) => {
+    return msgs.map((msg, i) => {
+      const turnStart = i > 0 && msg.kind === 'user'
       if (msg.kind !== 'user' && msg.kind !== 'assistant' && msg.kind !== 'tool_result') {
-        return { ...msg }
+        return { ...msg, turnStart }
       }
       const tokenCount = msg.token_count ?? null
       if (tokenCount == null) {
-        return { ...msg }
+        return { ...msg, turnStart }
       }
       const tokenMeta: TokenMeta = {
         token_count: tokenCount,
@@ -117,9 +119,16 @@ export class ChatComponent implements OnDestroy {
         token_pct: Math.round((tokenCount / this.CTX_LIMIT) * 100),
       }
       prevTokenCount = tokenCount
-      return { ...msg, token_meta: tokenMeta }
+      return { ...msg, token_meta: tokenMeta, turnStart }
     })
   })
+
+  toolCallNames(toolCalls: ToolCallEntry[] | null | undefined): string {
+    if (toolCalls === null || toolCalls === undefined || toolCalls.length === 0) {
+      return 'tool calls'
+    }
+    return toolCalls.map((tc) => tc.name).join(', ')
+  }
 
   readonly conversations$ = this.chatSvc.conversations.obs$
 
