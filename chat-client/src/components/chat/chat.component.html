@@ -208,37 +208,39 @@
 
           <!-- Assistant message (non-agentic streaming or DB-loaded) -->
           @if (msg.kind === 'assistant') {
-            <div class="flex flex-col max-w-3xl w-full gap-2 p-relative">
-              @if (msg.thinking) {
-                <app-collapsible-bubble [streaming]="!!(msg.streaming && !msg.content)">
-                  <span header>Thinking...</span>
-                  <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-700 opacity-80">{{ msg.thinking }}</pre>
-                </app-collapsible-bubble>
-              }
-              @if (msg.content) {
-                <div class="p-4 bg-assistant-bubble shadow-md rounded-lg prose-bubble w-full">
-                  @if (isRaw(msg.id)) {
-                    <pre class="whitespace-pre-wrap text-sm m-0">{{ msg.content }}</pre>
-                  } @else {
-                    <markdown [data]="msg.content" />
-                  }
-                </div>
-              } @else if (msg.streaming) {
-                <div class="p-4 bg-assistant-bubble shadow-md rounded-lg">...</div>
-              }
-              @if (msg.tool_calls && msg.tool_calls.length > 0) {
-                <app-collapsible-bubble wrapperClass="bg-card border-card">
-                  <span header>{{ toolCallNames(msg.tool_calls) }}</span>
-                  <div class="tool-calls-list">
-                    @for (tc of msg.tool_calls; track tc.id) {
-                      <div class="tool-call-entry">
-                        <code class="tool-call-name">{{ tc.name }}</code>
-                        <pre class="tool-call-args">{{ tc.args | json }}</pre>
-                      </div>
+            <div class="max-w-3xl w-full p-relative">
+              <div class="grouped-bubble rounded-xl overflow-hidden shadow-sm w-full bg-thinking-bubble">
+                @if (msg.thinking) {
+                  <app-collapsible-bubble [flat]="true" [streaming]="!!(msg.streaming && !msg.content)">
+                    <span header>Thinking...</span>
+                    <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-700 opacity-80">{{ msg.thinking }}</pre>
+                  </app-collapsible-bubble>
+                }
+                @if (msg.content) {
+                  <div class="p-4 bg-assistant-bubble w-full prose-bubble">
+                    @if (isRaw(msg.id)) {
+                      <pre class="whitespace-pre-wrap text-sm m-0">{{ msg.content }}</pre>
+                    } @else {
+                      <markdown [data]="msg.content" />
                     }
                   </div>
-                </app-collapsible-bubble>
-              }
+                } @else if (msg.streaming) {
+                  <div class="p-4 bg-assistant-bubble">...</div>
+                }
+                @if (msg.tool_calls && msg.tool_calls.length > 0) {
+                  <app-collapsible-bubble [flat]="true" wrapperClass="bg-card">
+                    <span header>{{ toolCallNames(msg.tool_calls) }}</span>
+                    <div class="tool-calls-list">
+                      @for (tc of msg.tool_calls; track tc.id) {
+                        <div class="tool-call-entry">
+                          <code class="tool-call-name">{{ tc.name }}</code>
+                          <pre class="tool-call-args">{{ tc.args | json }}</pre>
+                        </div>
+                      }
+                    </div>
+                  </app-collapsible-bubble>
+                }
+              </div>
               @if (msg.token_meta) {
                 <div class="p-absolute bottom-0 right-0 z-50">
                   <ng-container
@@ -251,24 +253,26 @@
 
           <!-- Live streaming thinking block (agent run only) -->
           @if (msg.kind === 'thinking') {
-            <div class="flex flex-col max-w-3xl w-full gap-2">
-              <app-collapsible-bubble [streaming]="!msg.done">
-                <span header>Thinking...@if (msg.is_degenerate) { <span class="ml-2 text-xs text-red-400 font-normal">(stopped without response)</span>}</span>
-                <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-700 opacity-80">{{ msg.content }}</pre>
-              </app-collapsible-bubble>
-              @if (msg.tool_calls && msg.tool_calls.length > 0) {
-                <app-collapsible-bubble wrapperClass="bg-card border-card">
-                  <span header>{{ toolCallNames(msg.tool_calls) }}</span>
-                  <div class="tool-calls-list">
-                    @for (tc of msg.tool_calls; track tc.id) {
-                      <div class="tool-call-entry">
-                        <code class="tool-call-name">{{ tc.name }}</code>
-                        <pre class="tool-call-args">{{ tc.args | json }}</pre>
-                      </div>
-                    }
-                  </div>
+            <div class="max-w-3xl w-full">
+              <div class="grouped-bubble rounded-xl overflow-hidden shadow-sm w-full bg-thinking-bubble">
+                <app-collapsible-bubble [flat]="true" [streaming]="!msg.done">
+                  <span header>Thinking...@if (msg.is_degenerate) { <span class="ml-2 text-xs text-red-400 font-normal">(stopped without response)</span>}</span>
+                  <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-700 opacity-80">{{ msg.content }}</pre>
                 </app-collapsible-bubble>
-              }
+                @if (msg.tool_calls && msg.tool_calls.length > 0) {
+                  <app-collapsible-bubble [flat]="true" wrapperClass="bg-card">
+                    <span header>{{ toolCallNames(msg.tool_calls) }}</span>
+                    <div class="tool-calls-list">
+                      @for (tc of msg.tool_calls; track tc.id) {
+                        <div class="tool-call-entry">
+                          <code class="tool-call-name">{{ tc.name }}</code>
+                          <pre class="tool-call-args">{{ tc.args | json }}</pre>
+                        </div>
+                      }
+                    </div>
+                  </app-collapsible-bubble>
+                }
+              </div>
             </div>
           }
 
