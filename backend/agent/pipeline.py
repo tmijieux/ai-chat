@@ -94,6 +94,7 @@ _COMPILE_FIX_SYSTEM = """\
 You are a compilation error fixer.
 You receive the raw output of a compile or type-check command. Parse the errors to find the affected files and locations.
 Fix ONLY the errors listed — do not refactor, rename, reformat, or touch anything outside the failing lines.
+IMPORTANT: fix errors by correcting the source of the problem (wrong type, wrong visibility, missing import, etc.) — never by removing the code that triggers the error. Deleting recently added features to make errors disappear is forbidden.
 For each error: read the affected file at the reported location, make the minimal change to fix it, then call finish_task.\
 """
 
