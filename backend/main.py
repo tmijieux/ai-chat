@@ -271,6 +271,7 @@ def _msg_dict(m: db.Message) -> dict:
         "compressed_summary": m.compressed_summary,
         "log_message": m.log_message,
         "tool_calls": json.loads(m.tool_calls) if m.tool_calls else None,
+        "is_degenerate": bool(m.is_degenerate),
     }
 
 
@@ -559,6 +560,7 @@ async def add_message(
             token_delta=message.token_delta,
             log_message=message.log_message,
             tool_calls=json.dumps(message.tool_calls) if message.tool_calls is not None else None,
+            is_degenerate=message.is_degenerate,
         )
     )
     for position, image_id in enumerate(message.image_ids):

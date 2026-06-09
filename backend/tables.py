@@ -32,6 +32,8 @@ class Message(Base):
     log_message = column(String, nullable=True)
     # JSON array of {id, name, args} — populated on assistant messages that made tool calls
     tool_calls = column(Text, nullable=True)
+    # True when the agent stopped without producing a response (thinking-only, no content/tool calls)
+    is_degenerate = column(Boolean, nullable=False, default=False)
 
 
 class Image(Base):

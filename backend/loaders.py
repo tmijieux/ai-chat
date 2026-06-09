@@ -19,6 +19,7 @@ class NewMessage(BaseModel):
     image_ids: list[str] = []
     # [{id, name, args}] — assistant messages that invoked tools
     tool_calls: list | None = None
+    is_degenerate: bool = False
 
 
 class UpdateTokenCount(BaseModel):

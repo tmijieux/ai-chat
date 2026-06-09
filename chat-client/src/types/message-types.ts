@@ -40,6 +40,7 @@ export type Message = {
   next_sibling_id?: string | null
   has_children?: boolean
   images?: ImageAttachment[]
+  is_degenerate?: boolean
 }
 
 export type ApiDone =
@@ -206,6 +207,8 @@ export type DisplayMessage =
       /** False while still streaming; true once the block is complete. */
       done: boolean
       tool_calls?: ToolCallEntry[] | null
+      /** True when the agent stopped without producing content or tool calls. */
+      is_degenerate?: boolean
     } & SiblingMeta)
   | ({
       kind: 'tool_confirm'

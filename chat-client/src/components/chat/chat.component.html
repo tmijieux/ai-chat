@@ -253,7 +253,7 @@
           @if (msg.kind === 'thinking') {
             <div class="flex flex-col max-w-3xl gap-2">
               <app-collapsible-bubble [streaming]="!msg.done">
-                <span header>Thinking...</span>
+                <span header>Thinking...@if (msg.is_degenerate) { <span class="ml-2 text-xs text-red-400 font-normal">(stopped without response)</span>}</span>
                 <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-700 opacity-80">{{ msg.content }}</pre>
               </app-collapsible-bubble>
               @if (msg.tool_calls && msg.tool_calls.length > 0) {

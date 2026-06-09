@@ -380,6 +380,7 @@ export class ChatService {
     const conv = this._conversation!
 
     let idOfCurrentlyStreamingThinkingMessage: string | null = null
+    let lastThinkingMessageId: string | null = null
     let pendingThinkingContent = ''
 
     let idOfCurrentlyStreamingAssistantMessage: string | null = null
@@ -468,6 +469,7 @@ export class ChatService {
           )
         } else {
           idOfCurrentlyStreamingThinkingMessage = crypto.randomUUID()
+          lastThinkingMessageId = idOfCurrentlyStreamingThinkingMessage
           this._messages.update((msgs) => [
             ...msgs,
             {
@@ -633,11 +635,30 @@ export class ChatService {
             ])
           })
         } else {
-          if (event.finished_without_response) {
-            this._messages.update((msgs) => [
-              ...msgs,
-              { kind: 'error', id: crypto.randomUUID(), message: 'L\'agent a terminé sans produire de réponse.' },
-            ])
+          if (event.finished_without_response === true) {
+            const degenerateId = lastThinkingMessageId !== null ? lastThinkingMessageId : crypto.randomUUID()
+            const thinkingContent = pendingThinkingContent !== '' ? pendingThinkingContent : undefined
+            pendingThinkingContent = ''
+            if (lastThinkingMessageId !== null) {
+              this._messages.update((msgs) =>
+                msgs.map((m) =>
+                  m.id === lastThinkingMessageId && m.kind === 'thinking'
+                    ? { ...m, is_degenerate: true }
+                    : m,
+                ),
+              )
+            }
+            enqueue(() =>
+              firstValueFrom(
+                this.api.post_message(conv.id, {
+                  id: degenerateId,
+                  role: 'assistant',
+                  content: '',
+                  thinking: thinkingContent,
+                  is_degenerate: true,
+                }),
+              ),
+            )
           }
           enqueue(() => this._computeTokenCountForLastMessage())
           enqueue(() => this._compressConversation())
@@ -733,6 +754,17 @@ export class ChatService {
             content: m.thinking,
             done: true,
             tool_calls: m.tool_calls ?? undefined,
+            is_degenerate: m.is_degenerate,
+            ...siblingMeta,
+          })
+        } else if (m.is_degenerate) {
+          // Degenerate stop with no thinking — show as an empty collapsed thinking block
+          result.push({
+            kind: 'thinking',
+            id: m.id,
+            content: '',
+            done: true,
+            is_degenerate: true,
             ...siblingMeta,
           })
         }
