@@ -406,11 +406,11 @@
       </div>
     }
     @if (chatSvc.callingTool()) {
-      <div class="flex justify-start w-800px">
-        <div class="flex items-center gap-2 px-3 py-1 text-xs opacity-50">
-          <span class="animate-pulse">●</span> calling {{ chatSvc.callingTool() }}…
-        </div>
-      </div>
+      <app-tool-call-preview
+        [toolName]="chatSvc.callingTool()!"
+        [args]="chatSvc.streamingToolCallArgs()"
+        [streaming]="true"
+      />
     }
 
     <!-- Compression in-progress indicator -->

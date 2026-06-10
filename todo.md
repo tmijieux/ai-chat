@@ -22,6 +22,10 @@
 
 - **Per-iteration compression**: run compression/summarization when required (file too big)
 
+## Pipeline / Agent
+
+- **Native line-range read tool for pipeline stages**: verify (and potentially execute) currently fall back to `run_shell` + `sed -n 'X,Yp'` to read line ranges. A lightweight `read_lines(file_path, start_line, end_line)` tool with no search_result_id gating would be cleaner for stages that already know the exact location.
+
 ## Backend / Infrastructure
 
 - **Fix uvicorn reload on Windows with ProactorEventLoop** — WinError 87 on socket accept when using reload=True. Pattern: parent spawns child subprocess (env flag `RELOADER=yes`), child runs `uvicorn.Server` directly (no `reload=True`) + `watchfiles.awatch` concurrently, sets `server.should_exit = True` on file change, exits with code 3, parent restarts. See `my_quart_reloader()` in the other quart project for the analog.

@@ -76,6 +76,10 @@ export class ChatService {
   /** Name of the tool whose arguments are currently being streamed; null when idle. */
   public readonly callingTool = this._callingTool.asReadonly()
 
+  private _streamingToolCallArgs = signal<string>('')
+  /** Raw JSON argument string accumulated from tool_call_chunk events; empty when idle. */
+  public readonly streamingToolCallArgs = this._streamingToolCallArgs.asReadonly()
+
   /** Current streaming phase, derived from the last message in the list. */
   public readonly phase = computed<'thinking' | 'responding' | null>(() => {
     if (!this.agentSvc.running()) {
@@ -516,6 +520,9 @@ export class ChatService {
         }
       } else if (event.type === 'tool_call_start') {
         this._callingTool.set(event.tool_name)
+        this._streamingToolCallArgs.set('')
+      } else if (event.type === 'tool_call_chunk') {
+        this._streamingToolCallArgs.update((s) => s + event.chunk)
       } else if (event.type === 'tool_call') {
         pendingToolCalls.push({ id: event.tool_id, name: event.tool_name, args: event.arguments })
       } else if (event.type === 'tool_confirm') {
@@ -534,6 +541,7 @@ export class ChatService {
         ])
       } else if (event.type === 'tool_result') {
         this._callingTool.set(null)
+        this._streamingToolCallArgs.set('')
         // Capture before markThinkingMessageAsDoneAndClearIt clears it
         const thinkingIdBeforeResult = idOfCurrentlyStreamingThinkingMessage
         markThinkingMessageAsDoneAndClearIt()
@@ -634,6 +642,7 @@ export class ChatService {
         }
       } else if (event.type === 'done' || event.type === 'error') {
         this._callingTool.set(null)
+        this._streamingToolCallArgs.set('')
         this._messages.update((msgs) => msgs.filter((m) => m.kind !== 'tool_confirm'))
         if (event.type === 'error') {
           const errorText = event.message ?? 'An error occurred'

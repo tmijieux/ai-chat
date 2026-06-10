@@ -1,0 +1,19 @@
+<div class="flex justify-start w-800px">
+  <div class="bg-thinking-bubble rounded-lg text-xs overflow-hidden">
+
+    <div class="flex items-center gap-2 px-3 py-1 cursor-pointer select-none"
+         (click)="toggleCollapse()">
+      @if (streaming()) {
+        <span class="animate-pulse">●</span>
+      }
+      <span>calling {{ toolName() }}…</span>
+      <span class="opacity-50 ml-auto">{{ collapsed() ? '▶' : '▼' }}</span>
+    </div>
+
+    @if (!collapsed()) {
+      <pre #argsEl
+           class="overflow-y-auto max-h-20 px-3 pb-2 m-0 text-xs opacity-70 whitespace-pre-wrap">{{ args() }}</pre>
+    }
+
+  </div>
+</div>
