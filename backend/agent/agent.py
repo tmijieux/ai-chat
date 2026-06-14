@@ -6,6 +6,7 @@ import aiohttp
 from typing import Any, Callable, Awaitable
 
 from .tools import TOOL_REGISTRY, get_ollama_tool_list
+from .auto_safety import evaluate_tool_safety, _ALWAYS_SAFE_TOOLS, _FILE_WRITE_TOOLS, is_path_inside_workspace
 from llm import backend
 from llm.base import ToolCallStartEvent, ToolCallArgEvent
 
@@ -28,6 +29,9 @@ class AgentSession:
         self.finish_result: dict | None = None
         self._search_result_ids: set[str] = set()
         self._sub_stage_counters: dict[str, int] = {}
+        self.mode: str = "standard"
+        self.working_directory: str | None = None
+        self.last_user_message: str | None = None
 
     async def emit(self, event: dict) -> None:
         await self.outbound.put(event)
@@ -36,7 +40,35 @@ class AgentSession:
         self, tool_id: str, tool_name: str, arguments: dict, preview: str,
         diff_lines: list | None = None,
     ) -> tuple[bool, str | None]:
-        """Emit a confirmation request and suspend until the client responds."""
+        """Emit a confirmation request and suspend until the client responds.
+
+        In auto/yolo mode applies rule-based + LLM safety evaluation instead of
+        prompting the user for every tool call.
+        """
+        if self.mode in ("auto", "yolo"):
+            # Rule-based: always safe
+            if tool_name in _ALWAYS_SAFE_TOOLS:
+                return True, None
+            # Rule-based: in-workspace file write
+            if tool_name in _FILE_WRITE_TOOLS:
+                path = arguments.get("file_path", "")
+                if self.working_directory is not None and is_path_inside_workspace(path, self.working_directory):
+                    return True, None
+            # LLM evaluation for run_shell, search_web, out-of-workspace writes
+            if self.mode == "auto":
+                await self.emit({"type": "tool_evaluating", "tool_id": tool_id, "tool_name": tool_name})
+            verdict, reason = await evaluate_tool_safety(
+                tool_name, arguments, self.working_directory,
+                self.last_user_message or "", backend,
+            )
+            if verdict == "safe":
+                if self.mode == "auto":
+                    await self.emit({"type": "tool_auto_approved", "tool_id": tool_id})
+                return True, None
+            # Dangerous: auto shows confirmation UI; yolo rejects and lets LLM handle it
+            if self.mode == "yolo":
+                return False, f"Safety evaluator blocked this action: {reason}"
+
         event: dict = {
             "type": "tool_confirm",
             "tool_id": tool_id,
@@ -277,21 +309,25 @@ async def chat_with_tools(
             done_reason = event["finish_reason"]
             print(f"[tokens] prompt_tokens={prompt_eval_count} completion_tokens={eval_count} finish_reason={done_reason}")
 
-    # Build tool_calls list from accumulated fragments
-    tool_calls: list[dict] = [
-        {
-            "id": acc["id"],
-            "function": {
-                "name": acc["name"],
-                "arguments": json.loads(acc["arguments_str"]) if acc["arguments_str"] else {},
-            },
-        }
-        for acc in (tool_calls_acc[i] for i in sorted(tool_calls_acc))
-    ]
-
     if done_reason == "length":
         await session.emit({"type": "error", "message": f"Context limit reached during generation: {prompt_eval_count + eval_count}/{CTX_LIMIT} tokens. The response was cut off."})
         return True, False
+
+    # Build tool_calls list from accumulated fragments
+    tool_calls: list[dict] = []
+    for acc in (tool_calls_acc[i] for i in sorted(tool_calls_acc)):
+        try:
+            arguments = json.loads(acc["arguments_str"]) if acc["arguments_str"] else {}
+        except json.JSONDecodeError:
+            logger.warning("Malformed tool call arguments for %s, skipping: %r", acc["name"], acc["arguments_str"])
+            continue
+        tool_calls.append({
+            "id": acc["id"],
+            "function": {
+                "name": acc["name"],
+                "arguments": arguments,
+            },
+        })
 
     # Recover tool calls embedded in thinking when the model forgot to close </think> first.
     # Only attempt recovery when both regular content and stream-parsed tool calls are absent.

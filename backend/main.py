@@ -1203,6 +1203,9 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
             messages.append({"role": "user", "content": user_message})
 
         session = AgentSession()
+        session.mode = mode
+        session.working_directory = working_directory
+        session.last_user_message = user_message
 
         async def _refresh_messages(conv_id: str) -> list[dict]:
             # Fetch which tool messages were compressed in DB, match by tool_call_id.

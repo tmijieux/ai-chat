@@ -170,7 +170,7 @@
           [class]="
             msg.kind === 'user'
               ? 'justify-end'
-              : msg.kind === 'tool_confirm' || msg.kind === 'plan_proposal' || msg.kind === 'agent_question'
+              : msg.kind === 'tool_confirm' || msg.kind === 'tool_evaluating' || msg.kind === 'plan_proposal' || msg.kind === 'agent_question'
                 ? 'justify-center'
                 : 'justify-start'
           "
@@ -358,6 +358,11 @@
             </div>
           }
 
+          <!-- Safety evaluation spinner (auto mode) -->
+          @if (msg.kind === 'tool_evaluating') {
+            <app-tool-evaluating [toolName]="msg.tool_name" />
+          }
+
           <!-- Plan proposal card -->
           @if (msg.kind === 'plan_proposal') {
             <app-plan-card
@@ -395,7 +400,7 @@
         </div>
 
         <!-- Action buttons (revealed on .msg-row hover, hidden for tool_confirm and error) -->
-        @if (msg.kind !== 'tool_confirm' && msg.kind !== 'error' && msg.kind !== 'plan_proposal' && msg.kind !== 'agent_question') {
+        @if (msg.kind !== 'tool_confirm' && msg.kind !== 'tool_evaluating' && msg.kind !== 'error' && msg.kind !== 'plan_proposal' && msg.kind !== 'agent_question') {
           <div class="msg-row-actions">
             @if (msg.kind === 'user' && editingMessageId() !== msg.id) {
               <button class="msg-action-btn" title="Edit" (click)="startEdit(msg.id, msg.content)">

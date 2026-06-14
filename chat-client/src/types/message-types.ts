@@ -159,6 +159,8 @@ export type AgentEvent = (
   | { type: 'tool_call_chunk'; tool_id: string; chunk: string }
   | { type: 'tool_call'; tool_id: string; tool_name: string; arguments: Record<string, unknown> }
   | { type: 'tool_confirm'; tool_id: string; tool_name: string; arguments: Record<string, unknown>; preview: string; diff_lines?: DiffLine[] }
+  | { type: 'tool_evaluating'; tool_id: string; tool_name: string }
+  | { type: 'tool_auto_approved'; tool_id: string }
   | { type: 'tool_result'; tool_id: string; tool_name: string; content: string; log_message?: string }
   | { type: 'iteration_end'; prompt_tokens: number; response_tokens: number }
   | { type: 'ctx_update' | 'compressing'; ctx_tokens: number }
@@ -247,6 +249,7 @@ export type DisplayMessage =
       token_delta?: number | null
       context_excluded?: boolean
     } & SiblingMeta)
+  | { kind: 'tool_evaluating'; id: string; tool_id: string; tool_name: string }
   | { kind: 'plan_proposal'; id: string; plan_id: string; plan: string; resolved: boolean; resolution?: string }
   | { kind: 'agent_question'; id: string; question_id: string; question: string; options?: string[]; resolved: boolean }
   | { kind: 'error'; id: string; message: string }

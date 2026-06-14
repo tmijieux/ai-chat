@@ -21,6 +21,7 @@ import { ToolCallPreviewComponent } from '../tool-call-preview/tool-call-preview
 import { DirectoryPickerComponent } from '../directory-picker/directory-picker.component'
 import { PlanCardComponent, PlanAcceptPayload } from '../plan-card/plan-card.component'
 import { AgentQuestionCardComponent } from '../agent-question-card/agent-question-card.component'
+import { ToolEvaluatingComponent } from '../tool-evaluating/tool-evaluating.component'
 
 @Component({
   selector: 'app-chat',
@@ -39,6 +40,7 @@ import { AgentQuestionCardComponent } from '../agent-question-card/agent-questio
     DirectoryPickerComponent,
     PlanCardComponent,
     AgentQuestionCardComponent,
+    ToolEvaluatingComponent,
   ],
   templateUrl: './chat.component.html',
   styleUrls: ['./chat.component.scss'],

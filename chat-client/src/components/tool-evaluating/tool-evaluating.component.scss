@@ -1,0 +1,29 @@
+.eval-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.75rem;
+  border-radius: 999px;
+  background: rgba(234, 179, 8, 0.08);
+  border: 1px solid rgba(234, 179, 8, 0.3);
+  font-size: 0.75rem;
+  color: #ca8a04;
+
+  &__spinner {
+    width: 0.7rem;
+    height: 0.7rem;
+    border: 2px solid rgba(202, 138, 4, 0.25);
+    border-top-color: #ca8a04;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    flex-shrink: 0;
+  }
+
+  &__text strong {
+    font-weight: 600;
+  }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

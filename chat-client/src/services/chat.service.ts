@@ -423,6 +423,7 @@ export class ChatService {
     // We therefore patch tool result IDs from the previous iteration when the next iteration_end arrives.
     let toolResultIdsFromCurrentIteration: string[] = []
     let toolResultIdsFromPreviousIteration: string[] = [userMessageId]
+    let lastKnownCtxTokens = 0
 
     let saveQueue: Promise<void> = Promise.resolve()
     const enqueue = (fn: () => Promise<unknown>) => {
@@ -566,6 +567,13 @@ export class ChatService {
             confirmed: null,
           },
         ])
+      } else if (event.type === 'tool_evaluating') {
+        this._messages.update((msgs) => [
+          ...msgs,
+          { kind: 'tool_evaluating' as const, id: event.tool_id, tool_id: event.tool_id, tool_name: event.tool_name },
+        ])
+      } else if (event.type === 'tool_auto_approved') {
+        this._messages.update((msgs) => msgs.filter((m) => !(m.kind === 'tool_evaluating' && m.tool_id === event.tool_id)))
       } else if (event.type === 'tool_result') {
         this._callingTool.set(null)
         this._streamingToolCallArgs.set('')
@@ -676,6 +684,7 @@ export class ChatService {
         const newSettings = { ...this._conversationSettings(), mode: event.mode }
         this.updateConversationSettings(newSettings).subscribe()
       } else if (event.type === 'ctx_update') {
+        lastKnownCtxTokens = event.ctx_tokens ?? 0
         this._promptTokens.set(event.ctx_tokens ?? 0)
       } else if (event.type === 'compressing') {
         const convId = this._conversationId()
@@ -687,6 +696,9 @@ export class ChatService {
               if (result.ctx_tokens != null) {
                 this._promptTokens.set(result.ctx_tokens)
               }
+              // Reload so the user sees compressed summaries; safe because the backend is
+              // suspended and the save queue has already flushed all prior DB writes.
+              await this._reloadFromDb()
             } finally {
               this._isCompressing.set(false)
             }
@@ -696,11 +708,20 @@ export class ChatService {
       } else if (event.type === 'done' || event.type === 'error') {
         this._callingTool.set(null)
         this._streamingToolCallArgs.set('')
-        this._messages.update((msgs) => msgs.filter((m) => m.kind !== 'tool_confirm'))
+        this._messages.update((msgs) => msgs.filter((m) => m.kind !== 'tool_confirm' && m.kind !== 'tool_evaluating'))
         if (event.type === 'error') {
           const errorText = event.message ?? 'An error occurred'
-          // Reload first, then append error so the reload doesn't wipe the error bubble.
+          const currentIterationIds = [...toolResultIdsFromCurrentIteration]
+          const capturedCtxTokens = lastKnownCtxTokens
+          // Patch token counts for tool results that never got an iteration_end, then reload.
           enqueue(async () => {
+            for (const msgId of currentIterationIds) {
+              const currentMsgs = this._messages()
+              const idx = currentMsgs.findIndex((m) => m.id === msgId)
+              const prevCount = this._findCumulativeTokenCountOfClosestPrecedingMessageThatHasOne(currentMsgs, idx)
+              const delta = prevCount !== null ? capturedCtxTokens - prevCount : null
+              await firstValueFrom(this.api.patch_message_token_count(msgId, capturedCtxTokens, delta))
+            }
             await this._reloadFromDb()
             this._messages.update((msgs) => [
               ...msgs,
