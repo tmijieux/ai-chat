@@ -16,6 +16,8 @@ import loaders as ld
 import tables as db
 from agent.agent import AgentSession, run_agent, _find_superseded_read_file_indices
 from agent.pipeline import PipelineOrchestrator
+from agent.workflow_loader import load_workflow
+from agent.custom_workflow import CustomWorkflowOrchestrator
 from agent.compress import compress_messages
 from agent.tools import TOOL_REGISTRY, PLAN_MODE_TOOLS, CONVERSATIONAL_TOOLS, get_ollama_tool_list
 from llm import backend
@@ -122,14 +124,21 @@ def _load_llm_bg() -> None:
         logger.exception("LLM backend failed to start.")
 
 
+async def _seed_prompts_when_ready() -> None:
+    """Wait for llama-server to be ready, then seed prompt templates."""
+    while not _llm_ready:
+        await asyncio.sleep(1)
+    async for sess in get_db_session():
+        await _seed_prompts(sess)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
     print("Database initialized successfully.")
-    async for sess in get_db_session():
-        await _seed_prompts(sess)
     threading.Thread(target=_load_llm_bg, daemon=True).start()
     threading.Thread(target=_load_whisper_bg, daemon=True).start()
+    asyncio.create_task(_seed_prompts_when_ready())
     yield
 
 
@@ -1186,6 +1195,7 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
         conversation_id: str | None = init_data.get("conversation_id")
         # When set, the user message is already in DB (edit flow) — don't append it again.
         user_message_id: str | None = init_data.get("user_message_id")
+        workflow_name: str | None = init_data.get("workflow_name") or None
 
         conv: db.Conversation | None = None
         branch: list[db.Message] = []
@@ -1276,7 +1286,14 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
         if conversation_id:
             session.refresh_messages_callback = _refresh_messages
 
-        agent_task = asyncio.create_task(run_agent(session, messages, tools, working_directory, extra_tools))
+        if workflow_name is not None:
+            workflows_dir = Path(__file__).parent / "workflows"
+            workflow_path = workflows_dir / f"{workflow_name}.yaml"
+            workflow_def = load_workflow(workflow_path)
+            orchestrator = CustomWorkflowOrchestrator(workflow_def, working_directory)
+            agent_task = asyncio.create_task(orchestrator.run(session, user_message, messages))
+        else:
+            agent_task = asyncio.create_task(run_agent(session, messages, tools, working_directory, extra_tools))
 
         async def send_events_to_websocket() -> None:
             while True:
