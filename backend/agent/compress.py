@@ -1,6 +1,7 @@
 import json
 import logging
 import time
+from dataclasses import dataclass, field
 
 from llm.base import LLMBackend
 
@@ -294,14 +295,23 @@ Primary signal: following_thinking.
 """
 
 
+@dataclass
+class ClassifyResult:
+    """Output of _classify_and_summarize."""
+    labels: dict[str, str]
+    line_summaries: dict[str, str]
+    reasonings: dict[str, str]
+    conversation_summary: str
+
+
 async def _classify_and_summarize(
     pairs: list[dict],
     user_message: str,
     conversation_summary: str | None,
     backend: LLMBackend,
     is_mid_run: bool = False,
-) -> tuple[dict[str, str], dict[str, str], str]:
-    """Return (labels, line_summaries, conversation_summary)."""
+) -> ClassifyResult:
+    """Classify tool results and return labels, line summaries, per-label reasonings, and an updated conversation summary."""
     system = _CLASSIFY_SYSTEM_MID_RUN if is_mid_run else _CLASSIFY_SYSTEM_POST_RUN
     conv_line = f"Conversation so far: {conversation_summary}\n" if conversation_summary else ""
     llm_pairs = [
@@ -323,7 +333,12 @@ Tool calls:
 
     if not parsed:
         logger.warning("compress classify: empty result — defaulting all to drop")
-        return {str(i): "drop" for i in range(len(pairs))}, {}, ""
+        return ClassifyResult(
+            labels={str(i): "drop" for i in range(len(pairs))},
+            line_summaries={},
+            reasonings={},
+            conversation_summary=conversation_summary or "",
+        )
 
     labels = {str(k): str(v) for k, v in (parsed.get("labels") or {}).items()}
     reasonings = {str(k): str(v) for k, v in (parsed.get("reasonings") or {}).items()}
@@ -333,7 +348,12 @@ Tool calls:
     for index, label in sorted(labels.items()):
         reason = reasonings.get(index, "")
         logger.info("  [%s] %s — %s", index, label, reason[:100])
-    return labels, line_summaries, summary
+    return ClassifyResult(
+        labels=labels,
+        line_summaries=line_summaries,
+        reasonings=reasonings,
+        conversation_summary=summary,
+    )
 
 
 _SUMMARIZE_FILE_SYSTEM = """\
@@ -577,9 +597,13 @@ async def compress_messages(
     if not pairs:
         return [], conversation_summary or ""
 
-    labels, line_summaries, new_summary = await _classify_and_summarize(
+    classify = await _classify_and_summarize(
         pairs, user_message, conversation_summary, backend, is_mid_run=is_mid_run,
     )
+    labels = classify.labels
+    line_summaries = classify.line_summaries
+    reasonings = classify.reasonings
+    new_summary = classify.conversation_summary
 
     if protect_last and pairs:
         last_key = str(pairs[-1]["index"])
@@ -605,8 +629,12 @@ async def compress_messages(
             p["index"], tool, label, content_len,
         )
 
+        reasoning = reasonings.get(str(p["index"]), "").strip()
+
         if label == "drop":
             compressed_summary = _compact_summary(result)
+            if reasoning != "":
+                compressed_summary += f"\nReason: {reasoning}"
             logger.info("drop → compact: %s", compressed_summary)
 
         elif label == "1-line-summary":
@@ -615,6 +643,8 @@ async def compress_messages(
                 compressed_summary = f"{_compact_summary(result)} — {provided}"
             else:
                 compressed_summary = _compact_summary(result)
+            if reasoning != "":
+                compressed_summary += f"\nReason: {reasoning}"
             logger.info("1-line-summary: %s", compressed_summary)
 
         elif label == "summarize":
@@ -664,6 +694,7 @@ async def compress_messages(
             compressions.append({
                 "message_id": p["message_id"],
                 "compressed_summary": compressed_summary,
+                "compression_label": label,
             })
 
     elapsed_total = time.perf_counter() - t_total

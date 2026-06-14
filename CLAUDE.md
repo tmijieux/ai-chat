@@ -26,6 +26,7 @@ After successfully implementing an approved plan, create a git commit immediatel
 - **No implicit boolean conversions** — use explicit comparisons: `if x is None` or `if x == ""`, never `if not x` for strings or optional values.
 - **No boolean lazy evaluation for fallbacks** — never `x or default` to substitute a missing value; use explicit `if x is None` checks instead.
 - **Docstrings on every function** — document both purpose and important details about implementation. One sentence is enough for simple helpers.
+- **Dataclasses for complex return types** — never return a plain tuple with 3+ values or multiple same-typed values (e.g. two `dict[str, str]`). Define a `@dataclass` with named fields instead.
 
 
 # CSS

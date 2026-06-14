@@ -867,6 +867,7 @@ export class ChatService {
           log_message: m.log_message ?? null,
           content: m.content,
           compressed_summary: m.compressed_summary ?? null,
+          compression_label: m.compression_label ?? null,
           token_count: m.token_count,
           token_delta: m.token_delta,
           context_excluded: m.context_excluded,

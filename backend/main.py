@@ -269,6 +269,7 @@ def _msg_dict(m: db.Message) -> dict:
         "context_excluded": m.context_excluded,
         "exclusion_reason": m.exclusion_reason,
         "compressed_summary": m.compressed_summary,
+        "compression_label": m.compression_label,
         "log_message": m.log_message,
         "tool_calls": json.loads(m.tool_calls) if m.tool_calls else None,
         "is_degenerate": bool(m.is_degenerate),
@@ -991,6 +992,7 @@ async def compress_conversation(
             msg.context_excluded = True
             msg.exclusion_reason = "compressed"
             msg.compressed_summary = c["compressed_summary"]
+            msg.compression_label = c.get("compression_label")
 
     await sess.flush()
 

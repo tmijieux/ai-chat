@@ -31,6 +31,7 @@ export type Message = {
   context_excluded?: boolean
   exclusion_reason?: string | null
   compressed_summary?: string | null
+  compression_label?: string | null
   log_message?: string | null
   tool_calls?: ToolCallEntry[] | null
   created_at?: string
@@ -245,6 +246,7 @@ export type DisplayMessage =
       log_message?: string | null
       content: string
       compressed_summary?: string | null
+      compression_label?: string | null
       token_count?: number | null
       token_delta?: number | null
       context_excluded?: boolean

@@ -29,6 +29,7 @@ class Message(Base):
     context_excluded = column(Boolean, nullable=False, default=False)
     exclusion_reason = column(String, nullable=True)
     compressed_summary = column(Text, nullable=True)
+    compression_label = column(String, nullable=True)  # drop | 1-line-summary | summarize | keep
     log_message = column(String, nullable=True)
     # JSON array of {id, name, args} — populated on assistant messages that made tool calls
     tool_calls = column(Text, nullable=True)

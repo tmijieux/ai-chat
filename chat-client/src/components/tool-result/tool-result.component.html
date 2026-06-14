@@ -11,7 +11,7 @@
       }
       @if (msg().context_excluded) {
         @if (msg().compressed_summary) {
-          <span class="ml-2 text-xs text-warning italic">compressed</span>
+          <span class="ml-2 text-xs text-warning italic">{{ msg().compression_label ?? 'compressed' }}</span>
         } @else {
           <span class="ml-2 text-xs text-muted italic">excluded from context</span>
         }
