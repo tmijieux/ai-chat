@@ -8,6 +8,7 @@ auto_safe_commands:
   - "git diff"
   - "git log"
   - "git commit"
+  - "git reset"
 
 stages:
 
