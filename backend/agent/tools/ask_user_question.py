@@ -26,7 +26,7 @@ class AskUserQuestionTool(BaseTool):
             "options": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Optional predefined choices for the user to pick from.",
+                "description": "Predefined choices (2–6 items). Do NOT include 'Other' — it is appended automatically.",
             },
         },
         "required": ["question"],
@@ -40,7 +40,11 @@ class AskUserQuestionTool(BaseTool):
     async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
         """Emit an agent_question event and wait for the user's reply."""
         question = args.get("question", "")
-        options: list[str] | None = args.get("options")
+        raw_options: list[str] | None = args.get("options")
+        if raw_options is not None:
+            options: list[str] | None = [o for o in raw_options if o.strip().lower() not in ("other", "other:")]
+        else:
+            options = None
         question_id = str(uuid.uuid4())
         reply = await session.request_user_input(question_id, question, options=options)
         return {
