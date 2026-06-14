@@ -103,7 +103,7 @@
         [class]="mode === 'plan' ? 'bg-blue-100 text-blue-700' : mode === 'auto' ? 'bg-green-100 text-green-700' : mode === 'yolo' ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-400'"
       >{{ mode ?? 'standard' }}</span>
       <button
-        class="text-gray-500 hover:text-indigo-600 text-lg leading-none transition-colors cursor-pointer"
+        class="text-gray-500 hover:text-indigo-600 text-2xl leading-none transition-colors cursor-pointer p-1"
         title="Conversation settings"
         (click)="drawerOpen.set(!drawerOpen())"
       >

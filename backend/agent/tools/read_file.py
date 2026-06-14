@@ -14,6 +14,7 @@ class ReadFileTool(BaseTool):
     name = "read_file"
     description = (
         "Read the full content of a file. "
+        "Only use this as a last resort after multiple grep_files attempts failed to return useful results. "
         "Refuses files larger than 40 000 bytes — use grep_files with -A/-B to extract relevant sections, "
         "then read_file_range for specific line ranges. "
         "Use the limit parameter to tail a log file (reads the last N lines regardless of size). "
@@ -49,6 +50,18 @@ class ReadFileTool(BaseTool):
         absolute_path = resolve_workspace_path(path, working_directory)
         if not file_in_directory(str(absolute_path), working_directory):
             return tool_error(self.name, f"Reading outside workspace is forbidden. Workspace: {working_directory}", path=path)
+
+        posix_key = absolute_path.relative_to(Path(working_directory)).as_posix()
+        grep_count = session._grepped_files.get(posix_key, 0)
+        if grep_count < 2:
+            return tool_error(
+                self.name,
+                f"Cannot read file before grepping it at least twice. "
+                f"grep_files has matched '{posix_key}' {grep_count} time(s) so far. "
+                "Use grep_files with -B/-A to extract the relevant section. "
+                "Only call read_file if multiple grep_files attempts on this file did not yield useful results.",
+                path=path,
+            )
 
         try:
             file_size = absolute_path.stat().st_size

@@ -112,6 +112,7 @@ class AgentSession:
         self.refresh_messages_callback: Callable[[str], Awaitable[list[dict]]] | None = None
         self.finish_result: dict | None = None
         self._search_result_ids: set[str] = set()
+        self._grepped_files: dict[str, int] = {}  # posix rel_path → count of grep calls that matched it
         self._sub_stage_counters: dict[str, int] = {}
         self.mode: str = "standard"
         self.working_directory: str | None = None

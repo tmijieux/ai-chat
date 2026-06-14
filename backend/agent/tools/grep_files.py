@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 class GrepFilesTool(BaseTool):
     name = "grep_files"
-    description = "Search file contents with a regex pattern. Returns matching lines with file path and line numbers. Use -B/-A to read the surrounding lines of a match — this is the primary way to read file content: grep for a known symbol/class/function and use -B/-A to extract the full block. Requires a workspace directory to be configured in conversation settings."
+    description = "Search file contents with a regex pattern. This is the primary way to read file content — always try grep_files first. Use -B/-A to extract the full surrounding block of a match. Only fall back to read_file if multiple grep_files attempts did not return useful results. Returns matching lines with file path and line numbers. Requires a workspace directory to be configured in conversation settings."
     parameters = {
         "type": "object",
         "properties": {
@@ -137,6 +137,11 @@ class GrepFilesTool(BaseTool):
             matches, total_match_count = await asyncio.to_thread(_do_grep)
         except Exception as e:
             return tool_error(self.name, f"Error during grep: {e}")
+
+        matched_files = {entry["file"] for entry in matches if entry.get("match")}
+        for rel_path_str in matched_files:
+            posix_key = Path(rel_path_str).as_posix()
+            session._grepped_files[posix_key] = session._grepped_files.get(posix_key, 0) + 1
 
         result_id = str(uuid.uuid4())[:8]
         session._search_result_ids.add(result_id)

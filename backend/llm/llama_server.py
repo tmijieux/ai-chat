@@ -86,10 +86,14 @@ class LlamaServerBackend(LLMBackend):
 
     async def count_tokens(self, messages: list, tools: list) -> int:
         rendered = render_messages(messages, tools)
+        return await self.count_text_tokens(rendered)
+
+    async def count_text_tokens(self, text: str) -> int:
+        """Count tokens for raw text, bypassing the chat template."""
         async with aiohttp.ClientSession() as http:
             async with http.post(
                 LLAMA_TOKENIZE_URL,
-                json={"content": rendered},
+                json={"content": text},
             ) as r:
                 data = await r.json()
                 return len(data["tokens"])
