@@ -892,12 +892,18 @@ async def list_workflows():
     if not workflows_dir.exists():
         return []
     results = []
-    for yaml_file in sorted(workflows_dir.glob("*.yaml")):
+    candidates: list[Path] = sorted(workflows_dir.glob("*.yaml"))
+    candidates += sorted(
+        sub / "workflow.yaml"
+        for sub in workflows_dir.iterdir()
+        if sub.is_dir() and (sub / "workflow.yaml").exists()
+    )
+    for yaml_file in candidates:
         try:
             with open(yaml_file, encoding="utf-8") as f:
                 data = yaml.safe_load(f)
             results.append({
-                "name": data.get("name", yaml_file.stem),
+                "name": data.get("name", yaml_file.parent.stem if yaml_file.name == "workflow.yaml" else yaml_file.stem),
                 "description": data.get("description", ""),
             })
         except Exception:
@@ -1288,7 +1294,9 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
 
         if workflow_name is not None:
             workflows_dir = Path(__file__).parent / "workflows"
-            workflow_path = workflows_dir / f"{workflow_name}.yaml"
+            flat_path = workflows_dir / f"{workflow_name}.yaml"
+            dir_path = workflows_dir / workflow_name
+            workflow_path = flat_path if flat_path.exists() else dir_path
             workflow_def = load_workflow(workflow_path)
             orchestrator = CustomWorkflowOrchestrator(workflow_def, working_directory, tools)
             agent_task = asyncio.create_task(orchestrator.run(session, user_message, messages))

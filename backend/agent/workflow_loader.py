@@ -103,6 +103,7 @@ class WorkflowDefinition:
     name: str
     description: str
     stages: list[WorkflowStageDefinition]
+    directory: Path = field(default_factory=Path)
     _finish_tool_classes: dict[str, type[BaseFinishTool]] = field(default_factory=dict, repr=False)
 
     def make_finish_tool(self, name: str) -> BaseFinishTool:
@@ -205,8 +206,20 @@ def _parse_stage(data: dict, finish_tool_classes: dict[str, type[BaseFinishTool]
 
 
 def load_workflow(path: Path) -> WorkflowDefinition:
-    """Parse a workflow YAML file and return a WorkflowDefinition."""
-    with open(path, encoding="utf-8") as f:
+    """Parse a workflow YAML file or directory and return a WorkflowDefinition.
+
+    Accepts either a .yaml file path or a directory containing workflow.yaml.
+    The resolved directory is stored in WorkflowDefinition.directory so the
+    orchestrator can resolve agent refs and other files relative to it.
+    """
+    if path.is_dir():
+        directory = path
+        yaml_file = path / "workflow.yaml"
+    else:
+        directory = path.parent
+        yaml_file = path
+
+    with open(yaml_file, encoding="utf-8") as f:
         data = yaml.safe_load(f)
 
     name: str = data.get("name") or path.stem
@@ -222,6 +235,7 @@ def load_workflow(path: Path) -> WorkflowDefinition:
         name=name,
         description=description,
         stages=stages,
+        directory=directory,
         _finish_tool_classes=finish_tool_classes,
     )
 

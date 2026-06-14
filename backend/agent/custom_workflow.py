@@ -312,12 +312,19 @@ class CustomWorkflowOrchestrator:
         session: AgentSession,
         slots: dict[str, Any],
     ) -> None:
-        """Run a named agent from agents/ as an isolated stage. Result stored in slots."""
+        """Run a named agent from agents/ as an isolated stage. Result stored in slots.
+
+        Resolves agent YAML relative to the workflow's own directory first (agents/
+        subdirectory), then falls back to the global backend/agents/ directory.
+        """
         from agent.workflow_loader import load_agent
         from pathlib import Path
 
-        agents_dir = Path(__file__).parent.parent / "agents"
-        agent_def = load_agent(agents_dir / f"{stage.workflow_ref}.yaml")
+        ref_filename = f"{stage.workflow_ref}.yaml"
+        local_agent_path = self._workflow.directory / "agents" / ref_filename
+        global_agent_path = Path(__file__).parent.parent / "agents" / ref_filename
+        agent_path = local_agent_path if local_agent_path.exists() else global_agent_path
+        agent_def = load_agent(agent_path)
         finish_tool_classes = dict(_BUILTIN_FINISH_TOOL_CLASSES)
         finish_tool = _make_finish_tool(agent_def.finish_tool_name, finish_tool_classes)
 
