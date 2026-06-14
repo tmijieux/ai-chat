@@ -1,4 +1,5 @@
 import {
+  AfterViewInit,
   Component,
   ElementRef,
   HostListener,
@@ -16,7 +17,7 @@ import {
   templateUrl: './agent-question-card.component.html',
   styleUrls: ['./agent-question-card.component.scss'],
 })
-export class AgentQuestionCardComponent {
+export class AgentQuestionCardComponent implements AfterViewInit {
   readonly questionId = input.required<string>()
   readonly question = input.required<string>()
   readonly options = input<string[]>([])
@@ -29,6 +30,12 @@ export class AgentQuestionCardComponent {
   protected readonly commentMap = signal<Record<number, string>>({})
 
   @ViewChildren('entryInput') private _inputs!: QueryList<ElementRef<HTMLInputElement>>
+
+  ngAfterViewInit(): void {
+    if (!this.resolved()) {
+      this._focusActiveInput()
+    }
+  }
 
   @HostListener('keydown', ['$event'])
   onKeydown(event: KeyboardEvent): void {
