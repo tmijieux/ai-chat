@@ -4,23 +4,27 @@ import { FormsModule } from '@angular/forms'
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop'
 import { firstValueFrom } from 'rxjs'
 import { ChatService } from '../../services/chat.service'
+import { ApiService } from '../../services/api.service'
 import { VoiceDictationService } from '../../services/voice-dictation.service'
 import { AppStatusService } from '../../services/app-status.service'
-import { PendingImage } from '../../types/message-types'
+import { ConversationMode, PendingImage, SlashCommand, Workflow } from '../../types/message-types'
+import { SlashCommandPaletteComponent } from '../slash-command-palette/slash-command-palette.component'
 
 @Component({
   selector: 'app-chat-input',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, SlashCommandPaletteComponent],
   templateUrl: './chat-input.component.html',
   styleUrls: ['./chat-input.component.scss'],
 })
 export class ChatInputComponent {
   private chatSvc = inject(ChatService)
+  private api = inject(ApiService)
   readonly voiceSvc = inject(VoiceDictationService)
   readonly appStatus = inject(AppStatusService)
 
   @ViewChild('textarea') private _textareaRef!: ElementRef<HTMLTextAreaElement>
+  @ViewChild(SlashCommandPaletteComponent) private _palette?: SlashCommandPaletteComponent
 
   // True when the outer context is processing a response and sending is blocked.
   // While busy, the send button is replaced by a stop button.
@@ -30,11 +34,28 @@ export class ChatInputComponent {
   // The outer component decides what to cancel (agent run, streaming response, etc.).
   readonly stopRequested = output<void>()
 
-  readonly submitted = output<{ text: string; imageIds: string[] }>()
+  readonly submitted = output<{ text: string; imageIds: string[]; workflowName?: string }>()
 
   readonly currentInput = signal('')
   readonly pendingImages = signal<PendingImage[]>([])
   readonly isUploading = computed(() => this.pendingImages().some((p) => p.uploading))
+
+  // Slash command palette
+  readonly paletteOpen = signal(false)
+  readonly availableWorkflows = signal<Workflow[]>([])
+  private _workflowsLoaded = false
+  private _pendingWorkflowName = signal<string | undefined>(undefined)
+
+  /** The text after the leading '/' when the palette is open (used for filtering). */
+  readonly paletteFilter = computed(() => {
+    const input = this.currentInput()
+    if (!input.startsWith('/')) {
+      return ''
+    }
+    // Only filter on the command token (before the first space).
+    const spaceIndex = input.indexOf(' ')
+    return spaceIndex === -1 ? input.slice(1) : input.slice(1, spaceIndex)
+  })
 
   // Text that was in the input before recording started; partials/final are appended to it.
   private _startPrefix = ''
@@ -42,6 +63,24 @@ export class ChatInputComponent {
   private _altTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor() {
+    // Open/close palette based on whether the input starts with '/' and has no space yet.
+    effect(() => {
+      const input = this.currentInput()
+      const shouldOpen = input.startsWith('/') && !input.includes(' ')
+      untracked(() => {
+        if (shouldOpen && !this._workflowsLoaded) {
+          this._workflowsLoaded = true
+          this.api.get_workflows().subscribe((workflows) => this.availableWorkflows.set(workflows))
+        }
+        if (shouldOpen !== this.paletteOpen()) {
+          this.paletteOpen.set(shouldOpen)
+          if (shouldOpen) {
+            this._palette?.resetIndex()
+          }
+        }
+      })
+    })
+
     // Append each partial transcript to the prefix captured at recording start.
     effect(() => {
       const partial = this.voiceSvc.partialText()
@@ -139,8 +178,31 @@ export class ChatInputComponent {
     this.voiceSvc.stopRecording()
   }
 
+  onSlashCommandSelected(command: SlashCommand): void {
+    this.paletteOpen.set(false)
+    // Strip the command token from the input, keep any trailing text as the message body.
+    const raw = this.currentInput()
+    const spaceIndex = raw.indexOf(' ')
+    const remainder = spaceIndex === -1 ? '' : raw.slice(spaceIndex + 1)
+    this.currentInput.set(remainder)
+    this._textareaRef?.nativeElement.focus()
+
+    if (command.type === 'mode') {
+      const settings = this.chatSvc.currentConversationSettings()
+      this.chatSvc.updateConversationSettings({ ...settings, mode: command.value as ConversationMode }).subscribe()
+    } else if (command.type === 'workflow') {
+      this._pendingWorkflowName.set(command.value)
+    }
+  }
+
   async sendMessage(event: Event | null): Promise<void> {
     if (event && (event as KeyboardEvent).shiftKey) {
+      return
+    }
+    // Route to palette if open.
+    if (this.paletteOpen()) {
+      event?.preventDefault()
+      this._palette?.selectActive()
       return
     }
     event?.preventDefault()
@@ -151,10 +213,12 @@ export class ChatInputComponent {
     const imageIds = this.pendingImages()
       .filter((p) => !p.uploading && p.id)
       .map((p) => p.id!)
+    const workflowName = this._pendingWorkflowName()
     this.currentInput.set('')
     this.pendingImages.set([])
+    this._pendingWorkflowName.set(undefined)
     this.voiceSvc.dismissCorrection()
-    this.submitted.emit({ text: input, imageIds })
+    this.submitted.emit({ text: input, imageIds, workflowName })
   }
 
   attachImages(files: FileList | File[]): void {
@@ -186,6 +250,23 @@ export class ChatInputComponent {
   removeImage(img: PendingImage): void {
     URL.revokeObjectURL(img.localUrl)
     this.pendingImages.update((imgs) => imgs.filter((i) => i.localUrl !== img.localUrl))
+  }
+
+  onTextareaKeydown(event: KeyboardEvent): void {
+    if (!this.paletteOpen()) {
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      this._palette?.navigateUp()
+    } else if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      this._palette?.navigateDown()
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      this.paletteOpen.set(false)
+      this.currentInput.set('')
+    }
   }
 
   onPaste(event: ClipboardEvent): void {

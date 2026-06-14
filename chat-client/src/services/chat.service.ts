@@ -121,6 +121,7 @@ export class ChatService {
     active_prompt_id: null,
     active_tool_names: [],
     working_directory: null,
+    mode: 'standard',
   }
 
   private _conversationSettings = signal<ConversationSettings>(this.DEFAULT_SETTINGS)
@@ -217,6 +218,7 @@ export class ChatService {
       active_prompt_id: defaultPromptId,
       active_tool_names: this._allToolNames(),
       working_directory: this._lastWorkingDirectory(),
+      mode: 'standard',
     })
   }
 
@@ -233,9 +235,8 @@ export class ChatService {
       this._messages.set(this._fromDbMessages(dbMessages))
       this._conversation = conversation
       this._conversationId.set(conversation.id)
-      const settings: ConversationSettings = conversation.settings
-        ? JSON.parse(conversation.settings)
-        : this.DEFAULT_SETTINGS
+      const parsed = conversation.settings ? JSON.parse(conversation.settings) : {}
+      const settings: ConversationSettings = { ...this.DEFAULT_SETTINGS, ...parsed }
       this._conversationSettings.set(settings)
       if (settings.working_directory != null) {
         this._lastWorkingDirectory.set(settings.working_directory)
@@ -303,7 +304,7 @@ export class ChatService {
   // Agentic chat
   // -------------------------------------------------------------------------
 
-  startAgentRun(input: string, imageIds: string[] = []): void {
+  startAgentRun(input: string, imageIds: string[] = [], workflowName?: string): void {
     const userMsg: DisplayMessage = { kind: 'user', id: crypto.randomUUID(), content: input }
     this._messages.update((msgs) => [...msgs, userMsg])
     this._promptTokens.set(0)
@@ -315,7 +316,8 @@ export class ChatService {
     persist.then(() => {
       const convId = this._conversationId()
       this._subscribeToAgentEvents(userMsg.id)
-      this.agentSvc.start(input, convId, userMsg.id, this._pipelineMode() ? 'pipeline' : 'classic')
+      const agentMode = workflowName !== undefined ? 'pipeline' : this._pipelineMode() ? 'pipeline' : 'classic'
+      this.agentSvc.start(input, convId, userMsg.id, agentMode, workflowName)
     })
   }
 

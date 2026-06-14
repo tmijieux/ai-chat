@@ -8,6 +8,7 @@ import {
   ConversationSettings,
   Message,
   MessageForQuery,
+  Workflow,
   SystemPromptTemplate,
 } from '../types/message-types'
 import { HttpClient } from '@angular/common/http'
@@ -159,6 +160,10 @@ export class ApiService {
 
   put_app_setting(key: string, value: string | null) {
     return this.http.put<AppSetting>(`${BASE_URL}/app-settings/${key}`, { value })
+  }
+
+  get_workflows() {
+    return this.http.get<Workflow[]>(`${BASE_URL}/workflows`)
   }
 
   browse_directory(path?: string | null) {

@@ -488,3 +488,66 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   color: white;
   &:hover { background: #991b1b; }
 }
+
+/* --- SLASH COMMAND PALETTE --- */
+.slash-palette {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 0.5rem;
+  box-shadow: 0 -4px 24px rgba(0,0,0,0.4);
+  overflow: hidden;
+  z-index: 100;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.slash-palette-group {
+  padding: 0.25rem 0;
+  & + & {
+    border-top: 1px solid #334155;
+  }
+}
+.slash-palette-group-label {
+  padding: 0.25rem 0.75rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #64748b;
+}
+.slash-palette-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.4rem 0.75rem;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: #e2e8f0;
+  transition: background 0.1s;
+  &.active, &:hover {
+    background: #334155;
+  }
+}
+.slash-palette-item-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  font-family: monospace;
+  color: #a5b4fc;
+  flex-shrink: 0;
+}
+.slash-palette-item-desc {
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+.slash-palette-empty {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8rem;
+  color: #64748b;
+  font-style: italic;
+}

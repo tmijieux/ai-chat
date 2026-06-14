@@ -870,6 +870,30 @@ async def browse_directory(path: str | None = None):
 
 
 # ---------------------------------------------------------------------------
+# Workflows
+# ---------------------------------------------------------------------------
+
+@app.get("/api/workflows")
+async def list_workflows():
+    """List available workflow definitions from the backend/workflows/ directory."""
+    import yaml
+    workflows_dir = Path(__file__).parent / "workflows"
+    if not workflows_dir.exists():
+        return []
+    results = []
+    for yaml_file in sorted(workflows_dir.glob("*.yaml")):
+        try:
+            with open(yaml_file, encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            results.append({
+                "name": data.get("name", yaml_file.stem),
+                "description": data.get("description", ""),
+            })
+        except Exception:
+            pass
+    return results
+
+
 # Agent tools
 # ---------------------------------------------------------------------------
 

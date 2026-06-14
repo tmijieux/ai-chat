@@ -64,11 +64,23 @@ export type ApiResponse = {
 
 export type ConversationHistory = Message[]
 
+export type ConversationMode = 'standard' | 'plan' | 'auto' | 'yolo'
+
 export type ConversationSettings = {
   active_prompt_id: string | null
   active_tool_names: string[]
   working_directory: string | null
+  mode: ConversationMode
 }
+
+export type Workflow = {
+  name: string
+  description: string
+}
+
+export type SlashCommand =
+  | { type: 'mode'; value: ConversationMode; label: string; description: string }
+  | { type: 'workflow'; value: string; label: string; description: string }
 
 export type Conversation = {
   id: string

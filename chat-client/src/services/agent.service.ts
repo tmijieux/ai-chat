@@ -25,7 +25,7 @@ export class AgentService {
   /** Raw event stream. ChatService subscribes to accumulate DisplayMessages. */
   public readonly events$: Observable<AgentEvent> = this._events$.asObservable()
 
-  start(userMessage: string, conversationId?: string, userMessageId?: string, mode: AgentMode = 'classic'): void {
+  start(userMessage: string, conversationId?: string, userMessageId?: string, mode: AgentMode = 'classic', workflowName?: string): void {
     this._running.set(true)
     this.ws = new WebSocket(wsUrl(mode))
 
@@ -34,6 +34,7 @@ export class AgentService {
         message: userMessage,
         conversation_id: conversationId ?? null,
         user_message_id: userMessageId ?? null,
+        workflow_name: workflowName ?? null,
       }))
     }
 

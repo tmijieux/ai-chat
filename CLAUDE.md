@@ -38,3 +38,6 @@ Generally prefer factorizing in new components rather than <ng-template>
 because it helps with keeping component small (in code-behind as well)
 It also help the reading comprehension when small component encapsulate 
 small non-leaky well-named abstraction, then you dont have to read them.
+
+
+

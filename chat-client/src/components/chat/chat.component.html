@@ -98,6 +98,12 @@
       <span class="font-bold text-indigo-600">{{ chatSvc.promptTokens() }} / {{ CTX_LIMIT }} ({{ (chatSvc.promptTokens() / CTX_LIMIT * 100).toFixed(1) }}%)</span>
     </span>
     <div class="flex items-center gap-3">
+      @let mode = chatSvc.currentConversationSettings().mode;
+      @if (mode && mode !== 'standard') {
+        <span class="text-xs font-bold px-2 py-0.5 rounded uppercase tracking-wide"
+          [class]="mode === 'plan' ? 'bg-blue-100 text-blue-700' : mode === 'auto' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'"
+        >{{ mode }}</span>
+      }
       <button
         class="text-gray-500 hover:text-indigo-600 text-lg leading-none transition-colors cursor-pointer"
         title="Conversation settings"

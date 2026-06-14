@@ -26,17 +26,28 @@
     </div>
   }
   <div class="flex items-end gap-3">
-    <textarea
-      #textarea
-      [(ngModel)]="currentInput"
-      (keydown.enter)="sendMessage($event)"
-      (paste)="onPaste($event)"
-      (dragover)="onDragOver($event)"
-      (drop)="onDrop($event)"
-      placeholder="Message the AI... (Shift+Enter for newline, paste or drop images)"
-      rows="1"
-      class="flex-grow resize-none p-3 border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-    ></textarea>
+    <div class="flex-grow p-relative">
+      @if (paletteOpen()) {
+        <app-slash-command-palette
+          [filter]="paletteFilter()"
+          [workflows]="availableWorkflows()"
+          (commandSelected)="onSlashCommandSelected($event)"
+          (dismissed)="paletteOpen.set(false)"
+        />
+      }
+      <textarea
+        #textarea
+        [(ngModel)]="currentInput"
+        (keydown.enter)="sendMessage($event)"
+        (keydown)="onTextareaKeydown($event)"
+        (paste)="onPaste($event)"
+        (dragover)="onDragOver($event)"
+        (drop)="onDrop($event)"
+        placeholder="Message the AI... (Shift+Enter for newline, paste or drop images, / for commands)"
+        rows="1"
+        class="w-full resize-none p-3 border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+      ></textarea>
+    </div>
     @if (busy()) {
       <button
         (click)="stopRequested.emit()"

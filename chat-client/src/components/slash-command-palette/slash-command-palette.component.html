@@ -1,0 +1,39 @@
+<div class="slash-palette">
+  @if (filteredModes().length > 0) {
+    <div class="slash-palette-group">
+      <div class="slash-palette-group-label">Modes</div>
+      @for (item of filteredModes(); track item.value; let i = $index) {
+        <button
+          class="slash-palette-item"
+          [class.active]="isActive(modeIndex(i))"
+          (mousedown)="$event.preventDefault()"
+          (click)="selectItem(item)"
+        >
+          <span class="slash-palette-item-label">/{{ item.label }}</span>
+          <span class="slash-palette-item-desc">{{ item.description }}</span>
+        </button>
+      }
+    </div>
+  }
+
+  @if (filteredWorkflows().length > 0) {
+    <div class="slash-palette-group">
+      <div class="slash-palette-group-label">Workflows</div>
+      @for (item of filteredWorkflows(); track item.value; let i = $index) {
+        <button
+          class="slash-palette-item"
+          [class.active]="isActive(workflowIndex(i))"
+          (mousedown)="$event.preventDefault()"
+          (click)="selectItem(item)"
+        >
+          <span class="slash-palette-item-label">/{{ item.label }}</span>
+          <span class="slash-palette-item-desc">{{ item.description }}</span>
+        </button>
+      }
+    </div>
+  }
+
+  @if (!hasResults()) {
+    <div class="slash-palette-empty">No commands match</div>
+  }
+</div>
