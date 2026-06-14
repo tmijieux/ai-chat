@@ -194,7 +194,7 @@ stages:
   # Stage 6: Synthesis — agent summarizes results using full conversation history
   # -------------------------------------------------------------------------
   - name: synthesis
-    type: agent
+    type: respond
     message_suffix: |
       [Pipeline pre-execution complete. Task results:
       {{task_results.task_summary}}]

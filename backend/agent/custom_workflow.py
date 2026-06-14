@@ -10,9 +10,14 @@ from typing import Any
 import aiohttp
 
 from agent.agent import AgentSession, run_agent
+from agent.finish_tools import BaseFinishTool
 from agent.pipeline import run_stage
 from agent.workflow_coordinator import run_coordinator_action
-from agent.workflow_loader import WorkflowDefinition, WorkflowStageDefinition
+from agent.workflow_loader import (
+    WorkflowDefinition,
+    WorkflowStageDefinition,
+    _BUILTIN_FINISH_TOOL_CLASSES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -155,8 +160,10 @@ class CustomWorkflowOrchestrator:
             return self._resolve_branch(stage, slots)
         elif stage.type == "loop":
             await self._run_loop(stage, session, messages, slots)
+        elif stage.type == "respond":
+            await self._run_respond(stage, session, messages, slots)
         elif stage.type == "agent":
-            await self._run_agent(stage, session, messages, slots)
+            await self._run_isolated_agent(stage, session, slots)
         else:
             raise ValueError(f"Unknown stage type '{stage.type}'")
         return None
@@ -278,14 +285,19 @@ class CustomWorkflowOrchestrator:
             task_summary = _format_task_summary(aggregated)
             slots[stage.loop_output] = {"items": aggregated, "task_summary": task_summary}
 
-    async def _run_agent(
+    async def _run_respond(
         self,
         stage: WorkflowStageDefinition,
         session: AgentSession,
         messages: list[dict],
         slots: dict[str, Any],
     ) -> None:
-        """Run the plain agent loop on the full conversation history."""
+        """Run the plain agent loop on the full conversation history.
+
+        Unlike isolated stages, this uses the original DB conversation so the model
+        can reference everything the user said before the workflow ran. The suffix
+        injects workflow results into the last user message before responding.
+        """
         working_messages = list(messages)
         if stage.message_suffix != "" and working_messages and working_messages[-1].get("role") == "user":
             suffix = resolve_template(stage.message_suffix, slots)
@@ -294,10 +306,58 @@ class CustomWorkflowOrchestrator:
 
         await run_agent(session, working_messages, self._tools, self._working_directory)
 
+    async def _run_isolated_agent(
+        self,
+        stage: WorkflowStageDefinition,
+        session: AgentSession,
+        slots: dict[str, Any],
+    ) -> None:
+        """Run a named agent from agents/ as an isolated stage. Result stored in slots."""
+        from agent.workflow_loader import load_agent
+        from pathlib import Path
+
+        agents_dir = Path(__file__).parent.parent / "agents"
+        agent_def = load_agent(agents_dir / f"{stage.workflow_ref}.yaml")
+        finish_tool_classes = dict(_BUILTIN_FINISH_TOOL_CLASSES)
+        finish_tool = _make_finish_tool(agent_def.finish_tool_name, finish_tool_classes)
+
+        user_prompt = resolve_template(stage.user_prompt, slots)
+        stage_messages = [
+            {"role": "system", "content": agent_def.system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        result = await run_stage(
+            stage.name,
+            stage_messages,
+            agent_def.tools,
+            finish_tool,
+            session,
+            self._working_directory,
+            max_iterations=agent_def.max_iterations,
+            inject_turn_reminders=agent_def.inject_turn_reminders,
+        )
+
+        slots[stage.name] = result
+        await session.emit({
+            "type": "pipeline_summary",
+            "label": f"agent: {stage.workflow_ref}",
+            "content": json.dumps(result, ensure_ascii=False, indent=2),
+            "notes": None,
+        })
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _make_finish_tool(name: str, finish_tool_classes: dict[str, type[BaseFinishTool]]) -> BaseFinishTool:
+    """Instantiate a finish tool by name from the given registry."""
+    cls = finish_tool_classes.get(name)
+    if cls is None:
+        raise ValueError(f"Unknown finish tool '{name}'")
+    return cls()
+
 
 class _WorkflowAbort(Exception):
     """Raised to abort the entire workflow (e.g. compile fix loop exhausted)."""

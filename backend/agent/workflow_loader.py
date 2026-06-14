@@ -170,11 +170,19 @@ def _parse_stage(data: dict, finish_tool_classes: dict[str, type[BaseFinishTool]
             if_false=data.get("if_false") or "",
         )
 
+    if stage_type == "respond":
+        return WorkflowStageDefinition(
+            name=name,
+            type="respond",
+            message_suffix=data.get("message_suffix") or "",
+        )
+
     if stage_type == "agent":
         return WorkflowStageDefinition(
             name=name,
             type="agent",
-            message_suffix=data.get("message_suffix") or "",
+            workflow_ref=data.get("ref") or "",
+            user_prompt=data.get("user_prompt") or "",
         )
 
     if stage_type == "loop":
