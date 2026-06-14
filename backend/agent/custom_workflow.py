@@ -300,27 +300,31 @@ class CustomWorkflowOrchestrator:
         are injected as a synthetic tool result so the model treats them as internal
         data rather than user-visible content.
         """
-        working_messages = list(messages)
-
         user_prompt = slots.get("user_message", "")
-        header = f'The user invoked the workflow "{self._workflow.name}"'
+        invocation = f'The user invoked the workflow "{self._workflow.name}"'
         if user_prompt is not None and user_prompt.strip() != "":
-            header += f" with the following prompt: {user_prompt}"
+            invocation += f" with the following prompt: {user_prompt}"
 
-        suffix = resolve_template(stage.message_suffix, slots) if stage.message_suffix != "" else ""
-        tool_content = header if suffix == "" else f"{header}\n\n{suffix}"
+        working_messages = list(messages)
+        if working_messages and working_messages[-1].get("role") == "user" and not working_messages[-1].get("content", "").strip():
+            working_messages[-1] = {**working_messages[-1], "content": invocation}
+        else:
+            working_messages.append({"role": "user", "content": invocation})
 
-        tool_call_id = f"wf_{uuid.uuid4().hex[:8]}"
-        working_messages.append({
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [{"id": tool_call_id, "type": "function", "function": {"name": "workflow_result", "arguments": "{}"}}],
-        })
-        working_messages.append({
-            "role": "tool",
-            "tool_call_id": tool_call_id,
-            "content": tool_content,
-        })
+        if stage.message_suffix != "":
+            suffix = resolve_template(stage.message_suffix, slots)
+            tool_call_id = f"wf_{uuid.uuid4().hex[:8]}"
+            working_messages.append({
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": tool_call_id, "type": "function", "function": {"name": "workflow_result", "arguments": "{}"}}],
+            })
+            working_messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": suffix,
+            })
+
         await run_agent(session, working_messages, self._tools, self._working_directory)
 
     async def _run_isolated_agent(
