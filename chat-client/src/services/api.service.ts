@@ -90,12 +90,15 @@ export class ApiService {
     )
   }
 
-  compress_conversation(id: string, protect_last = false) {
+  compress_conversation(id: string, protect_last = false, is_mid_run = false) {
+    const params: Record<string, string> = {}
+    if (protect_last) { params['protect_last'] = 'true' }
+    if (is_mid_run) { params['is_mid_run'] = 'true' }
     return this.http.post<{
       compressions: { message_id: string; compressed_summary: string }[]
       new_summary: string
       ctx_tokens: number
-    }>(`${BASE_URL}/conversations/${id}/compress`, {}, { params: protect_last ? { protect_last: 'true' } : {} })
+    }>(`${BASE_URL}/conversations/${id}/compress`, {}, { params })
   }
 
   get_system_prompts() {

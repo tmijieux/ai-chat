@@ -57,7 +57,9 @@ class GrepFilesTool(BaseTool):
     measured_delta = 574
 
     def label(self, args: dict) -> str:
-        return f"GREP '{args.get('pattern', '')}' in {args.get('path', '.')}"
+        glob = args.get("glob", "")
+        glob_suffix = f" [{glob}]" if glob else ""
+        return f"GREP '{args.get('pattern', '')}' in {args.get('path', '.')}{glob_suffix}"
 
     async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
         if working_directory is None:
@@ -71,7 +73,7 @@ class GrepFilesTool(BaseTool):
         case_insensitive = args.get("case_insensitive", False)
         lines_after = int(args.get("-A", 0))
         lines_before = int(args.get("-B", 0))
-        max_matches = args.get("max_matches", 50)
+        max_matches = int(args.get("max_matches", 50))
         include_ignored = args.get("include_ignored", False)
 
         if not pattern:
@@ -115,10 +117,12 @@ class GrepFilesTool(BaseTool):
                             break
 
                 for idx in sorted(show_indices):
+                    raw_line = all_lines[idx].rstrip()
+                    line_content = raw_line[:500] + f"… [{len(raw_line)} chars, truncated]" if len(raw_line) > 500 else raw_line
                     entry: dict = {
                         "file": str(rel_path),
                         "line": idx + 1,
-                        "content": all_lines[idx].rstrip(),
+                        "content": line_content,
                     }
                     if idx in match_indices:
                         entry["match"] = True

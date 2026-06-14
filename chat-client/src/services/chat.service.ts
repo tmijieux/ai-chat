@@ -692,7 +692,7 @@ export class ChatService {
           enqueue(async () => {
             this._isCompressing.set(true)
             try {
-              const result = await firstValueFrom(this.api.compress_conversation(convId, true))
+              const result = await firstValueFrom(this.api.compress_conversation(convId, true, true))
               if (result.ctx_tokens != null) {
                 this._promptTokens.set(result.ctx_tokens)
               }

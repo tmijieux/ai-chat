@@ -958,6 +958,7 @@ async def count_conversation_tokens(id: str, sess: AsyncSession = Depends(get_db
 async def compress_conversation(
     id: str,
     protect_last: bool = False,
+    is_mid_run: bool = False,
     sess: AsyncSession = Depends(get_db_session),
 ):
     conv = (await sess.scalars(select(db.Conversation).where(db.Conversation.id == id))).first()
@@ -972,17 +973,16 @@ async def compress_conversation(
     if not candidates:
         return {"compressions": [], "new_summary": ""}
 
-    # Use the last user message as the goal anchor
-    user_message = next(
-        (m.content for m in reversed(branch) if m.role == "user"),
-        ""
-    ) or ""
+    # Use the last 3 user messages as goal context (more context when mid-run)
+    user_messages = [m.content for m in reversed(branch) if m.role == "user"][:3]
+    user_message = "\n---\n".join(reversed(user_messages)) if user_messages else ""
 
     all_dicts = [{"id": m.id, "role": m.role, "content": m.content, "thinking": m.thinking} for m in branch]
     candidate_dicts = [{"id": m.id, "role": m.role, "content": m.content, "thinking": m.thinking} for m in candidates]
 
     compressions, new_summary = await compress_messages(
-        candidate_dicts, all_dicts, user_message, None, backend, protect_last=protect_last
+        candidate_dicts, all_dicts, user_message, None, backend,
+        protect_last=protect_last, is_mid_run=is_mid_run,
     )
 
     for c in compressions:
