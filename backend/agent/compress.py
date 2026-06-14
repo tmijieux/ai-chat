@@ -6,8 +6,7 @@ from llm.base import LLMBackend
 
 logger = logging.getLogger(__name__)
 
-COMPRESS_THRESHOLD_CHARS = 2000  # ~500 tokens — used for summarize-label items
-KEEP_SUMMARIZE_THRESHOLD_CHARS = 800  # ~200 tokens — lower bar for keep-label items
+KEEP_SUMMARIZE_THRESHOLD_CHARS = 800  # ~200 tokens — threshold for auto-summarizing "keep" items
 CHUNK_MAX_CHARS = 32_000  # ~8k tokens per chunk, leaves headroom for agent context
 _GLOB_MAX_FILES = 80
 _GREP_MAX_CHARS = 4000
