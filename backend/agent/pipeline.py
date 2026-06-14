@@ -234,6 +234,10 @@ async def run_stage(
     Returns the finish tool's args dict, or empty dict if it was never called.
     """
     sub_session = AgentSession()
+    sub_session.mode = parent_session.mode
+    sub_session.auto_safe_commands = list(parent_session.auto_safe_commands)
+    sub_session.working_directory = parent_session.working_directory
+    sub_session.last_user_message = parent_session.last_user_message
     stage_messages = list(messages)
     regular_schemas = get_ollama_tool_list(regular_tool_names)
     all_schemas = regular_schemas + [_finish_tool_schema(finish_tool)]
