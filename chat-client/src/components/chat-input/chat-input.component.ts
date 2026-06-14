@@ -195,30 +195,50 @@ export class ChatInputComponent {
     }
   }
 
+  private readonly KNOWN_MODES: ConversationMode[] = ['standard', 'auto', 'plan', 'yolo']
+
   async sendMessage(event: Event | null): Promise<void> {
     if (event && (event as KeyboardEvent).shiftKey) {
       return
     }
-    // Route to palette if open.
+    // Route Enter to palette selection when palette is open.
     if (this.paletteOpen()) {
       event?.preventDefault()
       this._palette?.selectActive()
       return
     }
     event?.preventDefault()
-    const input = this.currentInput().trim()
-    if (!input && this.pendingImages().length === 0) {
+
+    let messageText = this.currentInput().trim()
+    let workflowName = this._pendingWorkflowName()
+
+    // Parse a leading /command prefix if the user typed or Tab-completed it.
+    // This is skipped when the command was already consumed via palette Enter.
+    if (messageText.startsWith('/') && workflowName === undefined) {
+      const spaceIndex = messageText.indexOf(' ')
+      const token = spaceIndex === -1 ? messageText.slice(1) : messageText.slice(1, spaceIndex)
+      const remainder = spaceIndex === -1 ? '' : messageText.slice(spaceIndex + 1).trim()
+      if (this.KNOWN_MODES.includes(token as ConversationMode)) {
+        const settings = this.chatSvc.currentConversationSettings()
+        this.chatSvc.updateConversationSettings({ ...settings, mode: token as ConversationMode }).subscribe()
+        messageText = remainder
+      } else if (token.length > 0) {
+        workflowName = token
+        messageText = remainder
+      }
+    }
+
+    if (!messageText && this.pendingImages().length === 0) {
       return
     }
     const imageIds = this.pendingImages()
       .filter((p) => !p.uploading && p.id)
       .map((p) => p.id!)
-    const workflowName = this._pendingWorkflowName()
     this.currentInput.set('')
     this.pendingImages.set([])
     this._pendingWorkflowName.set(undefined)
     this.voiceSvc.dismissCorrection()
-    this.submitted.emit({ text: input, imageIds, workflowName })
+    this.submitted.emit({ text: messageText, imageIds, workflowName })
   }
 
   attachImages(files: FileList | File[]): void {
@@ -262,6 +282,21 @@ export class ChatInputComponent {
     } else if (event.key === 'ArrowDown') {
       event.preventDefault()
       this._palette?.navigateDown()
+    } else if (event.key === 'Tab') {
+      event.preventDefault()
+      const item = this._palette?.getActiveItem()
+      if (item !== undefined) {
+        // Fill in the command token with a trailing space so the user can type the prompt.
+        // The palette closes automatically because the space is detected by the effect.
+        // The command itself is parsed at send time.
+        this.currentInput.set('/' + item.label + ' ')
+        queueMicrotask(() => {
+          const el = this._textareaRef?.nativeElement
+          if (el) {
+            el.selectionStart = el.selectionEnd = el.value.length
+          }
+        })
+      }
     } else if (event.key === 'Escape') {
       event.preventDefault()
       this.paletteOpen.set(false)

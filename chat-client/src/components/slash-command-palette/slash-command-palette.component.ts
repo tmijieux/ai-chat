@@ -68,6 +68,10 @@ export class SlashCommandPaletteComponent {
     this.commandSelected.emit(item)
   }
 
+  getActiveItem(): SlashCommand | undefined {
+    return this.allFiltered()[this._activeIndex()]
+  }
+
   isActive(index: number): boolean {
     return this._activeIndex() === index
   }
