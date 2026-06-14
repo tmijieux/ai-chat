@@ -232,7 +232,7 @@ export class ChatInputComponent implements AfterViewInit {
       }
     }
 
-    if (!messageText && this.pendingImages().length === 0) {
+    if (!messageText && this.pendingImages().length === 0 && workflowName === undefined) {
       this.currentInput.set('')
       return
     }
