@@ -340,6 +340,22 @@ def _log_context(messages: list[dict[str, Any]]) -> None:
     print("=" * 40)
 
 
+async def _track_tokens(
+    messages: list[dict[str, Any]],
+    tools: list[dict],
+    session: "AgentSession",
+    label: str,
+    prepared: list[dict] | None = None,
+) -> int:
+    """Count context tokens, log the result, and emit ctx_update to the frontend."""
+    if prepared is None:
+        prepared = backend.prepare_messages(messages)
+    tokens = await backend.count_tokens(prepared, tools)
+    print(f"[tokens] {label}: {tokens}/{CTX_LIMIT}")
+    await session.emit({"type": "ctx_update", "ctx_tokens": tokens})
+    return tokens
+
+
 def _parse_tool_calls(tool_calls_acc: dict[int, dict], message: dict) -> list[dict]:
     """Build the tool_calls list from streamed fragments, with thinking-block recovery fallback."""
     tool_calls: list[dict] = []
@@ -365,7 +381,7 @@ def _parse_tool_calls(tool_calls_acc: dict[int, dict], message: dict) -> list[di
 async def _execute_tool_calls(
     tool_calls: list[dict],
     messages: list[dict[str, Any]],
-    session: "AgentSession",
+    session: AgentSession,
     tools: list[dict],
     working_directory: str | None,
     extra_tools: dict | None,
@@ -375,9 +391,7 @@ async def _execute_tool_calls(
     Returns True when context overflows even after compression (caller should abort).
     Mutates messages in place.
     """
-    ctx_before = await backend.count_tokens(backend.prepare_messages(messages), tools)
-    print(f"[tokens] context before tool execution: {ctx_before}/{CTX_LIMIT}")
-    await session.emit({"type": "ctx_update", "ctx_tokens": ctx_before})
+    ctx_before = await _track_tokens(messages, tools, session, "context before tool execution")
 
     effective_registry = {**TOOL_REGISTRY, **(extra_tools if extra_tools is not None else {})}
 
@@ -405,9 +419,7 @@ async def _execute_tool_calls(
         tool_output = json.dumps(result_dict)
         messages.append({"role": "tool", "name": tool_name, "content": tool_output})
 
-        ctx_after = await backend.count_tokens(backend.prepare_messages(messages), tools)
-        print(f"[tokens] context after tool result '{tool_name}': {ctx_after}/{CTX_LIMIT}")
-        await session.emit({"type": "ctx_update", "ctx_tokens": ctx_after})
+        ctx_after = await _track_tokens(messages, tools, session, f"context after tool result '{tool_name}'")
 
         if ctx_after > CTX_LIMIT:
             # Emit tool_result first so frontend saves it to DB before compressing.
@@ -417,9 +429,7 @@ async def _execute_tool_calls(
             if conv_id is not None and session.refresh_messages_callback is not None:
                 refreshed = await session.refresh_messages_callback(conv_id)
                 messages[:] = refreshed
-            ctx_after_compress = await backend.count_tokens(backend.prepare_messages(messages), tools)
-            print(f"[tokens] context after compression: {ctx_after_compress}/{CTX_LIMIT}")
-            await session.emit({"type": "ctx_update", "ctx_tokens": ctx_after_compress})
+            ctx_after_compress = await _track_tokens(messages, tools, session, "context after compression")
             if ctx_after_compress > CTX_LIMIT:
                 await session.emit({"type": "error", "message": f"Context still exceeds limit after compression: {ctx_after_compress}/{CTX_LIMIT} tokens"})
                 return True
@@ -444,10 +454,8 @@ async def chat_with_tools(
     prepared = backend.prepare_messages(messages)
     _log_context(prepared)
 
-    ctx_before_generation = await backend.count_tokens(prepared, tools)
+    ctx_before_generation = await _track_tokens(messages, tools, session, "context before generation", prepared=prepared)
     max_tokens = CTX_LIMIT - ctx_before_generation
-    print(f"[tokens] context before generation: {ctx_before_generation}/{CTX_LIMIT}, max_tokens={max_tokens}")
-    await session.emit({"type": "ctx_update", "ctx_tokens": ctx_before_generation})
 
     message: dict[str, Any] = {"role": "assistant", "content": "", "thinking": ""}
     tool_calls_acc: dict[int, dict] = {}  # index → {id, name, arguments_str}
