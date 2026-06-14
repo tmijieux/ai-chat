@@ -14,7 +14,7 @@ class AskUserQuestionTool(BaseTool):
         "it renders an interactive card in the UI and suspends execution until the user replies. "
         "ALWAYS provide an 'options' array: minimum 2 choices, prefer 3–5, never more than 6. "
         "NEVER list choices or examples inside the question text — put them in 'options' only. "
-        "An 'Other' choice is always appended automatically so the user can always type freely."
+        "Do NOT include an 'Other' option yourself — the orchestrator appends it automatically."
     )
     parameters = {
         "type": "object",
