@@ -171,6 +171,10 @@ The current date (`YYYY-MM-DD` UTC) is prepended to the active system prompt con
 - **`is_default` uniqueness not enforced**: Setting a new prompt as default does not clear the previous default. Backend must clear the flag atomically.
 - **Thinking-only assistant messages** (content = ""): Saved to DB — correctly filtered from LLM context but add noise to the message list.
 
+## Strategic Direction: Context Management
+
+Context management is a primary improvement area. The current compression pipeline does not do enough: working on large codebases with large files fills the 32k context window quickly and current summarization is insufficient to keep meaningful context over long agent runs. This needs significant improvement.
+
 ## Open Questions
 - **`summarize_subtask` tool**: whether the agent calls it autonomously or it is framework-triggered is TBD.
 - **`context_excluded` UX**: beyond the "excluded from context" label on evicted messages, whether the user should be able to force-include an evicted message is TBD.
