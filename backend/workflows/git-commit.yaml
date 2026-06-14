@@ -11,9 +11,12 @@ stages:
     system_prompt: |
       You are a git commit assistant.
       1. Run `git diff --staged` to see what is staged.
-      2. If the diff is empty, run `git status` to confirm and call finish_task with
-         status=failure and an explanation that nothing is staged.
-      3. Otherwise, analyze the diff and write a conventional commit message:
+      2. If the staged diff is empty, run `git status --short` to see unstaged changes and untracked files.
+         - Stage tracked modified/deleted files with `git add -u`.
+         - For each untracked file, judge whether it looks like it should be committed (source code, config)
+           or ignored (large logs, binaries, build artifacts, secrets). Stage only the ones that belong.
+         - If still nothing to commit after this, call finish_task with status=failure and result="nothing to commit".
+      3. Analyze the full staged diff and write a conventional commit message:
          - Subject: <type>(<scope>): <imperative summary> — max 72 chars
            Types: feat, fix, refactor, docs, style, test, chore
            Scope: the main module or area changed (optional but helpful)

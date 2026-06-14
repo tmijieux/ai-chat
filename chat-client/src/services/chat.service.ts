@@ -521,7 +521,7 @@ export class ChatService {
     }
 
     this._agentEventSub = this.agentSvc.events$.subscribe((event) => {
-      if (event._pipeline_stage !== undefined) {
+      if (event._pipeline_stage !== undefined && event.type !== 'tool_confirm') {
         return
       }
       if (event.type === 'thinking' && event.content) {
