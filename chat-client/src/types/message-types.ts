@@ -163,7 +163,7 @@ export type AgentEvent = (
   | { type: 'iteration_end'; prompt_tokens: number; response_tokens: number }
   | { type: 'ctx_update' | 'compressing'; ctx_tokens: number }
   | { type: 'plan_proposal'; plan_id: string; plan: string }
-  | { type: 'agent_question'; question_id: string; question: string }
+  | { type: 'agent_question'; question_id: string; question: string; options?: string[] }
   | { type: 'mode_changed'; mode: ConversationMode }
   | { type: 'done'; finished_without_response?: boolean }
   | { type: 'error'; message: string }
@@ -247,6 +247,8 @@ export type DisplayMessage =
       token_delta?: number | null
       context_excluded?: boolean
     } & SiblingMeta)
+  | { kind: 'plan_proposal'; id: string; plan_id: string; plan: string; resolved: boolean; resolution?: string }
+  | { kind: 'agent_question'; id: string; question_id: string; question: string; options?: string[]; resolved: boolean }
   | { kind: 'error'; id: string; message: string }
 
 /**

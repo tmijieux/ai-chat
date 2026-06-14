@@ -1,0 +1,30 @@
+<div class="plan-card" [class.plan-card--resolved]="resolved()">
+  <div class="plan-card__header">Plan proposal</div>
+  @if (!resolved()) {
+    <pre class="plan-card__plan">{{ plan() }}</pre>
+    <div class="plan-card__entries">
+      @for (entry of ENTRIES; track $index; let i = $index) {
+        <div class="plan-entry-row"
+             [class.plan-entry-row--active]="activeIndex() === i"
+             (click)="onEntryClick(i)">
+          <button class="plan-entry-btn"
+                  [class.plan-entry-btn--abort]="entry.isAbort"
+                  type="button">
+            {{ entry.label }}
+          </button>
+          @if (!entry.isAbort) {
+            <input #entryInput
+                   class="plan-entry-input"
+                   type="text"
+                   [placeholder]="entry.requiresText ? 'Required…' : 'Add comment (optional)…'"
+                   [value]="comments()[i]"
+                   (input)="updateComment(i, $any($event.target).value)" />
+          }
+        </div>
+      }
+    </div>
+    <div class="plan-card__hint">↑↓ navigate · Enter confirm</div>
+  } @else {
+    <div class="plan-card__resolution">{{ resolution() }}</div>
+  }
+</div>

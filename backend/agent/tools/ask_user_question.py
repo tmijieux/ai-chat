@@ -10,6 +10,7 @@ class AskUserQuestionTool(BaseTool):
     name = "ask_user_question"
     description = (
         "Ask the user a clarifying question and wait for their reply. "
+        "Optionally provide predefined choices — an 'Other' option is always added automatically. "
         "Use this in Plan mode when you need more information before proposing a plan."
     )
     parameters = {
@@ -19,6 +20,11 @@ class AskUserQuestionTool(BaseTool):
                 "type": "string",
                 "description": "The question to ask the user.",
             },
+            "options": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional predefined choices for the user to pick from.",
+            },
         },
         "required": ["question"],
     }
@@ -26,14 +32,14 @@ class AskUserQuestionTool(BaseTool):
     measured_delta = 275
 
     def label(self, args: dict) -> str:
-        question = args.get("question", "")
-        return f"QUESTION: {question[:80]}"
+        return f"QUESTION: {args.get('question', '')[:80]}"
 
     async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
-        """Emit an agent_question event and wait for the user's text reply."""
+        """Emit an agent_question event and wait for the user's reply."""
         question = args.get("question", "")
+        options: list[str] | None = args.get("options")
         question_id = str(uuid.uuid4())
-        reply = await session.request_user_input(question_id, question)
+        reply = await session.request_user_input(question_id, question, options=options)
         return {
             "tool": self.name,
             "status": "success",

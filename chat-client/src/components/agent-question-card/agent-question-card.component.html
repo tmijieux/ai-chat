@@ -1,0 +1,25 @@
+<div class="question-card" [class.question-card--resolved]="resolved()">
+  <div class="question-card__header">Agent question</div>
+  <div class="question-card__question">{{ question() }}</div>
+  @if (!resolved()) {
+    <div class="question-card__entries">
+      @for (entry of allEntries(); track $index; let i = $index) {
+        <div class="question-entry-row"
+             [class.question-entry-row--active]="activeIndex() === i"
+             [class.question-entry-row--other]="isOtherEntry(i)"
+             (click)="onEntryClick(i)">
+          <span class="question-entry-label">{{ entry }}</span>
+          <input #entryInput
+                 class="question-entry-input"
+                 type="text"
+                 [placeholder]="isOtherEntry(i) ? 'Type your answer…' : 'Add comment (optional)…'"
+                 [value]="getComment(i)"
+                 (input)="updateComment(i, $any($event.target).value)" />
+        </div>
+      }
+    </div>
+    <div class="question-card__hint">↑↓ navigate · Enter confirm</div>
+  } @else {
+    <div class="question-card__resolution">Answer sent</div>
+  }
+</div>

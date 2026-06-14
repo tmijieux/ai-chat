@@ -10,7 +10,8 @@ class ProposePlanTool(BaseTool):
     name = "propose_plan"
     description = (
         "Propose a structured plan for the user to review. "
-        "The user will choose to accept the plan and continue in Standard, Auto, or YOLO mode. "
+        "The user will choose to accept the plan and continue in Standard, Auto, or YOLO mode, "
+        "or send feedback requesting a revised plan. "
         "Only available in Plan mode. Call this once you have enough information to propose a complete plan."
     )
     parameters = {
@@ -31,13 +32,20 @@ class ProposePlanTool(BaseTool):
         return f"PLAN: {plan[:60]}..." if len(plan) > 60 else f"PLAN: {plan}"
 
     async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
-        """Emit a plan_proposal event and wait for the user to accept with a chosen mode."""
+        """Emit a plan_proposal event and wait for the user to accept or send feedback."""
         plan = args.get("plan", "")
         plan_id = str(uuid.uuid4())
-        chosen_mode = await session.request_plan_confirm(plan_id, plan)
-        await session.emit({"type": "mode_changed", "mode": chosen_mode})
-        return {
-            "tool": self.name,
-            "status": "accepted",
-            "chosen_mode": chosen_mode,
-        }
+        payload = await session.request_plan_confirm(plan_id, plan)
+
+        status = payload.get("status", "accepted")
+        if status == "accepted":
+            chosen_mode = payload.get("mode", "standard")
+            comment = payload.get("comment") or ""
+            await session.emit({"type": "mode_changed", "mode": chosen_mode})
+            result: dict = {"tool": self.name, "status": "accepted", "chosen_mode": chosen_mode}
+            if comment != "":
+                result["comment"] = comment
+            return result
+        else:
+            feedback = payload.get("feedback") or ""
+            return {"tool": self.name, "status": "feedback", "feedback": feedback}

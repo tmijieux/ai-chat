@@ -1,0 +1,123 @@
+:host {
+  display: block;
+  width: 100%;
+  max-width: 768px;
+  outline: none;
+}
+
+.question-card {
+  background: #150f2e;
+  border: 1px solid #7c3aed;
+  border-radius: 0.5rem;
+  padding: 1rem;
+
+  &--resolved {
+    opacity: 0.6;
+    border-color: #334155;
+  }
+
+  &__header {
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #a78bfa;
+    margin-bottom: 0.5rem;
+  }
+
+  &__question {
+    font-size: 0.875rem;
+    color: #e2e8f0;
+    margin-bottom: 0.75rem;
+    line-height: 1.5;
+  }
+
+  &__entries {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  &__hint {
+    font-size: 0.65rem;
+    color: #475569;
+    margin-top: 0.6rem;
+    text-align: right;
+  }
+
+  &__resolution {
+    font-size: 0.82rem;
+    color: #a78bfa;
+    font-style: italic;
+    margin-top: 0.25rem;
+  }
+}
+
+.question-entry-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.25rem 0.4rem;
+  border-radius: 0.3rem;
+  cursor: pointer;
+  transition: background 0.1s;
+
+  &--active {
+    background: rgba(124, 58, 237, 0.12);
+  }
+
+  &--other {
+    margin-top: 0.2rem;
+    border-top: 1px solid #1e1b30;
+    padding-top: 0.4rem;
+  }
+}
+
+.question-entry-label {
+  font-size: 0.77rem;
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+  padding: 0.2rem 0.6rem;
+  border-radius: 0.3rem;
+  border: 1px solid #2d1b4e;
+  background: #1a0f38;
+  color: #64748b;
+  transition: border-color 0.1s, background 0.1s, color 0.1s;
+  pointer-events: none;
+
+  .question-entry-row--active & {
+    border-color: #7c3aed;
+    color: #c4b5fd;
+    background: #2e1a6e;
+  }
+
+  .question-entry-row--other & {
+    color: #94a3b8;
+    font-style: italic;
+  }
+
+  .question-entry-row--other.question-entry-row--active & {
+    border-color: #7c3aed;
+    color: #c4b5fd;
+    background: #2e1a6e;
+    font-style: italic;
+  }
+}
+
+.question-entry-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid #1e1b30;
+  color: #e2e8f0;
+  font-size: 0.77rem;
+  font-family: inherit;
+  padding: 0.1rem 0.2rem;
+  outline: none;
+  transition: border-color 0.1s;
+
+  &::placeholder { color: #334155; font-style: italic; }
+  &:focus { border-bottom-color: #7c3aed; }
+}

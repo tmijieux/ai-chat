@@ -56,21 +56,24 @@ class AgentSession:
         if future and not future.done():
             future.set_result((approved, reason))
 
-    async def request_plan_confirm(self, plan_id: str, plan: str) -> str:
-        """Emit a plan_proposal event and suspend until the user accepts with a chosen mode."""
+    async def request_plan_confirm(self, plan_id: str, plan: str) -> dict:
+        """Emit a plan_proposal event and suspend until the user responds with a payload dict."""
         await self.emit({"type": "plan_proposal", "plan_id": plan_id, "plan": plan})
-        future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        future: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
         self._pending_plan_confirms[plan_id] = future
         return await future
 
-    def resolve_plan_confirm(self, plan_id: str, chosen_mode: str) -> None:
+    def resolve_plan_confirm(self, plan_id: str, payload: dict) -> None:
         future = self._pending_plan_confirms.pop(plan_id, None)
         if future and not future.done():
-            future.set_result(chosen_mode)
+            future.set_result(payload)
 
-    async def request_user_input(self, question_id: str, question: str) -> str:
+    async def request_user_input(self, question_id: str, question: str, options: list[str] | None = None) -> str:
         """Emit an agent_question event and suspend until the user replies."""
-        await self.emit({"type": "agent_question", "question_id": question_id, "question": question})
+        event: dict = {"type": "agent_question", "question_id": question_id, "question": question}
+        if options is not None:
+            event["options"] = options
+        await self.emit(event)
         future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         self._pending_user_inputs[question_id] = future
         return await future

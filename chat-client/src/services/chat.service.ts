@@ -338,6 +338,31 @@ export class ChatService {
     this.agentSvc.abort()
   }
 
+  acceptPlan(planId: string, payload: { status: string; mode?: string; comment?: string; feedback?: string }): void {
+    this.agentSvc.acceptPlan(planId, payload)
+    const resolution = payload.status === 'accepted'
+      ? `Accepted — executing in ${payload.mode ? payload.mode.charAt(0).toUpperCase() + payload.mode.slice(1) : 'Standard'} mode`
+      : 'Feedback sent — waiting for revised plan'
+    this._messages.update((msgs) =>
+      msgs.map((m) =>
+        m.kind === 'plan_proposal' && m.plan_id === planId
+          ? { ...m, resolved: true, resolution }
+          : m,
+      ),
+    )
+  }
+
+  replyQuestion(questionId: string, reply: string): void {
+    this.agentSvc.replyQuestion(questionId, reply)
+    this._messages.update((msgs) =>
+      msgs.map((m) =>
+        m.kind === 'agent_question' && m.question_id === questionId
+          ? { ...m, resolved: true }
+          : m,
+      ),
+    )
+  }
+
   // -------------------------------------------------------------------------
   // Settings / conversation management
   // -------------------------------------------------------------------------
@@ -624,6 +649,32 @@ export class ChatService {
         }
         toolResultIdsFromPreviousIteration = toolResultIdsFromCurrentIteration
         toolResultIdsFromCurrentIteration = []
+      } else if (event.type === 'plan_proposal') {
+        this._messages.update((msgs) => [
+          ...msgs,
+          {
+            kind: 'plan_proposal' as const,
+            id: crypto.randomUUID(),
+            plan_id: event.plan_id,
+            plan: event.plan,
+            resolved: false,
+          },
+        ])
+      } else if (event.type === 'agent_question') {
+        this._messages.update((msgs) => [
+          ...msgs,
+          {
+            kind: 'agent_question' as const,
+            id: crypto.randomUUID(),
+            question_id: event.question_id,
+            question: event.question,
+            options: event.options,
+            resolved: false,
+          },
+        ])
+      } else if (event.type === 'mode_changed') {
+        const newSettings = { ...this._conversationSettings(), mode: event.mode }
+        this.updateConversationSettings(newSettings).subscribe()
       } else if (event.type === 'ctx_update') {
         this._promptTokens.set(event.ctx_tokens ?? 0)
       } else if (event.type === 'compressing') {

@@ -1,0 +1,128 @@
+:host {
+  display: block;
+  width: 100%;
+  max-width: 768px;
+  outline: none;
+}
+
+.plan-card {
+  background: #0f1a2e;
+  border: 1px solid #2563eb;
+  border-radius: 0.5rem;
+  padding: 1rem;
+
+  &--resolved {
+    opacity: 0.6;
+    border-color: #334155;
+  }
+
+  &__header {
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #60a5fa;
+    margin-bottom: 0.65rem;
+  }
+
+  &__plan {
+    font-size: 0.82rem;
+    background: #0f172a;
+    border: 1px solid #1e3a5f;
+    border-radius: 0.35rem;
+    padding: 0.75rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #cbd5e1;
+    margin: 0 0 0.75rem;
+    overflow: auto;
+    max-height: 16rem;
+    font-family: inherit;
+    line-height: 1.5;
+  }
+
+  &__entries {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  &__hint {
+    font-size: 0.65rem;
+    color: #475569;
+    margin-top: 0.6rem;
+    text-align: right;
+  }
+
+  &__resolution {
+    font-size: 0.82rem;
+    color: #60a5fa;
+    font-style: italic;
+    margin-top: 0.25rem;
+  }
+}
+
+.plan-entry-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.25rem 0.4rem;
+  border-radius: 0.3rem;
+  cursor: pointer;
+  transition: background 0.1s;
+
+  &--active {
+    background: rgba(37, 99, 235, 0.12);
+  }
+}
+
+.plan-entry-btn {
+  font-size: 0.77rem;
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+  padding: 0.2rem 0.6rem;
+  border-radius: 0.3rem;
+  border: 1px solid #1e3a5f;
+  background: #0f1e38;
+  cursor: pointer;
+  font-family: inherit;
+  color: #64748b;
+  transition: border-color 0.1s, background 0.1s, color 0.1s;
+  pointer-events: none;
+
+  .plan-entry-row--active & {
+    border-color: #2563eb;
+    color: #93c5fd;
+    background: #1e3a6e;
+  }
+
+  &--abort {
+    color: #7f1d1d;
+    border-color: #450a0a;
+    background: #0f0000;
+
+    .plan-entry-row--active & {
+      border-color: #dc2626;
+      background: #3b0f0f;
+      color: #fca5a5;
+    }
+  }
+}
+
+.plan-entry-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid #1e293b;
+  color: #e2e8f0;
+  font-size: 0.77rem;
+  font-family: inherit;
+  padding: 0.1rem 0.2rem;
+  outline: none;
+  transition: border-color 0.1s;
+
+  &::placeholder { color: #334155; font-style: italic; }
+  &:focus { border-bottom-color: #2563eb; }
+}

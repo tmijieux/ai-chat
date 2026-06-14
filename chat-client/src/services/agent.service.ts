@@ -71,6 +71,18 @@ export class AgentService {
     }
   }
 
+  acceptPlan(planId: string, payload: { status: string; mode?: string; comment?: string; feedback?: string }): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: 'plan_accept', plan_id: planId, ...payload }))
+    }
+  }
+
+  replyQuestion(questionId: string, reply: string): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: 'user_question_reply', question_id: questionId, reply }))
+    }
+  }
+
   abort(): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: 'abort' }))

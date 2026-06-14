@@ -19,6 +19,8 @@ import { ToolCallEntryComponent } from '../tool-call-entry/tool-call-entry.compo
 import { DiffBlockComponent } from '../diff-block/diff-block.component'
 import { ToolCallPreviewComponent } from '../tool-call-preview/tool-call-preview.component'
 import { DirectoryPickerComponent } from '../directory-picker/directory-picker.component'
+import { PlanCardComponent, PlanAcceptPayload } from '../plan-card/plan-card.component'
+import { AgentQuestionCardComponent } from '../agent-question-card/agent-question-card.component'
 
 @Component({
   selector: 'app-chat',
@@ -35,6 +37,8 @@ import { DirectoryPickerComponent } from '../directory-picker/directory-picker.c
     DiffBlockComponent,
     ToolCallPreviewComponent,
     DirectoryPickerComponent,
+    PlanCardComponent,
+    AgentQuestionCardComponent,
   ],
   templateUrl: './chat.component.html',
   styleUrls: ['./chat.component.scss'],
@@ -330,6 +334,22 @@ export class ChatComponent implements OnDestroy {
 
   async onNavigateSibling(siblingId: string): Promise<void> {
     await this.chatSvc.navigateSibling(siblingId)
+  }
+
+  // -------------------------------------------------------------------------
+  // Plan card / agent question card
+  // -------------------------------------------------------------------------
+
+  onPlanAccepted(planId: string, payload: PlanAcceptPayload): void {
+    this.chatSvc.acceptPlan(planId, payload)
+  }
+
+  onPlanAborted(): void {
+    this.chatSvc.abortAgent()
+  }
+
+  onQuestionReplied(questionId: string, reply: string): void {
+    this.chatSvc.replyQuestion(questionId, reply)
   }
 
 }

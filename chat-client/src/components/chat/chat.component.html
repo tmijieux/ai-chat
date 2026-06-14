@@ -170,7 +170,7 @@
           [class]="
             msg.kind === 'user'
               ? 'justify-end'
-              : msg.kind === 'tool_confirm'
+              : msg.kind === 'tool_confirm' || msg.kind === 'plan_proposal' || msg.kind === 'agent_question'
                 ? 'justify-center'
                 : 'justify-start'
           "
@@ -358,6 +358,29 @@
             </div>
           }
 
+          <!-- Plan proposal card -->
+          @if (msg.kind === 'plan_proposal') {
+            <app-plan-card
+              [planId]="msg.plan_id"
+              [plan]="msg.plan"
+              [resolved]="msg.resolved"
+              [resolution]="msg.resolution"
+              (accepted)="onPlanAccepted(msg.plan_id, $event)"
+              (aborted)="onPlanAborted()"
+            />
+          }
+
+          <!-- Agent question card -->
+          @if (msg.kind === 'agent_question') {
+            <app-agent-question-card
+              [questionId]="msg.question_id"
+              [question]="msg.question"
+              [options]="msg.options ?? []"
+              [resolved]="msg.resolved"
+              (replied)="onQuestionReplied(msg.question_id, $event)"
+            />
+          }
+
           <!-- Error message -->
           @if (msg.kind === 'error') {
             <div class="p-4 bg-red-50 border border-red-300 text-red-700 rounded-lg shadow-sm max-w-2xl text-sm">
@@ -372,7 +395,7 @@
         </div>
 
         <!-- Action buttons (revealed on .msg-row hover, hidden for tool_confirm and error) -->
-        @if (msg.kind !== 'tool_confirm' && msg.kind !== 'error') {
+        @if (msg.kind !== 'tool_confirm' && msg.kind !== 'error' && msg.kind !== 'plan_proposal' && msg.kind !== 'agent_question') {
           <div class="msg-row-actions">
             @if (msg.kind === 'user' && editingMessageId() !== msg.id) {
               <button class="msg-action-btn" title="Edit" (click)="startEdit(msg.id, msg.content)">

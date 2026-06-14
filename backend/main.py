@@ -1019,7 +1019,8 @@ async def _ws_receive_messages(websocket: WebSocket, session: AgentSession, agen
             if data.get("type") == "confirm":
                 session.resolve_confirm(data["tool_id"], data["approved"], data.get("reason"))
             elif data.get("type") == "plan_accept":
-                session.resolve_plan_confirm(data["plan_id"], data["mode"])
+                payload = {k: v for k, v in data.items() if k not in ("type", "plan_id")}
+                session.resolve_plan_confirm(data["plan_id"], payload)
             elif data.get("type") == "user_question_reply":
                 session.resolve_user_input(data["question_id"], data["reply"])
             elif data.get("type") == "compression_done":
