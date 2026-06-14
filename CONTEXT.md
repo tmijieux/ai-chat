@@ -191,7 +191,7 @@ Framework-level compression pipeline that runs after each completed agent run. T
 Never compressed by Stage 2: `write_file`, `edit_file`, `run_shell` results; thinking messages.
 
 ## Status Bar
-Always-visible top bar in the chat area. Shows token info only: `Context Tokens: N / 16,384 (%)`. The value is the last measured token count — always from a real API call, never estimated. Shows 0 on a new chat. The ⚙ button opens the [[Conversation Settings Drawer]].
+Always-visible top bar in the chat area. Shows token info: `Context Tokens: N / 16,384 (%)`. The value is the last measured token count — always from a real API call, never estimated. Shows 0 on a new chat. When the conversation mode is not Standard, a colored badge showing the active mode name (`PLAN`, `AUTO`, `YOLO`) is displayed next to the token count. The ⚙ button opens the [[Conversation Settings Drawer]].
 
 ## Conversation Turn
 The unit of visual grouping in the chat. One top-level bubble per speaker per iteration:
@@ -205,15 +205,17 @@ Left-side panel, always visible. Contains:
 - App title ("AI Chat"). Subtitle should communicate "an AI chat app that lets you keep track of your context easily"
 - "New Chat" entry at the top of the list.
 - Conversation list — click to select, ⋮ menu → Delete.
+- **Workspace chip** — always visible above the Settings button. Shows only the final directory name (not the full path) of the active workspace. When no workspace is set, shows a muted "Set workspace..." placeholder. Clicking opens the [[DirectoryPickerComponent]] directly from the sidebar. Full path is only visible inside the picker's path header.
 - Settings button at the bottom linking to `/settings`.
 
 Conversation title is set to the first 20 characters of the first user message. AI-generated titles are a low-priority nice-to-have.
 
 ## Conversation Settings Drawer
-Right-side panel opened via the ⚙ button in the status bar. Per-conversation configuration that persists to DB. Three sections:
-1. **Workspace** — text input + Browse (custom `DirectoryPickerComponent`) + clear. See [[Workspace]].
-2. **System prompt** — dropdown of all `SystemPromptTemplate`s; selecting one sets `active_prompt_id`. Shows token count per option.
-3. **Tools** — per-tool checkboxes with token cost and "requires confirmation" badge; select-all / deselect-all toggle; total token cost of all enabled tools shown at top of section.
+Right-side panel opened via the ⚙ button in the status bar. Per-conversation configuration that persists to DB. Sections:
+1. **Mode** — segmented control selecting the active [[Conversation Mode]] for this conversation. **Not yet implemented in the drawer** (mode is currently switchable only via the [[Slash Command Palette]]).
+2. **Workspace** — text input + Browse (custom `DirectoryPickerComponent`) + clear. See [[Workspace]].
+3. **System prompt** — dropdown of all `SystemPromptTemplate`s; selecting one sets `active_prompt_id`. Shows token count per option.
+4. **Tools** — per-tool checkboxes with token cost and "requires confirmation" badge; select-all / deselect-all toggle; total token cost of all enabled tools shown at top of section.
 
 ## Message Actions
 Hover-revealed action buttons on each message. Must be preserved on all message kinds:
@@ -259,3 +261,30 @@ Evicted messages remain visible in the UI with an "excluded from context" label.
 Reference file compression (Stage 2 of the [[Post-Iteration Sub-Agent]]) is implemented — large `read_file` results are summarized and stored as `compressed_summary`. Not yet implemented: **oversized output summarization** for non-`read_file` tools (e.g. `run_shell` with large stdout).
 
 **Interaction with token counting — known hard problem:** after an eviction or manual deletion, downstream messages have stale stored cumulatives. Design intent: re-estimate their displayed cumulative by walking forward through still-in-context messages and summing their stored deltas (each delta was computed from two actual API measurements at generation time and remains valid). The status bar always shows the last real API measurement regardless. Exact re-estimation logic is still being refined.
+
+## Conversation Mode
+Per-conversation setting that controls how the agent runs. Persisted in `ConversationSettings.mode`. Switchable via the [[Slash Command Palette]] or the [[Conversation Settings Drawer]].
+
+- **Standard** — default. Classic agentic loop; all tool confirmations shown to the user as usual.
+- **Plan** — no file-editing or shell tools available. The agent uses `propose_plan` to surface a structured plan for the user to review, and `ask_user_question` to request clarification. Plan cards have three accept buttons that simultaneously accept the plan and switch to a chosen execution mode (Standard, Auto, or YOLO). **Not yet implemented beyond mode persistence.**
+- **Auto** — tool confirmations are auto-evaluated: read-only tools and file edits inside the workspace are always safe; other tools (shell, web search, out-of-workspace writes) are evaluated by an LLM sub-agent and auto-approved if deemed safe, or escalated to the user if deemed dangerous. **Not yet implemented beyond mode persistence.**
+- **YOLO** — autonomous loop. Before executing, the agent produces verification scripts saved to `.yolo_verify/` in the workspace. The main task then runs with broad auto-approval, looping automatically until the agent calls `finish_yolo`. The framework then runs the verification scripts directly (not via LLM). If any fail, the agent is re-prompted with failure details. When max retries are exhausted, a recovery UI offers the user a choice to give a hint and continue, or bail to another mode. **Not yet implemented beyond mode persistence.**
+
+## Slash Command Palette
+Triggered by typing `/` at the start of the chat input. Opens a floating popup above the textarea with two sections:
+
+- **Modes** — `/standard`, `/auto`, `/plan`, `/yolo`. Selecting one switches the conversation mode persistently.
+- **Workflows** — one entry per workflow definition in `backend/workflows/`. Selecting one invokes that workflow for the current message only (one-shot, does not change the base mode).
+
+Keyboard: ArrowUp/Down to navigate, Enter to select, Tab to autocomplete the command name with a trailing space (so the user can continue typing a prompt argument), Escape to dismiss and clear the `/` from the input.
+
+The command token is parsed and consumed at send time — the remaining text after the command is the message body. Works whether the user selected from the palette or typed the full `/command prompt` manually.
+
+## Workflow
+A named, user-defined multi-stage agent execution flow stored as a YAML file in `backend/workflows/`. Workflows are the structured, ordered-stage variant of automation — distinct from simple skills (prompt injection). Each stage specifies a prompt, a set of tools, a finish tool, and iteration limits. The agent in each stage can only use the tools listed for that stage and must call the stage's finish tool to advance.
+
+Workflows can include a `prepare_verification` stage that generates executable verification scripts. After an execution stage, the framework runs those scripts directly (no LLM involvement) and uses the results to determine pass/fail.
+
+A `create-workflow` workflow (self-hosted) helps users design and write new workflow YAML files.
+
+**Partially implemented:** YAML files are discovered and listed via `GET /api/workflows` and appear in the [[Slash Command Palette]]. Full orchestration engine not yet implemented.
