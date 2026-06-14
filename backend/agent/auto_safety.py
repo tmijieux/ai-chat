@@ -44,6 +44,7 @@ async def evaluate_tool_safety(
     working_directory: str | None,
     last_user_message: str,
     llm_backend,
+    safe_command_prefixes: list[str] | None = None,
 ) -> tuple[str, str]:
     """
     Return ("safe"|"dangerous", reason).
@@ -53,6 +54,12 @@ async def evaluate_tool_safety(
     """
     if tool_name in _ALWAYS_SAFE_TOOLS:
         return "safe", "read-only tool"
+
+    if tool_name == "run_shell" and safe_command_prefixes is not None:
+        command = arguments.get("command", "").strip()
+        for prefix in safe_command_prefixes:
+            if command.startswith(prefix):
+                return "safe", "workflow whitelist"
 
     if tool_name in _FILE_WRITE_TOOLS:
         path = arguments.get("file_path", "")

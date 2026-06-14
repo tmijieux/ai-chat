@@ -104,6 +104,8 @@ class WorkflowDefinition:
     description: str
     stages: list[WorkflowStageDefinition]
     directory: Path = field(default_factory=Path)
+    mode: str | None = None
+    auto_safe_commands: list[str] = field(default_factory=list)
     _finish_tool_classes: dict[str, type[BaseFinishTool]] = field(default_factory=dict, repr=False)
 
     def make_finish_tool(self, name: str) -> BaseFinishTool:
@@ -236,6 +238,8 @@ def load_workflow(path: Path) -> WorkflowDefinition:
         description=description,
         stages=stages,
         directory=directory,
+        mode=data.get("mode") or None,
+        auto_safe_commands=data.get("auto_safe_commands") or [],
         _finish_tool_classes=finish_tool_classes,
     )
 

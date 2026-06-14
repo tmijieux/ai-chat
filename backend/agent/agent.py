@@ -117,6 +117,7 @@ class AgentSession:
         self.mode: str = "standard"
         self.working_directory: str | None = None
         self.last_user_message: str | None = None
+        self.auto_safe_commands: list[str] = []
 
     async def emit(self, event: dict) -> None:
         await self.outbound.put(event)
@@ -145,6 +146,7 @@ class AgentSession:
             verdict, reason = await evaluate_tool_safety(
                 tool_name, arguments, self.working_directory,
                 self.last_user_message or "", backend,
+                safe_command_prefixes=self.auto_safe_commands if self.auto_safe_commands else None,
             )
             if verdict == "safe":
                 if self.mode == "auto":

@@ -1,6 +1,14 @@
 name: git-commit
 description: "Generate a conventional commit message from staged changes and commit"
 
+mode: auto
+auto_safe_commands:
+  - "git add"
+  - "git status"
+  - "git diff"
+  - "git log"
+  - "git commit"
+
 stages:
 
   # ---------------------------------------------------------------------------

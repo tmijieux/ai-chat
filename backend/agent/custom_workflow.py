@@ -111,8 +111,18 @@ class CustomWorkflowOrchestrator:
         self._tools = tools or []
 
     async def run(self, session: AgentSession, user_message: str, messages: list[dict]) -> None:
-        """Entry point — runs all workflow stages and emits events via session."""
+        """Entry point — runs all workflow stages and emits events via session.
+
+        Temporarily overrides session.mode and session.auto_safe_commands if the workflow
+        declares them, then restores the previous values when the workflow finishes.
+        """
         logger.info("[workflow:%s] starting — user_message=%r messages=%d", self._workflow.name, user_message, len(messages))
+        saved_mode = session.mode
+        saved_auto_safe_commands = session.auto_safe_commands
+        if self._workflow.mode is not None:
+            session.mode = self._workflow.mode
+            logger.info("[workflow:%s] mode temporarily set to '%s'", self._workflow.name, self._workflow.mode)
+        session.auto_safe_commands = list(self._workflow.auto_safe_commands)
         try:
             await self._run_workflow(session, user_message, messages)
         except asyncio.CancelledError:
@@ -129,6 +139,11 @@ class CustomWorkflowOrchestrator:
             full_tb = traceback.format_exc()
             logger.exception("[workflow:%s] unexpected error", self._workflow.name)
             await session.emit({"type": "error", "message": full_tb})
+        finally:
+            session.mode = saved_mode
+            session.auto_safe_commands = saved_auto_safe_commands
+            if self._workflow.mode is not None:
+                logger.info("[workflow:%s] mode restored to '%s'", self._workflow.name, saved_mode)
 
     async def _run_workflow(
         self, session: AgentSession, user_message: str, messages: list[dict]
