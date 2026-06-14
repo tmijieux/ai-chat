@@ -266,6 +266,15 @@ button {
 .text-sm {
   font-size: 0.875rem;
 }
+.text-lg {
+  font-size: 1.125rem;
+}
+.text-xl {
+  font-size: 1.25rem;
+}
+.text-2xl {
+  font-size: 1.5rem;
+}
 .font-mono {
   font-family: monospace;
 }
@@ -487,6 +496,26 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: #7f1d1d;
   color: white;
   &:hover { background: #991b1b; }
+}
+
+/* --- TABS --- */
+.tab-btn {
+  padding: 0.625rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #94a3b8;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  border-top: none;
+  border-left: none;
+  border-right: none;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  &:hover { color: #e2e8f0; }
+}
+.tab-btn-active {
+  color: #a5b4fc;
+  border-bottom-color: #6366f1;
 }
 
 /* --- SLASH COMMAND PALETTE --- */

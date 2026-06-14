@@ -1,0 +1,82 @@
+<div class="flex justify-end mb-2">
+  <button class="btn btn-primary" (click)="startCreate()">+ New Agent</button>
+</div>
+
+@if (showCreateForm()) {
+  <div class="bg-card border-accent rounded overflow-hidden">
+    <div class="bg-card-header px-4 py-3 border-bottom">
+      <span class="text-sm font-semibold text-accent">New Agent</span>
+    </div>
+    <div class="p-4 flex flex-col gap-3">
+      <app-agent-form
+        [form]="createForm()"
+        [availableTools]="availableTools()"
+        [availableFinishTools]="availableFinishTools()"
+        (formChange)="updateCreateForm($event)"
+        (toolToggle)="toggleCreateTool($event)" />
+      <div class="flex gap-2">
+        <button class="btn btn-primary" [disabled]="saving()" (click)="saveCreate()">
+          {{ saving() ? 'Saving…' : 'Save' }}
+        </button>
+        <button class="btn btn-ghost" [disabled]="saving()" (click)="cancelCreate()">Cancel</button>
+      </div>
+    </div>
+  </div>
+}
+
+@for (a of agents(); track a.name) {
+  <div class="bg-card border-card rounded overflow-hidden">
+
+    @if (editingName() === a.name) {
+      <div class="bg-card-header px-4 py-3 border-bottom">
+        <span class="text-sm font-semibold text-muted">Editing: {{ a.name }}</span>
+      </div>
+      <div class="p-4 flex flex-col gap-3">
+        <app-agent-form
+          [form]="editForm()"
+          [availableTools]="availableTools()"
+          [availableFinishTools]="availableFinishTools()"
+          (formChange)="updateEditForm($event)"
+          (toolToggle)="toggleEditTool($event)" />
+        <div class="flex gap-2">
+          <button class="btn btn-primary" [disabled]="saving()" (click)="saveEdit(a.name)">
+            {{ saving() ? 'Saving…' : 'Save' }}
+          </button>
+          <button class="btn btn-ghost" [disabled]="saving()" (click)="cancelEdit()">Cancel</button>
+        </div>
+      </div>
+
+    } @else {
+      <div class="p-4">
+        <div class="flex items-center justify-between gap-2 mb-1">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="font-semibold">{{ a.name }}</span>
+            <span class="badge badge-neutral">{{ a.finish_tool }}</span>
+            <span class="text-xs text-muted">{{ a.max_iterations }} iters</span>
+            @for (t of a.tools; track t) {
+              <span class="badge badge-neutral text-xs">{{ t }}</span>
+            }
+          </div>
+          <div class="flex gap-1 shrink-0">
+            <button class="btn btn-ghost text-sm" (click)="startEdit(a)">Edit</button>
+            @if (deleteConfirmName() === a.name) {
+              <button class="btn btn-danger text-sm" (click)="doDelete(a.name)">Confirm</button>
+              <button class="btn btn-ghost text-sm" (click)="cancelDelete()">Cancel</button>
+            } @else {
+              <button class="btn text-sm text-danger" (click)="confirmDelete(a.name)">Delete</button>
+            }
+          </div>
+        </div>
+        @if (a.description) {
+          <p class="text-xs text-muted m-0 mb-1">{{ a.description }}</p>
+        }
+        <p class="text-sm text-muted whitespace-pre-wrap line-clamp-3 m-0 font-mono">{{ a.system_prompt }}</p>
+      </div>
+    }
+
+  </div>
+}
+
+@if (agents().length === 0 && !showCreateForm()) {
+  <p class="text-sm text-muted text-center py-12 m-0">No agents yet. Click "+ New Agent" to create one.</p>
+}

@@ -68,6 +68,26 @@ class UpdateSystemPrompt(BaseModel):
     is_default: bool | None = None
 
 
+class NewAgent(BaseModel):
+    name: str
+    description: str = ""
+    system_prompt: str
+    tools: list[str] = []
+    finish_tool: str = "finish_task"
+    max_iterations: int = 5
+    inject_turn_reminders: bool = False
+
+
+class UpdateAgent(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    system_prompt: str | None = None
+    tools: list[str] | None = None
+    finish_tool: str | None = None
+    max_iterations: int | None = None
+    inject_turn_reminders: bool | None = None
+
+
 class CorrectRequest(BaseModel):
     text: str
     language: str | None = "fr"

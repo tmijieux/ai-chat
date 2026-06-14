@@ -107,7 +107,16 @@ export type SystemPromptTemplate = {
   content: string
   is_default: boolean
   token_count: number | null
-  created_at: string
+}
+
+export type AgentDefinition = {
+  name: string
+  description: string
+  system_prompt: string
+  tools: string[]
+  finish_tool: string
+  max_iterations: number
+  inject_turn_reminders: boolean
 }
 
 export type AppSetting = {

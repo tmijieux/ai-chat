@@ -1,119 +1,25 @@
 <!-- Page header -->
 <div class="flex items-center gap-3 p-4 border-bottom">
   <button class="btn btn-ghost" (click)="location.back()">← Back</button>
-  <h1 class="font-semibold m-0">System Prompts</h1>
-  <button class="btn btn-primary ml-auto" (click)="startCreate()">+ New Prompt</button>
+  <h1 class="font-semibold m-0">Settings</h1>
 </div>
 
-<!-- Scrollable content -->
-<div class="overflow-y-auto flex-grow p-4 flex flex-col gap-4 bg-panel-dark">
+<!-- Tab bar -->
+<div class="flex border-bottom px-4 gap-0">
+  <button class="tab-btn" [class.tab-btn-active]="activeTab() === 'prompts'" (click)="setTab('prompts')">
+    System Prompts
+  </button>
+  <button class="tab-btn" [class.tab-btn-active]="activeTab() === 'agents'" (click)="setTab('agents')">
+    Agents
+  </button>
+</div>
 
-  <!-- Create form -->
-  @if (showCreateForm()) {
-    <div class="bg-card border-accent rounded overflow-hidden flex flex-col gap-0">
-      <div class="bg-card-header px-4 py-3 border-bottom">
-        <span class="text-sm font-semibold text-accent">New Prompt</span>
-      </div>
-      <div class="p-4 flex flex-col gap-3">
-        <div class="flex gap-2">
-          <input class="field flex-1" placeholder="Name"
-            [value]="createForm().name"
-            (input)="updateCreateForm({ name: $any($event.target).value })" />
-          <select class="field w-auto"
-            [value]="createForm().category"
-            (change)="updateCreateForm({ category: $any($event.target).value })">
-            @for (cat of categories; track cat) { <option [value]="cat">{{ cat }}</option> }
-          </select>
-        </div>
-        <textarea class="field font-mono" placeholder="System prompt content…"
-          [value]="createForm().content"
-          (input)="updateCreateForm({ content: $any($event.target).value })"></textarea>
-        <label class="flex items-center gap-2 text-sm cursor-pointer">
-          <input type="checkbox" style="accent-color:#6366f1; width:1rem; height:1rem"
-            [checked]="createForm().is_default"
-            (change)="updateCreateForm({ is_default: $any($event.target).checked })" />
-          Default for new conversations
-        </label>
-        <div class="flex gap-2">
-          <button class="btn btn-primary" [disabled]="saving()" (click)="saveCreate()">
-            {{ saving() ? 'Saving…' : 'Save' }}
-          </button>
-          <button class="btn btn-ghost" [disabled]="saving()" (click)="cancelCreate()">Cancel</button>
-        </div>
-      </div>
-    </div>
+<!-- Tab content -->
+<div class="overflow-y-auto flex-grow p-4 bg-panel-dark">
+  @if (activeTab() === 'prompts') {
+    <app-prompts-list />
   }
-
-  <!-- Prompt cards -->
-  @for (p of prompts(); track p.id) {
-    <div class="bg-card border-card rounded overflow-hidden">
-
-      @if (editingId() === p.id) {
-        <div class="bg-card-header px-4 py-3 border-bottom">
-          <span class="text-sm font-semibold text-muted">Editing: {{ p.name }}</span>
-        </div>
-        <div class="p-4 flex flex-col gap-3">
-          <div class="flex gap-2">
-            <input class="field flex-1"
-              [value]="editForm().name"
-              (input)="updateEditForm({ name: $any($event.target).value })" />
-            <select class="field w-auto"
-              [value]="editForm().category"
-              (change)="updateEditForm({ category: $any($event.target).value })">
-              @for (cat of categories; track cat) { <option [value]="cat">{{ cat }}</option> }
-            </select>
-          </div>
-          <textarea class="field font-mono"
-            [value]="editForm().content"
-            (input)="updateEditForm({ content: $any($event.target).value })"></textarea>
-          <label class="flex items-center gap-2 text-sm cursor-pointer">
-            <input type="checkbox" style="accent-color:#6366f1; width:1rem; height:1rem"
-              [checked]="editForm().is_default"
-              (change)="updateEditForm({ is_default: $any($event.target).checked })" />
-            Default for new conversations
-          </label>
-          <div class="flex gap-2">
-            <button class="btn btn-primary" [disabled]="saving()" (click)="saveEdit(p.id)">
-              {{ saving() ? 'Saving…' : 'Save' }}
-            </button>
-            <button class="btn btn-ghost" [disabled]="saving()" (click)="cancelEdit()">Cancel</button>
-          </div>
-        </div>
-
-      } @else {
-        <div class="p-4">
-          <div class="flex items-center justify-between gap-2 mb-2">
-            <div class="flex items-center gap-2 flex-wrap">
-              <span class="font-semibold">{{ p.name }}</span>
-              <span class="badge badge-neutral">{{ p.category }}</span>
-              @if (p.is_default) {
-                <span class="badge badge-accent">default</span>
-              }
-              @if (p.token_count !== null) {
-                <span class="text-xs text-muted">~{{ p.token_count }} tokens</span>
-              }
-            </div>
-            <div class="flex gap-1 shrink-0">
-              <button class="btn btn-ghost text-sm" (click)="startEdit(p)">Edit</button>
-              @if (deleteConfirmId() === p.id) {
-                <button class="btn btn-danger text-sm" (click)="doDelete(p.id)">Confirm</button>
-                <button class="btn btn-ghost text-sm" (click)="cancelDelete()">Cancel</button>
-              } @else {
-                <button class="btn text-sm text-danger" (click)="confirmDelete(p.id)">Delete</button>
-              }
-            </div>
-          </div>
-          <p class="text-sm text-muted whitespace-pre-wrap line-clamp-3 m-0">{{ p.content }}</p>
-        </div>
-      }
-
-    </div>
+  @if (activeTab() === 'agents') {
+    <app-agents-list />
   }
-
-  @if (prompts().length === 0 && !showCreateForm()) {
-    <p class="text-sm text-muted text-center py-12 m-0">
-      No prompts yet. Click "+ New Prompt" to create one.
-    </p>
-  }
-
 </div>

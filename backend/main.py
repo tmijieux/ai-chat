@@ -3,6 +3,7 @@ import base64
 import datetime
 import io
 import math
+import re
 import uuid
 import logging
 import json
@@ -41,65 +42,8 @@ disable_sqlalchemy_logging()
 logging.basicConfig(level=logging.DEBUG)
 
 
-# ---------------------------------------------------------------------------
-# Prompt seeding
-# ---------------------------------------------------------------------------
-
-def _parse_frontmatter(text: str) -> tuple[dict, str]:
-    """Parse YAML-like frontmatter from a markdown file. No external dependency."""
-    if not text.startswith("---"):
-        return {}, text
-    parts = text.split("---", 2)
-    if len(parts) < 3:
-        return {}, text
-    meta: dict = {}
-    for line in parts[1].splitlines():
-        line = line.strip()
-        if not line or ":" not in line:
-            continue
-        key, _, value = line.partition(":")
-        key = key.strip()
-        value = value.strip()
-        if value.lower() == "true":
-            meta[key] = True
-        elif value.lower() == "false":
-            meta[key] = False
-        elif value.startswith('"') and value.endswith('"'):
-            meta[key] = value[1:-1]
-        else:
-            meta[key] = value
-    return meta, parts[2].strip()
 
 
-async def _seed_prompts(sess: AsyncSession) -> None:
-    prompts_dir = Path(__file__).parent / "prompts"
-    if not prompts_dir.exists():
-        return
-    for md_file in sorted(prompts_dir.glob("*.md")):
-        meta, content = _parse_frontmatter(md_file.read_text(encoding="utf-8"))
-        if not meta.get("is_current"):
-            continue
-        name = meta.get("name", md_file.stem)
-        existing = (
-            await sess.scalars(
-                select(db.SystemPromptTemplate).where(db.SystemPromptTemplate.name == name)
-            )
-        ).first()
-        if existing:
-            continue
-        token_count_value = await _compute_prompt_token_count(content)
-        sess.add(
-            db.SystemPromptTemplate(
-                id=str(uuid.uuid4()),
-                name=name,
-                category=meta.get("category", "general"),
-                content=content,
-                is_default=True,
-                token_count=token_count_value,
-                created_at=_now(),
-            )
-        )
-    await sess.commit()
 
 
 _whisper: whisper_pipeline.WhisperPipeline | None = None
@@ -124,21 +68,12 @@ def _load_llm_bg() -> None:
         logger.exception("LLM backend failed to start.")
 
 
-async def _seed_prompts_when_ready() -> None:
-    """Wait for llama-server to be ready, then seed prompt templates."""
-    while not _llm_ready:
-        await asyncio.sleep(1)
-    async for sess in get_db_session():
-        await _seed_prompts(sess)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
     print("Database initialized successfully.")
     threading.Thread(target=_load_llm_bg, daemon=True).start()
     threading.Thread(target=_load_whisper_bg, daemon=True).start()
-    asyncio.create_task(_seed_prompts_when_ready())
     yield
 
 
@@ -198,17 +133,14 @@ async def _build_inference_context(
     prompt_id: str | None,
     sess: AsyncSession,
 ) -> list[dict]:
-    """Build the message list sent to the LLM. Prepends system prompt from DB if prompt_id given."""
+    """Build the message list sent to the LLM. Prepends system prompt from file if prompt_id (slug) given."""
     messages: list[dict] = []
     if prompt_id is not None:
-        p = (
-            await sess.scalars(
-                select(db.SystemPromptTemplate).where(db.SystemPromptTemplate.id == prompt_id)
-            )
-        ).first()
-        if p is not None:
+        prompt_path = _PROMPTS_DIR / f"{prompt_id}.yaml"
+        if prompt_path.exists():
+            prompt_data = _load_prompt_file(prompt_path)
             today = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")
-            content = f"Today's date: {today}\n\n{p.content}"
+            content = f"Today's date: {today}\n\n{prompt_data['content']}"
             messages.append({"role": "system", "content": content})
 
     # Batch-fetch image attachments for all branch messages
@@ -760,102 +692,196 @@ async def get_image(image_id: str, sess: AsyncSession = Depends(get_db_session))
 
 
 # ---------------------------------------------------------------------------
-# System prompts
+# System prompts (file-based — backend/prompts/*.yaml)
 # ---------------------------------------------------------------------------
 
+_PROMPTS_DIR = Path(__file__).parent / "prompts"
 _DUMMY_USER = [{"role": "user", "content": "."}]
 
+
+def _slugify(name: str) -> str:
+    """Convert a display name to a safe kebab-case filename stem."""
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return slug or "prompt"
+
+
+def _load_prompt_file(path: Path) -> dict:
+    """Parse a prompt YAML file and return its data dict."""
+    import yaml as _yaml
+    data = _yaml.safe_load(path.read_text(encoding="utf-8"))
+    return {
+        "id": path.stem,
+        "name": data.get("name") or path.stem,
+        "category": data.get("category") or "general",
+        "content": data.get("content") or "",
+        "is_default": bool(data.get("is_default")),
+        "token_count": data.get("token_count") or None,
+    }
+
+
+def _write_prompt_file(path: Path, name: str, category: str, content: str, is_default: bool, token_count: int | None) -> None:
+    """Write a prompt YAML file."""
+    import yaml as _yaml
+    data = {
+        "name": name,
+        "category": category,
+        "is_default": is_default,
+        "token_count": token_count,
+        "content": content,
+    }
+    path.write_text(_yaml.dump(data, allow_unicode=True, default_flow_style=False, sort_keys=False), encoding="utf-8")
+
+
 async def _compute_prompt_token_count(content: str) -> int:
+    """Count tokens contributed by this system prompt (with vs without)."""
     tools: list = []
     with_prompt = await backend.count_tokens([{"role": "system", "content": content}] + _DUMMY_USER, tools)
-    baseline    = await backend.count_tokens(_DUMMY_USER, tools)
+    baseline = await backend.count_tokens(_DUMMY_USER, tools)
     return with_prompt - baseline
 
 
 @app.get("/api/system-prompts")
-async def list_system_prompts(sess: AsyncSession = Depends(get_db_session)):
-    result = await sess.scalars(select(db.SystemPromptTemplate))
-    prompts = result.all()
-    return [
-        {
-            "id": p.id,
-            "name": p.name,
-            "category": p.category,
-            "content": p.content,
-            "is_default": p.is_default,
-            "token_count": p.token_count,
-            "created_at": p.created_at,
-        }
-        for p in prompts
-    ]
+async def list_system_prompts():
+    """List all system prompt YAML files from backend/prompts/."""
+    _PROMPTS_DIR.mkdir(exist_ok=True)
+    return [_load_prompt_file(f) for f in sorted(_PROMPTS_DIR.glob("*.yaml"))]
 
 
 @app.post("/api/system-prompts")
-async def create_system_prompt(
-    body: ld.NewSystemPrompt, sess: AsyncSession = Depends(get_db_session)
-):
+async def create_system_prompt(body: ld.NewSystemPrompt):
+    """Create a new system prompt YAML file. Slug is derived from the name."""
+    _PROMPTS_DIR.mkdir(exist_ok=True)
+    slug = _slugify(body.name)
+    path = _PROMPTS_DIR / f"{slug}.yaml"
+    if path.exists():
+        # Avoid collision — append a suffix
+        suffix = 2
+        while (_PROMPTS_DIR / f"{slug}-{suffix}.yaml").exists():
+            suffix += 1
+        slug = f"{slug}-{suffix}"
+        path = _PROMPTS_DIR / f"{slug}.yaml"
     token_count_value = await _compute_prompt_token_count(body.content)
-    p = db.SystemPromptTemplate(
-        id=str(uuid.uuid4()),
-        name=body.name,
-        category=body.category,
-        content=body.content,
-        is_default=body.is_default,
-        token_count=token_count_value,
-        created_at=_now(),
-    )
-    sess.add(p)
-    await sess.flush()
-    return {
-        "id": p.id,
-        "name": p.name,
-        "category": p.category,
-        "content": p.content,
-        "is_default": p.is_default,
-        "token_count": p.token_count,
-        "created_at": p.created_at,
-    }
+    _write_prompt_file(path, body.name, body.category, body.content, body.is_default, token_count_value)
+    return _load_prompt_file(path)
 
 
-@app.put("/api/system-prompts/{id}")
-async def update_system_prompt(
-    id: str, body: ld.UpdateSystemPrompt, sess: AsyncSession = Depends(get_db_session)
-):
-    p = (
-        await sess.scalars(
-            select(db.SystemPromptTemplate).where(db.SystemPromptTemplate.id == id)
-        )
-    ).first()
-    if p is None:
+@app.put("/api/system-prompts/{slug}")
+async def update_system_prompt(slug: str, body: ld.UpdateSystemPrompt):
+    """Update an existing system prompt YAML file by slug."""
+    path = _PROMPTS_DIR / f"{slug}.yaml"
+    if not path.exists():
         raise HTTPException(404)
-    if body.name is not None:
-        p.name = body.name
-    if body.category is not None:
-        p.category = body.category
+    current = _load_prompt_file(path)
+    name = body.name if body.name is not None else current["name"]
+    category = body.category if body.category is not None else current["category"]
+    is_default = body.is_default if body.is_default is not None else current["is_default"]
+    content = body.content if body.content is not None else current["content"]
+    token_count = current["token_count"]
     if body.content is not None:
-        p.content = body.content
-        p.token_count = await _compute_prompt_token_count(body.content)
-    if body.is_default is not None:
-        p.is_default = body.is_default
+        token_count = await _compute_prompt_token_count(content)
+    _write_prompt_file(path, name, category, content, is_default, token_count)
+    return _load_prompt_file(path)
+
+
+@app.delete("/api/system-prompts/{slug}")
+async def delete_system_prompt(slug: str):
+    """Delete a system prompt YAML file by slug."""
+    path = _PROMPTS_DIR / f"{slug}.yaml"
+    if path.exists():
+        path.unlink()
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Agents (file-based — backend/agents/*.yaml)
+# ---------------------------------------------------------------------------
+
+_AGENTS_DIR = Path(__file__).parent / "agents"
+
+
+def _load_agent_file(path: Path) -> dict:
+    """Parse an agent YAML file and return its data dict for the API."""
+    import yaml as _yaml
+    data = _yaml.safe_load(path.read_text(encoding="utf-8"))
     return {
-        "id": p.id,
-        "name": p.name,
-        "category": p.category,
-        "content": p.content,
-        "is_default": p.is_default,
-        "token_count": p.token_count,
-        "created_at": p.created_at,
+        "name": data.get("name") or path.stem,
+        "description": data.get("description") or "",
+        "system_prompt": data.get("system_prompt") or "",
+        "tools": data.get("tools") or [],
+        "finish_tool": data.get("finish_tool") or "finish_task",
+        "max_iterations": data.get("max_iterations") or 5,
+        "inject_turn_reminders": bool(data.get("inject_turn_reminders")),
     }
 
 
-@app.delete("/api/system-prompts/{id}")
-async def delete_system_prompt(
-    id: str, sess: AsyncSession = Depends(get_db_session)
-):
-    await sess.execute(
-        delete(db.SystemPromptTemplate).where(db.SystemPromptTemplate.id == id)
-    )
+def _write_agent_file(path: Path, data: dict) -> None:
+    """Write an agent YAML file from the API data dict."""
+    import yaml as _yaml
+    path.write_text(_yaml.dump(data, allow_unicode=True, default_flow_style=False, sort_keys=False), encoding="utf-8")
+
+
+@app.get("/api/agents")
+async def list_agents():
+    """List all agent YAML files from backend/agents/."""
+    _AGENTS_DIR.mkdir(exist_ok=True)
+    return [_load_agent_file(f) for f in sorted(_AGENTS_DIR.glob("*.yaml"))]
+
+
+@app.post("/api/agents")
+async def create_agent(body: ld.NewAgent):
+    """Create a new agent YAML file. Filename is derived from the name."""
+    _AGENTS_DIR.mkdir(exist_ok=True)
+    slug = _slugify(body.name)
+    path = _AGENTS_DIR / f"{slug}.yaml"
+    if path.exists():
+        raise HTTPException(409, detail=f"Agent '{slug}' already exists")
+    data = {
+        "name": body.name,
+        "description": body.description,
+        "system_prompt": body.system_prompt,
+        "tools": body.tools,
+        "finish_tool": body.finish_tool,
+        "max_iterations": body.max_iterations,
+        "inject_turn_reminders": body.inject_turn_reminders,
+    }
+    _write_agent_file(path, data)
+    return _load_agent_file(path)
+
+
+@app.put("/api/agents/{name}")
+async def update_agent(name: str, body: ld.UpdateAgent):
+    """Update an existing agent YAML file."""
+    path = _AGENTS_DIR / f"{name}.yaml"
+    if not path.exists():
+        raise HTTPException(404)
+    current = _load_agent_file(path)
+    data = {
+        "name": body.name if body.name is not None else current["name"],
+        "description": body.description if body.description is not None else current["description"],
+        "system_prompt": body.system_prompt if body.system_prompt is not None else current["system_prompt"],
+        "tools": body.tools if body.tools is not None else current["tools"],
+        "finish_tool": body.finish_tool if body.finish_tool is not None else current["finish_tool"],
+        "max_iterations": body.max_iterations if body.max_iterations is not None else current["max_iterations"],
+        "inject_turn_reminders": body.inject_turn_reminders if body.inject_turn_reminders is not None else current["inject_turn_reminders"],
+    }
+    _write_agent_file(path, data)
+    return _load_agent_file(path)
+
+
+@app.delete("/api/agents/{name}")
+async def delete_agent(name: str):
+    """Delete an agent YAML file."""
+    path = _AGENTS_DIR / f"{name}.yaml"
+    if path.exists():
+        path.unlink()
     return ""
+
+
+@app.get("/api/finish-tools")
+async def list_finish_tools():
+    """List builtin finish tool names available for agents."""
+    from agent.workflow_loader import _BUILTIN_FINISH_TOOL_CLASSES
+    return list(_BUILTIN_FINISH_TOOL_CLASSES.keys())
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,51 @@
+<div class="flex gap-2">
+  <input class="field flex-1" placeholder="Name (becomes filename slug)"
+    [value]="form.name"
+    (input)="update({ name: $any($event.target).value })" />
+  <input class="field flex-1" placeholder="Description (optional)"
+    [value]="form.description"
+    (input)="update({ description: $any($event.target).value })" />
+</div>
+
+<textarea class="field font-mono" rows="8" placeholder="System prompt…"
+  [value]="form.system_prompt"
+  (input)="update({ system_prompt: $any($event.target).value })"></textarea>
+
+<div class="flex flex-col gap-1">
+  <span class="text-xs text-muted font-semibold uppercase tracking-wide">Tools</span>
+  <div class="flex flex-wrap gap-2">
+    @for (t of availableTools; track t) {
+      <label class="flex items-center gap-1 text-sm cursor-pointer">
+        <input type="checkbox" style="accent-color:#6366f1"
+          [checked]="isToolSelected(t)"
+          (change)="toggle(t)" />
+        {{ t }}
+      </label>
+    }
+  </div>
+</div>
+
+<div class="flex gap-2 flex-wrap">
+  <div class="flex flex-col gap-1 flex-1 min-w-40">
+    <label class="text-xs text-muted font-semibold uppercase tracking-wide">Finish tool</label>
+    <select class="field"
+      [value]="form.finish_tool"
+      (change)="update({ finish_tool: $any($event.target).value })">
+      @for (ft of availableFinishTools; track ft) { <option [value]="ft">{{ ft }}</option> }
+    </select>
+  </div>
+  <div class="flex flex-col gap-1 w-28">
+    <label class="text-xs text-muted font-semibold uppercase tracking-wide">Max iterations</label>
+    <input class="field" type="number" min="1" max="50"
+      [value]="form.max_iterations"
+      (input)="update({ max_iterations: +$any($event.target).value })" />
+  </div>
+  <div class="flex flex-col gap-1 justify-end pb-1">
+    <label class="flex items-center gap-2 text-sm cursor-pointer">
+      <input type="checkbox" style="accent-color:#6366f1; width:1rem; height:1rem"
+        [checked]="form.inject_turn_reminders"
+        (change)="update({ inject_turn_reminders: $any($event.target).checked })" />
+      Turn reminders
+    </label>
+  </div>
+</div>

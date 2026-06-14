@@ -1,5 +1,6 @@
 import { inject, Injectable } from '@angular/core'
 import {
+  AgentDefinition,
   AgentToolMeta,
   AgentToolsResponse,
   AppSetting,
@@ -127,6 +128,26 @@ export class ApiService {
 
   get_agent_tools() {
     return this.http.get<AgentToolsResponse>(`${BASE_URL}/agent/tools`)
+  }
+
+  get_agents() {
+    return this.http.get<AgentDefinition[]>(`${BASE_URL}/agents`)
+  }
+
+  create_agent(body: Omit<AgentDefinition, never>) {
+    return this.http.post<AgentDefinition>(`${BASE_URL}/agents`, body)
+  }
+
+  update_agent(name: string, body: Partial<AgentDefinition>) {
+    return this.http.put<AgentDefinition>(`${BASE_URL}/agents/${name}`, body)
+  }
+
+  delete_agent(name: string) {
+    return this.http.delete(`${BASE_URL}/agents/${name}`)
+  }
+
+  get_finish_tools() {
+    return this.http.get<string[]>(`${BASE_URL}/finish-tools`)
   }
 
   patch_message_token_count(msgId: string, tokenCount: number, tokenDelta?: number | null) {
