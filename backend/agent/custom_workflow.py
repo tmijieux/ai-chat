@@ -122,13 +122,16 @@ class CustomWorkflowOrchestrator:
         except _WorkflowAbort as exc:
             await session.emit({"type": "error", "message": str(exc)})
         except Exception as exc:
+            import traceback
+            full_tb = traceback.format_exc()
             logger.exception("[workflow:%s] unexpected error", self._workflow.name)
-            await session.emit({"type": "error", "message": str(exc)})
+            await session.emit({"type": "error", "message": full_tb})
 
     async def _run_workflow(
         self, session: AgentSession, user_message: str, messages: list[dict]
     ) -> None:
-        slots: dict[str, Any] = {"user_message": user_message}
+        effective_message = user_message if user_message.strip() != "" else f"/{self._workflow.name}"
+        slots: dict[str, Any] = {"user_message": effective_message}
         stages = self._workflow.stages
         stage_index = {s.name: i for i, s in enumerate(stages)}
         current = 0

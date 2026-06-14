@@ -322,7 +322,7 @@ export class ChatService {
     persist.then(() => {
       const convId = this._conversationId()
       this._subscribeToAgentEvents(userMsg.id)
-      const agentMode = workflowName !== undefined ? 'pipeline' : this._pipelineMode() ? 'pipeline' : 'classic'
+      const agentMode = workflowName !== undefined ? 'classic' : this._pipelineMode() ? 'pipeline' : 'classic'
       this.agentSvc.start(input, convId, userMsg.id, agentMode, workflowName)
     })
   }
