@@ -273,6 +273,7 @@ def _msg_dict(m: db.Message) -> dict:
         "log_message": m.log_message,
         "tool_calls": json.loads(m.tool_calls) if m.tool_calls else None,
         "is_degenerate": bool(m.is_degenerate),
+        "compressed_token_count": m.compressed_token_count,
     }
 
 
@@ -993,6 +994,18 @@ async def compress_conversation(
             msg.exclusion_reason = "compressed"
             msg.compressed_summary = c["compressed_summary"]
             msg.compression_label = c.get("compression_label")
+            try:
+                original = json.loads(msg.content or "{}")
+            except (json.JSONDecodeError, ValueError):
+                original = {}
+            compressed_content = json.dumps({
+                "tool": original.get("tool", "tool"),
+                "status": "compressed",
+                "summary": c["compressed_summary"],
+                "tool_call_id": original.get("tool_call_id", ""),
+            })
+            prepared = backend.prepare_messages([{"role": "tool", "content": compressed_content}])
+            msg.compressed_token_count = await backend.count_tokens(prepared, [])
 
     await sess.flush()
 

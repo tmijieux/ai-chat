@@ -94,7 +94,11 @@
             <div>Context: {{ msg().token_meta!.token_count | number: '1.0-0' }} / {{ CTX_LIMIT }} ({{ msg().token_meta!.token_pct }}%)</div>
           }
           @if (msg().token_meta!.token_delta != null) {
-            <div>This message: ~{{ msg().token_meta!.token_delta | number: '1.0-0' }} tokens</div>
+            @if (msg().compressed_token_count != null) {
+              <div>~{{ msg().token_meta!.token_delta | number: '1.0-0' }} tok → ~{{ msg().compressed_token_count | number: '1.0-0' }} tok compressed</div>
+            } @else {
+              <div>This message: ~{{ msg().token_meta!.token_delta | number: '1.0-0' }} tokens</div>
+            }
           }
         </div>
       </div>

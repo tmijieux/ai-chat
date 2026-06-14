@@ -423,7 +423,7 @@ async def _execute_tool_calls(
 
         if ctx_after > CTX_LIMIT:
             # Emit tool_result first so frontend saves it to DB before compressing.
-            await session.emit({"type": "tool_result", "tool_id": call_id, "tool_name": tool_name, "content": tool_output, "log_message": log_msg})
+            await session.emit({"type": "tool_result", "tool_id": call_id, "tool_name": tool_name, "content": tool_output, "log_message": log_msg, "ctx_tokens": ctx_after})
             await session.emit({"type": "compressing", "ctx_tokens": ctx_after, "ctx_limit": CTX_LIMIT})
             conv_id = await session.await_compression()
             if conv_id is not None and session.refresh_messages_callback is not None:
@@ -435,7 +435,7 @@ async def _execute_tool_calls(
                 return True
             continue
 
-        await session.emit({"type": "tool_result", "tool_id": call_id, "tool_name": tool_name, "content": tool_output, "log_message": log_msg})
+        await session.emit({"type": "tool_result", "tool_id": call_id, "tool_name": tool_name, "content": tool_output, "log_message": log_msg, "ctx_tokens": ctx_after})
 
     return False
 
@@ -501,11 +501,13 @@ async def chat_with_tools(
     if finished_without_response:
         logger.warning("Agent finished without response: no content, no tool calls")
 
+    message_appended = False
     if len(message["content"]) > 0:
         messages[:] = [m for m in messages if not m.get("_transient")]
         if len(tool_calls) > 0:
             message["tool_calls"] = tool_calls
         messages.append(message)
+        message_appended = True
     elif len(message["thinking"]) > 0 or len(tool_calls) > 0:
         # Strip embedded <tool_call> blocks from thinking stored in context — the model already
         # sees them as tool_calls entries, keeping the raw XML would confuse it.
@@ -515,6 +517,11 @@ async def chat_with_tools(
             "content": f"<think>{thinking_for_context}</think>",
             "tool_calls": tool_calls,
         })
+        message_appended = True
+
+    if message_appended:
+        ctx_after_gen = await _track_tokens(messages, tools, session, "context after generation")
+        await session.emit({"type": "generation_end", "ctx_tokens": ctx_after_gen})
 
     if len(tool_calls) > 0:
         overflow = await _execute_tool_calls(tool_calls, messages, session, tools, working_directory, extra_tools)

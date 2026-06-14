@@ -32,6 +32,7 @@ export type Message = {
   exclusion_reason?: string | null
   compressed_summary?: string | null
   compression_label?: string | null
+  compressed_token_count?: number | null
   log_message?: string | null
   tool_calls?: ToolCallEntry[] | null
   created_at?: string
@@ -162,7 +163,8 @@ export type AgentEvent = (
   | { type: 'tool_confirm'; tool_id: string; tool_name: string; arguments: Record<string, unknown>; preview: string; diff_lines?: DiffLine[] }
   | { type: 'tool_evaluating'; tool_id: string; tool_name: string }
   | { type: 'tool_auto_approved'; tool_id: string }
-  | { type: 'tool_result'; tool_id: string; tool_name: string; content: string; log_message?: string }
+  | { type: 'tool_result'; tool_id: string; tool_name: string; content: string; log_message?: string; ctx_tokens?: number }
+  | { type: 'generation_end'; ctx_tokens: number }
   | { type: 'iteration_end'; prompt_tokens: number; response_tokens: number }
   | { type: 'ctx_update' | 'compressing'; ctx_tokens: number }
   | { type: 'plan_proposal'; plan_id: string; plan: string }
@@ -247,6 +249,7 @@ export type DisplayMessage =
       content: string
       compressed_summary?: string | null
       compression_label?: string | null
+      compressed_token_count?: number | null
       token_count?: number | null
       token_delta?: number | null
       context_excluded?: boolean

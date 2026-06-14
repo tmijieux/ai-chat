@@ -418,11 +418,10 @@ export class ChatService {
     let pendingContentText = ''
     let pendingToolCalls: ToolCallEntry[] = []
 
-    // Token counts are patched immediately on each tool_result using the ctx_update
-    // that the backend always emits just before it. The user message is patched on the
-    // very first ctx_update (before the first LLM generation).
     let patchedUserMessage = false
     let lastKnownCtxTokens = 0
+    // Set on generation_end; consumed and cleared in stopStreamingTheAssistantMessageSaveItAndClearIt.
+    let capturedGenerationCtxTokens: number | null = null
 
     let saveQueue: Promise<void> = Promise.resolve()
     const enqueue = (fn: () => Promise<unknown>) => {
@@ -443,18 +442,34 @@ export class ChatService {
       })
     }
 
-    const saveAssistant = (id: string, content: string, thinking: string, toolCalls: ToolCallEntry[]) => {
-      enqueue(() =>
-        firstValueFrom(
+    const saveAssistant = (id: string, content: string, thinking: string, toolCalls: ToolCallEntry[], tokenCount: number | null = null) => {
+      enqueue(async () => {
+        let tokenDelta: number | null = null
+        if (tokenCount !== null) {
+          const currentMsgs = this._messages()
+          const idx = currentMsgs.findIndex((m) => m.id === id)
+          if (idx >= 0) {
+            const prevCount = this._findCumulativeTokenCountOfClosestPrecedingMessageThatHasOne(currentMsgs, idx)
+            tokenDelta = prevCount !== null ? tokenCount - prevCount : null
+            this._messages.update((msgs) =>
+              msgs.map((m) =>
+                m.id === id && m.kind === 'assistant' ? { ...m, token_count: tokenCount, token_delta: tokenDelta } : m,
+              ),
+            )
+          }
+        }
+        await firstValueFrom(
           this.api.post_message(conv.id, {
             id,
             role: 'assistant',
             content,
-            thinking: thinking || undefined,
+            thinking: thinking !== '' ? thinking : undefined,
             tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+            token_count: tokenCount ?? undefined,
+            token_delta: tokenDelta ?? undefined,
           }),
-        ),
-      )
+        )
+      })
     }
 
     const markThinkingMessageAsDoneAndClearIt = () => {
@@ -469,7 +484,7 @@ export class ChatService {
       idOfCurrentlyStreamingThinkingMessage = null
     }
 
-    const stopStreamingTheAssistantMessageSaveItAndClearIt = () => {
+    const stopStreamingTheAssistantMessageSaveItAndClearIt = (tokenCount: number | null = null) => {
       if (!idOfCurrentlyStreamingAssistantMessage) return
       this._messages.update((msgs) =>
         msgs.map((m) =>
@@ -492,7 +507,7 @@ export class ChatService {
           m.id === id && m.kind === 'assistant' ? { ...m, tool_calls: toolCalls.length > 0 ? toolCalls : undefined } : m,
         ),
       )
-      saveAssistant(id, content, thinking, toolCalls)
+      saveAssistant(id, content, thinking, toolCalls, tokenCount)
     }
 
     this._agentEventSub = this.agentSvc.events$.subscribe((event) => {
@@ -582,6 +597,7 @@ export class ChatService {
         const resultId = `result-${event.tool_id}`
         const resultContent = event.content ?? ''
         const logMessage = event.log_message ?? null
+        const toolTokenCount = event.ctx_tokens ?? lastKnownCtxTokens
         this._messages.update((msgs) => [
           ...msgs,
           {
@@ -590,24 +606,13 @@ export class ChatService {
             tool_name: event.tool_name ?? '',
             log_message: logMessage,
             content: resultContent,
+            token_count: toolTokenCount,
           },
         ])
-        // Patch token count immediately — the backend always emits ctx_update just before
-        // tool_result, so lastKnownCtxTokens is already the post-result context size.
-        const capturedTokens = lastKnownCtxTokens
-        enqueue(async () => {
-          const currentMsgs = this._messages()
-          const idx = currentMsgs.findIndex((m) => m.id === resultId)
-          const prevCount = this._findCumulativeTokenCountOfClosestPrecedingMessageThatHasOne(currentMsgs, idx)
-          const tokenDelta = prevCount !== null ? capturedTokens - prevCount : null
-          await firstValueFrom(this.api.patch_message_token_count(resultId, capturedTokens, tokenDelta))
-          this._messages.update((msgs) =>
-            msgs.map((m) =>
-              m.id === resultId ? { ...m, token_count: capturedTokens, token_delta: tokenDelta } : m,
-            ),
-          )
-        })
-        stopStreamingTheAssistantMessageSaveItAndClearIt()
+        // Capture and clear before stopStreaming so any thinking-only saveAssistant also gets it.
+        const tokenCountForThisIteration = capturedGenerationCtxTokens
+        capturedGenerationCtxTokens = null
+        stopStreamingTheAssistantMessageSaveItAndClearIt(tokenCountForThisIteration)
         // If there was no streaming assistant message (thinking → tool with no text content),
         // pendingToolCalls was never cleared. Attach them to the thinking bubble they belong to.
         if (pendingToolCalls.length > 0) {
@@ -625,28 +630,45 @@ export class ChatService {
           if (pendingThinkingContent) {
             const thinking = pendingThinkingContent
             pendingThinkingContent = ''
-            saveAssistant(crypto.randomUUID(), '', thinking, orphanedToolCalls)
+            saveAssistant(crypto.randomUUID(), '', thinking, orphanedToolCalls, tokenCountForThisIteration)
           }
         } else if (pendingThinkingContent) {
           const thinking = pendingThinkingContent
           pendingThinkingContent = ''
-          saveAssistant(crypto.randomUUID(), '', thinking, [])
+          saveAssistant(crypto.randomUUID(), '', thinking, [], tokenCountForThisIteration)
         }
-        enqueue(() =>
-          firstValueFrom(
+        // token_count is included in the POST; delta computed in the callback after the
+        // assistant POST has run and updated in-memory token_count on the preceding message.
+        enqueue(async () => {
+          const currentMsgs = this._messages()
+          const idx = currentMsgs.findIndex((m) => m.id === resultId)
+          const prevCount = this._findCumulativeTokenCountOfClosestPrecedingMessageThatHasOne(currentMsgs, idx)
+          const tokenDelta = prevCount !== null ? toolTokenCount - prevCount : null
+          this._messages.update((msgs) =>
+            msgs.map((m) =>
+              m.id === resultId ? { ...m, token_delta: tokenDelta } : m,
+            ),
+          )
+          await firstValueFrom(
             this.api.post_message(conv.id, {
               id: resultId,
               role: 'tool',
               content: resultContent,
               log_message: logMessage,
+              token_count: toolTokenCount,
+              token_delta: tokenDelta ?? undefined,
             }),
-          ),
-        )
+          )
+        })
+      } else if (event.type === 'generation_end') {
+        capturedGenerationCtxTokens = event.ctx_tokens
       } else if (event.type === 'iteration_end') {
         const tokens = event.prompt_tokens ?? 0
         this._promptTokens.set(tokens)
         markThinkingMessageAsDoneAndClearIt()
-        stopStreamingTheAssistantMessageSaveItAndClearIt()
+        const tokenCountForIteration = capturedGenerationCtxTokens
+        capturedGenerationCtxTokens = null
+        stopStreamingTheAssistantMessageSaveItAndClearIt(tokenCountForIteration)
       } else if (event.type === 'plan_proposal') {
         this._messages.update((msgs) => [
           ...msgs,
@@ -751,7 +773,6 @@ export class ChatService {
               ),
             )
           }
-          enqueue(() => this._computeTokenCountForLastMessage())
           enqueue(() => this._compressConversation())
           // Reload from DB to get has_children and sibling metadata, which are only computed
           // server-side and are not available on display messages created during the agent run.
@@ -868,6 +889,7 @@ export class ChatService {
           content: m.content,
           compressed_summary: m.compressed_summary ?? null,
           compression_label: m.compression_label ?? null,
+          compressed_token_count: m.compressed_token_count ?? null,
           token_count: m.token_count,
           token_delta: m.token_delta,
           context_excluded: m.context_excluded,
@@ -934,38 +956,6 @@ export class ChatService {
         ...(imageIds.length > 0 ? { image_ids: imageIds } : {}),
       }),
     )
-  }
-
-  private async _computeTokenCountForLastMessage(): Promise<void> {
-    const id = this._conversationId()
-    if (!id) {
-      return
-    }
-    const msgs = this._messages()
-    const lastIdx = msgs.length - 1
-    const last = msgs[lastIdx]
-    if (!last) {
-      return
-    }
-    const prevCount = this._findCumulativeTokenCountOfClosestPrecedingMessageThatHasOne(
-      msgs,
-      lastIdx,
-    )
-    const result = await firstValueFrom(this.api.compute_conversation_token_count(id))
-    this._promptTokens.set(result.token_count)
-    const delta = prevCount !== null ? result.token_count - prevCount : null
-    await firstValueFrom(this.api.patch_message_token_count(last.id, result.token_count, delta))
-    this._messages.update((msgs) => {
-      const copy = [...msgs]
-      const last = copy[copy.length - 1]
-      if (!last) {
-        return copy
-      }
-      if (last.kind === 'user' || last.kind === 'assistant' || last.kind === 'tool_result') {
-        copy[copy.length - 1] = { ...last, token_count: result.token_count, token_delta: delta }
-      }
-      return copy
-    })
   }
 
   private _prependSystemPrompt(messages: MessageForQuery[]): MessageForQuery[] {
