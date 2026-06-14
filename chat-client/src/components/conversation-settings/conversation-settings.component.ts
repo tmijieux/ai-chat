@@ -3,6 +3,7 @@ import { FormsModule } from '@angular/forms'
 import { ApiService } from '../../services/api.service'
 import { ChatService } from '../../services/chat.service'
 import {
+  ConversationMode,
   ConversationSettings,
   SystemPromptTemplate,
 } from '../../types/message-types'
@@ -64,6 +65,10 @@ export class ConversationSettingsComponent implements OnInit {
 
   setPrompt(promptId: string) {
     this.save({ active_prompt_id: promptId === '' ? null : promptId })
+  }
+
+  setMode(mode: ConversationMode) {
+    this.save({ mode })
   }
 
   setWorkingDirectory(dir: string) {
