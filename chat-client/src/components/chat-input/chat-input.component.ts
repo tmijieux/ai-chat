@@ -233,6 +233,7 @@ export class ChatInputComponent implements AfterViewInit {
     }
 
     if (!messageText && this.pendingImages().length === 0) {
+      this.currentInput.set('')
       return
     }
     const imageIds = this.pendingImages()
