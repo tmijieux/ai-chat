@@ -9,7 +9,7 @@ const BLANK_FORM: AgentForm = {
   system_prompt: '',
   tools: [],
   finish_tool: 'finish_task',
-  max_iterations: 5,
+  max_iterations: null,
   inject_turn_reminders: false,
 }
 
@@ -72,7 +72,7 @@ export class AgentsListComponent implements OnInit {
       system_prompt: a.system_prompt,
       tools: [...a.tools],
       finish_tool: a.finish_tool,
-      max_iterations: a.max_iterations,
+      max_iterations: a.max_iterations ?? null,
       inject_turn_reminders: a.inject_turn_reminders,
     })
     this.editingName.set(a.name)

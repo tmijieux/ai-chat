@@ -172,15 +172,20 @@ async def _run_stage_loop(
     extra_tools: dict,
     working_directory: str | None,
     stage_name: str,
-    max_iterations: int = MAX_STAGE_ITERATIONS,
+    max_iterations: int | None = None,
     numbered_name: str | None = None,
     inject_turn_reminders: bool = False,
     finish_tool_schema: dict | None = None,
 ) -> None:
-    """Inner loop for a pipeline stage. Stops when the finish tool is called or no more tool calls."""
+    """Inner loop for a pipeline stage. Stops when the finish tool is called or no more tool calls.
+
+    max_iterations=None means unlimited — the loop runs until the finish tool is called or
+    the model stops generating tool calls.
+    """
     display_name = numbered_name or stage_name
-    for iteration in range(max_iterations):
-        is_last_turn = (iteration == max_iterations - 1)
+    iteration = 0
+    while max_iterations is None or iteration < max_iterations:
+        is_last_turn = (max_iterations is not None and iteration == max_iterations - 1)
         active_schemas = [finish_tool_schema] if (is_last_turn and finish_tool_schema is not None) else tool_schemas
         done, _ = await chat_with_tools(
             stage_messages, sub_session, active_schemas, working_directory, extra_tools=extra_tools
@@ -194,7 +199,7 @@ async def _run_stage_loop(
                 iteration,
             )
             break
-        if inject_turn_reminders:
+        if inject_turn_reminders and max_iterations is not None:
             turns_used = iteration + 1
             turns_left = max_iterations - turns_used
             if turns_left == 0:
@@ -206,6 +211,7 @@ async def _run_stage_loop(
             else:
                 reminder = f"[Turn {turns_used}/{max_iterations} complete. {turns_left} turns remaining.]"
             stage_messages.append({"role": "user", "content": reminder})
+        iteration += 1
     else:
         logger.warning("[pipeline:%s] max iterations (%d) reached without calling finish tool", display_name, max_iterations)
         await sub_session.emit({"type": "error", "message": f"[pipeline:{display_name}] max iterations ({max_iterations}) reached without calling finish tool"})
@@ -219,7 +225,7 @@ async def run_stage(
     finish_tool,
     parent_session: AgentSession,
     working_directory: str | None,
-    max_iterations: int = MAX_STAGE_ITERATIONS,
+    max_iterations: int | None = None,
     inject_turn_reminders: bool = False,
 ) -> dict:
     """

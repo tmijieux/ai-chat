@@ -74,7 +74,7 @@ class NewAgent(BaseModel):
     system_prompt: str
     tools: list[str] = []
     finish_tool: str = "finish_task"
-    max_iterations: int = 5
+    max_iterations: int | None = None
     inject_turn_reminders: bool = False
 
 

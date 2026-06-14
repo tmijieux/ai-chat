@@ -115,7 +115,7 @@ export type AgentDefinition = {
   system_prompt: string
   tools: string[]
   finish_tool: string
-  max_iterations: number
+  max_iterations: number | null
   inject_turn_reminders: boolean
 }
 

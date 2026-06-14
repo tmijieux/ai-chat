@@ -809,7 +809,7 @@ def _load_agent_file(path: Path) -> dict:
         "system_prompt": data.get("system_prompt") or "",
         "tools": data.get("tools") or [],
         "finish_tool": data.get("finish_tool") or "finish_task",
-        "max_iterations": data.get("max_iterations") or 5,
+        "max_iterations": data.get("max_iterations") if data.get("max_iterations") is not None else None,
         "inject_turn_reminders": bool(data.get("inject_turn_reminders")),
     }
 

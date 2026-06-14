@@ -1,11 +1,10 @@
-<div class="flex gap-2">
-  <input class="field flex-1" placeholder="Name (becomes filename slug)"
-    [value]="form.name"
-    (input)="update({ name: $any($event.target).value })" />
-  <input class="field flex-1" placeholder="Description (optional)"
-    [value]="form.description"
-    (input)="update({ description: $any($event.target).value })" />
-</div>
+<input class="field w-full" placeholder="Name (becomes filename slug)"
+  [value]="form.name"
+  (input)="update({ name: $any($event.target).value })" />
+
+<input class="field w-full" placeholder="Description (optional)"
+  [value]="form.description"
+  (input)="update({ description: $any($event.target).value })" />
 
 <textarea class="field font-mono" rows="8" placeholder="System prompt…"
   [value]="form.system_prompt"
@@ -34,11 +33,13 @@
       @for (ft of availableFinishTools; track ft) { <option [value]="ft">{{ ft }}</option> }
     </select>
   </div>
-  <div class="flex flex-col gap-1 w-28">
-    <label class="text-xs text-muted font-semibold uppercase tracking-wide">Max iterations</label>
-    <input class="field" type="number" min="1" max="50"
-      [value]="form.max_iterations"
-      (input)="update({ max_iterations: +$any($event.target).value })" />
+  <div class="flex flex-col gap-1 w-40">
+    <label class="text-xs text-muted font-semibold uppercase tracking-wide">
+      Max iterations <span class="text-muted">(empty = unlimited)</span>
+    </label>
+    <input class="field" type="number" min="1" max="1000" placeholder="∞"
+      [value]="form.max_iterations ?? ''"
+      (input)="update({ max_iterations: $any($event.target).value === '' ? null : +$any($event.target).value })" />
   </div>
   <div class="flex flex-col gap-1 justify-end pb-1">
     <label class="flex items-center gap-2 text-sm cursor-pointer">

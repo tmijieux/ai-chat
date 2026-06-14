@@ -52,7 +52,7 @@
           <div class="flex items-center gap-2 flex-wrap">
             <span class="font-semibold">{{ a.name }}</span>
             <span class="badge badge-neutral">{{ a.finish_tool }}</span>
-            <span class="text-xs text-muted">{{ a.max_iterations }} iters</span>
+            <span class="text-xs text-muted">{{ a.max_iterations ?? '∞' }} iters</span>
             @for (t of a.tools; track t) {
               <span class="badge badge-neutral text-xs">{{ t }}</span>
             }

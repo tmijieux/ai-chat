@@ -41,7 +41,7 @@ class AgentDefinition:
     tools: list[str]
     finish_tool_name: str
     input_schema: dict[str, dict]
-    max_iterations: int = 5
+    max_iterations: int | None = None
     inject_turn_reminders: bool = False
 
 
@@ -66,7 +66,7 @@ class WorkflowStageDefinition:
     tools: list[str] = field(default_factory=list)
     agents: list[str] = field(default_factory=list)
     finish_tool_name: str = "finish_task"
-    max_iterations: int = 12
+    max_iterations: int | None = None
     inject_turn_reminders: bool = False
 
     # coordinator fields
@@ -147,7 +147,7 @@ def _parse_stage(data: dict, finish_tool_classes: dict[str, type[BaseFinishTool]
             tools=data.get("tools") or [],
             agents=data.get("agents") or [],
             finish_tool_name=finish_tool_name,
-            max_iterations=data.get("max_iterations") or 12,
+            max_iterations=data.get("max_iterations") if data.get("max_iterations") is not None else None,
             inject_turn_reminders=bool(data.get("inject_turn_reminders")),
             condition=data.get("condition") or "",
         )
@@ -252,6 +252,6 @@ def load_agent(path: Path) -> AgentDefinition:
         tools=data.get("tools") or [],
         finish_tool_name=data.get("finish_tool") or "finish_task",
         input_schema=data.get("input") or {},
-        max_iterations=data.get("max_iterations") or 5,
+        max_iterations=data.get("max_iterations") if data.get("max_iterations") is not None else None,
         inject_turn_reminders=bool(data.get("inject_turn_reminders")),
     )
