@@ -174,24 +174,38 @@ _REPORT_CLASSIFICATION_TOOL = {
         "parameters": {
             "type": "object",
             "properties": {
-                "labels": {
-                    "type": "object",
-                    "description": 'Map of index (as string) to one of: "drop", "1-line-summary", "summarize", "keep".',
-                },
-                "reasonings": {
-                    "type": "object",
-                    "description": "Map of index (as string) to a one-sentence explanation of why that label was chosen.",
-                },
-                "line_summaries": {
-                    "type": "object",
-                    "description": 'Map of index (as string) to a one-line factual summary. Only for items labelled "1-line-summary".',
+                "classifications": {
+                    "type": "array",
+                    "description": "One entry per tool call, in any order.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {
+                                "type": "string",
+                                "description": "The id of the tool result being classified (copy it verbatim from the input).",
+                            },
+                            "label": {
+                                "type": "string",
+                                "enum": ["drop", "1-line-summary", "summarize", "keep"],
+                            },
+                            "reason": {
+                                "type": "string",
+                                "description": "One sentence explaining why this label was chosen for this specific tool result.",
+                            },
+                            "line_summary": {
+                                "type": "string",
+                                "description": 'Required when label is "1-line-summary". One factual line: specific names, numbers, paths. No prose.',
+                            },
+                        },
+                        "required": ["id", "label", "reason"],
+                    },
                 },
                 "summary": {
                     "type": "string",
                     "description": "One sentence describing what the agent accomplished (or is trying to accomplish for mid-run compression).",
                 },
             },
-            "required": ["labels", "reasonings", "summary"],
+            "required": ["classifications", "summary"],
         },
     },
 }
@@ -225,7 +239,7 @@ Assign exactly one label per tool call:
                     The orchestrator keeps only a metadata stub (tool + status).
 
   1-line-summary  — result is consumed but one factual line is worth preserving.
-                    Write the summary yourself in "line_summaries[index]".
+                    Write the summary yourself in the "line_summary" field.
                     One line, facts only — specific names, numbers, paths. No prose.
                     Examples:
                       grep  → "matched in src/auth.ts:42 and src/user.ts:87 (3 files total)"
@@ -249,16 +263,18 @@ Example input:
 User goal: "add a new route to the app config"
 Tool calls:
 [
-  {"index": 0, "tool": "glob_files", "args_summary": "'**/*.config.ts'", "result_metadata": {"file_count": 3}, "following_thinking": "Found 3 files. Let me read the right one."},
-  {"index": 1, "tool": "read_file",  "args_summary": "'src/app/app.config.ts'",  "result_metadata": {"line_count": 42}, "following_thinking": "provideRouter is called with the routes array — I need to add the new route here."},
-  {"index": 2, "tool": "grep_files", "args_summary": "'provideRouter'",           "result_metadata": {"match_count": 1}, "following_thinking": "Found it at line 18. I will edit the file now."}
+  {"id": "msg_a1b2", "tool": "glob_files", "args_summary": "'**/*.config.ts'", "result_metadata": {"file_count": 3}, "following_thinking": "Found 3 files. Let me read the right one."},
+  {"id": "msg_c3d4", "tool": "read_file",  "args_summary": "'src/app/app.config.ts'",  "result_metadata": {"line_count": 42}, "following_thinking": "provideRouter is called with the routes array — I need to add the new route here."},
+  {"id": "msg_e5f6", "tool": "grep_files", "args_summary": "'provideRouter'",           "result_metadata": {"match_count": 1}, "following_thinking": "Found it at line 18. I will edit the file now."}
 ]
 
 Example report_classification call:
-  labels:        {"0": "drop", "1": "summarize", "2": "1-line-summary"}
-  reasonings:    {"0": "Glob used only for navigation — agent moved on immediately.", "1": "Agent needs the file structure but not verbatim lines.", "2": "Single fact worth preserving — exact location already noted."}
-  line_summaries: {"2": "provideRouter call at src/app/app.config.ts:18"}
-  summary:       "Agent located the route config and is about to add the new route."\
+  classifications: [
+    {"id": "msg_a1b2", "label": "drop",           "reason": "Glob used only for navigation — agent moved on immediately."},
+    {"id": "msg_c3d4", "label": "summarize",       "reason": "Agent needs the file structure but not verbatim lines."},
+    {"id": "msg_e5f6", "label": "1-line-summary",  "reason": "Single fact worth preserving — exact location already noted.", "line_summary": "provideRouter call at src/app/app.config.ts:18"}
+  ]
+  summary: "Agent located the route config and is about to add the new route."\
 """
 
 _CLASSIFY_SYSTEM_POST_RUN = f"""\
@@ -315,7 +331,10 @@ async def _classify_and_summarize(
     system = _CLASSIFY_SYSTEM_MID_RUN if is_mid_run else _CLASSIFY_SYSTEM_POST_RUN
     conv_line = f"Conversation so far: {conversation_summary}\n" if conversation_summary else ""
     llm_pairs = [
-        {k: v for k, v in p.items() if k not in ("message_id", "tool_call_id")}
+        {
+            "id": p["message_id"],
+            **{k: v for k, v in p.items() if k not in ("index", "message_id", "tool_call_id")},
+        }
         for p in pairs
     ]
 
@@ -334,20 +353,32 @@ Tool calls:
     if not parsed:
         logger.warning("compress classify: empty result — defaulting all to drop")
         return ClassifyResult(
-            labels={str(i): "drop" for i in range(len(pairs))},
+            labels={p["message_id"]: "drop" for p in pairs},
             line_summaries={},
             reasonings={},
             conversation_summary=conversation_summary or "",
         )
 
-    labels = {str(k): str(v) for k, v in (parsed.get("labels") or {}).items()}
-    reasonings = {str(k): str(v) for k, v in (parsed.get("reasonings") or {}).items()}
-    line_summaries = {str(k): str(v) for k, v in (parsed.get("line_summaries") or {}).items()}
+    labels: dict[str, str] = {}
+    reasonings: dict[str, str] = {}
+    line_summaries: dict[str, str] = {}
+    for item in parsed.get("classifications") or []:
+        message_id = str(item.get("id", ""))
+        if message_id == "":
+            continue
+        labels[message_id] = str(item.get("label", "drop"))
+        reason = str(item.get("reason", "")).strip()
+        if reason != "":
+            reasonings[message_id] = reason
+        line_summary = str(item.get("line_summary", "")).strip()
+        if line_summary != "":
+            line_summaries[message_id] = line_summary
+
     summary = str(parsed.get("summary", ""))
     logger.info("classify summary: %s", summary[:120])
-    for index, label in sorted(labels.items()):
-        reason = reasonings.get(index, "")
-        logger.info("  [%s] %s — %s", index, label, reason[:100])
+    for message_id, label in labels.items():
+        reason = reasonings.get(message_id, "")
+        logger.info("  [%s] %s — %s", message_id, label, reason[:100])
     return ClassifyResult(
         labels=labels,
         line_summaries=line_summaries,
@@ -606,14 +637,14 @@ async def compress_messages(
     new_summary = classify.conversation_summary
 
     if protect_last and pairs:
-        last_key = str(pairs[-1]["index"])
+        last_key = pairs[-1]["message_id"]
         if labels.get(last_key) in ("drop", "1-line-summary"):
             labels[last_key] = "summarize"
 
     compressions: list[dict[str, str]] = []
 
     for p in pairs:
-        label = labels.get(str(p["index"]), "drop")
+        label = labels.get(p["message_id"], "drop")
         msg = candidate_messages[p["index"]]
         try:
             result = json.loads(msg.get("content") or "{}")
@@ -629,7 +660,7 @@ async def compress_messages(
             p["index"], tool, label, content_len,
         )
 
-        reasoning = reasonings.get(str(p["index"]), "").strip()
+        reasoning = reasonings.get(p["message_id"], "").strip()
 
         if label == "drop":
             compressed_summary = _compact_summary(result)
@@ -638,7 +669,7 @@ async def compress_messages(
             logger.info("drop → compact: %s", compressed_summary)
 
         elif label == "1-line-summary":
-            provided = line_summaries.get(str(p["index"]), "").strip()
+            provided = line_summaries.get(p["message_id"], "").strip()
             if provided != "":
                 compressed_summary = f"{_compact_summary(result)} — {provided}"
             else:
