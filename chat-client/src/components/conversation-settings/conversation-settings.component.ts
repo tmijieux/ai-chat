@@ -38,6 +38,13 @@ export class ConversationSettingsComponent implements OnInit {
   })
   readonly pickerOpen = signal(false)
 
+  readonly MODES: { value: ConversationMode; label: string }[] = [
+    { value: 'standard', label: 'Standard' },
+    { value: 'auto',     label: 'Auto' },
+    { value: 'plan',     label: 'Plan' },
+    { value: 'yolo',     label: 'YOLO' },
+  ]
+
   ngOnInit() {
     this.api.get_system_prompts().subscribe((p) => this.prompts.set(p))
   }

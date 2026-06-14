@@ -12,14 +12,14 @@
     <section>
       <h3 class="text-xs font-semibold text-muted" style="text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem">Mode</h3>
       <div class="flex gap-1">
-        @for (m of ([['standard','Standard'],['auto','Auto'],['plan','Plan'],['yolo','YOLO']]); track m[0]) {
+        @for (m of MODES; track m.value) {
           <button
             class="flex-1 py-1.5 text-xs font-semibold rounded transition-all"
-            [style]="settings().mode === m[0]
+            [style]="settings().mode === m.value
               ? 'background:#4f46e5; color:white; border:1px solid #4f46e5'
               : 'background:#1e3a5f; color:#94a3b8; border:1px solid #334155'"
-            (click)="setMode($any(m[0]))"
-          >{{ m[1] }}</button>
+            (click)="setMode(m.value)"
+          >{{ m.label }}</button>
         }
       </div>
     </section>
