@@ -340,6 +340,96 @@ def _log_context(messages: list[dict[str, Any]]) -> None:
     print("=" * 40)
 
 
+def _parse_tool_calls(tool_calls_acc: dict[int, dict], message: dict) -> list[dict]:
+    """Build the tool_calls list from streamed fragments, with thinking-block recovery fallback."""
+    tool_calls: list[dict] = []
+    for acc in (tool_calls_acc[i] for i in sorted(tool_calls_acc)):
+        try:
+            arguments = json.loads(acc["arguments_str"]) if acc["arguments_str"] else {}
+        except json.JSONDecodeError:
+            logger.warning("Malformed tool call arguments for %s, skipping: %r", acc["name"], acc["arguments_str"])
+            continue
+        tool_calls.append({"id": acc["id"], "function": {"name": acc["name"], "arguments": arguments}})
+
+    # Recover tool calls embedded in thinking when the model forgot to close </think> first.
+    # Only attempt recovery when both regular content and stream-parsed tool calls are absent.
+    if len(tool_calls) == 0 and len(message["content"]) == 0 and len(message["thinking"]) > 0:
+        recovered = _extract_tool_calls_from_thinking(message["thinking"])
+        if recovered:
+            logger.warning("Recovering %d tool call(s) embedded in thinking block", len(recovered))
+            tool_calls = recovered
+
+    return tool_calls
+
+
+async def _execute_tool_calls(
+    tool_calls: list[dict],
+    messages: list[dict[str, Any]],
+    session: "AgentSession",
+    tools: list[dict],
+    working_directory: str | None,
+    extra_tools: dict | None,
+) -> bool:
+    """Execute each tool call, append results to messages, and handle mid-run compression.
+
+    Returns True when context overflows even after compression (caller should abort).
+    Mutates messages in place.
+    """
+    ctx_before = await backend.count_tokens(backend.prepare_messages(messages), tools)
+    print(f"[tokens] context before tool execution: {ctx_before}/{CTX_LIMIT}")
+    await session.emit({"type": "ctx_update", "ctx_tokens": ctx_before})
+
+    effective_registry = {**TOOL_REGISTRY, **(extra_tools if extra_tools is not None else {})}
+
+    for tool_call in tool_calls:
+        tool_name: str = tool_call.get("function", {}).get("name", "")
+        tool_args: dict = tool_call.get("function", {}).get("arguments", {})
+        call_id: str = tool_call.get("id", f"tc-{id(tool_call)}")
+
+        # Recovered tool calls never got a tool_call_start during streaming — emit it now.
+        if tool_call.get("_recovered"):
+            await session.emit({"type": "tool_call_start", "tool_id": call_id, "tool_name": tool_name})
+
+        await session.emit({"type": "tool_call", "tool_id": call_id, "tool_name": tool_name, "arguments": tool_args})
+
+        if tool_name not in effective_registry:
+            result_dict: dict = {"tool": tool_name, "status": "error", "error": {"message": f"Unknown tool: {tool_name}"}}
+            log_msg = None
+        else:
+            tool_instance = effective_registry[tool_name]
+            result_dict = await tool_instance.execute(tool_args, session, working_directory)
+            result_dict = await _maybe_preshrink_tool_output(tool_name, result_dict, working_directory)
+            log_msg = tool_instance.label(tool_args)
+
+        result_dict["tool_call_id"] = call_id
+        tool_output = json.dumps(result_dict)
+        messages.append({"role": "tool", "name": tool_name, "content": tool_output})
+
+        ctx_after = await backend.count_tokens(backend.prepare_messages(messages), tools)
+        print(f"[tokens] context after tool result '{tool_name}': {ctx_after}/{CTX_LIMIT}")
+        await session.emit({"type": "ctx_update", "ctx_tokens": ctx_after})
+
+        if ctx_after > CTX_LIMIT:
+            # Emit tool_result first so frontend saves it to DB before compressing.
+            await session.emit({"type": "tool_result", "tool_id": call_id, "tool_name": tool_name, "content": tool_output, "log_message": log_msg})
+            await session.emit({"type": "compressing", "ctx_tokens": ctx_after, "ctx_limit": CTX_LIMIT})
+            conv_id = await session.await_compression()
+            if conv_id is not None and session.refresh_messages_callback is not None:
+                refreshed = await session.refresh_messages_callback(conv_id)
+                messages[:] = refreshed
+            ctx_after_compress = await backend.count_tokens(backend.prepare_messages(messages), tools)
+            print(f"[tokens] context after compression: {ctx_after_compress}/{CTX_LIMIT}")
+            await session.emit({"type": "ctx_update", "ctx_tokens": ctx_after_compress})
+            if ctx_after_compress > CTX_LIMIT:
+                await session.emit({"type": "error", "message": f"Context still exceeds limit after compression: {ctx_after_compress}/{CTX_LIMIT} tokens"})
+                return True
+            continue
+
+        await session.emit({"type": "tool_result", "tool_id": call_id, "tool_name": tool_name, "content": tool_output, "log_message": log_msg})
+
+    return False
+
+
 async def chat_with_tools(
     messages: list[dict[str, Any]],
     session: AgentSession,
@@ -397,29 +487,7 @@ async def chat_with_tools(
         await session.emit({"type": "error", "message": f"Context limit reached during generation: {prompt_eval_count + eval_count}/{CTX_LIMIT} tokens. The response was cut off."})
         return True, False
 
-    # Build tool_calls list from accumulated fragments
-    tool_calls: list[dict] = []
-    for acc in (tool_calls_acc[i] for i in sorted(tool_calls_acc)):
-        try:
-            arguments = json.loads(acc["arguments_str"]) if acc["arguments_str"] else {}
-        except json.JSONDecodeError:
-            logger.warning("Malformed tool call arguments for %s, skipping: %r", acc["name"], acc["arguments_str"])
-            continue
-        tool_calls.append({
-            "id": acc["id"],
-            "function": {
-                "name": acc["name"],
-                "arguments": arguments,
-            },
-        })
-
-    # Recover tool calls embedded in thinking when the model forgot to close </think> first.
-    # Only attempt recovery when both regular content and stream-parsed tool calls are absent.
-    if len(tool_calls) == 0 and len(message["content"]) == 0 and len(message["thinking"]) > 0:
-        recovered = _extract_tool_calls_from_thinking(message["thinking"])
-        if recovered:
-            logger.warning("Recovering %d tool call(s) embedded in thinking block", len(recovered))
-            tool_calls = recovered
+    tool_calls = _parse_tool_calls(tool_calls_acc, message)
 
     finished_without_response = len(message["content"]) == 0 and len(tool_calls) == 0
     if finished_without_response:
@@ -441,54 +509,9 @@ async def chat_with_tools(
         })
 
     if len(tool_calls) > 0:
-        ctx_before = await backend.count_tokens(backend.prepare_messages(messages), tools)
-        print(f"[tokens] context before tool execution: {ctx_before}/{CTX_LIMIT}")
-        await session.emit({"type": "ctx_update", "ctx_tokens": ctx_before})
-        for tool_call in tool_calls:
-            tool_name: str = tool_call.get("function", {}).get("name", "")
-            tool_args: dict = tool_call.get("function", {}).get("arguments", {})
-            call_id: str = tool_call.get("id", f"tc-{id(tool_call)}")
-
-            # Recovered tool calls never got a tool_call_start during streaming — emit it now.
-            if tool_call.get("_recovered"):
-                await session.emit({"type": "tool_call_start", "tool_id": call_id, "tool_name": tool_name})
-
-            await session.emit({"type": "tool_call", "tool_id": call_id, "tool_name": tool_name, "arguments": tool_args})
-
-            effective_registry = {**TOOL_REGISTRY, **(extra_tools or {})}
-            if tool_name not in effective_registry:
-                result_dict = {"tool": tool_name, "status": "error", "error": {"message": f"Unknown tool: {tool_name}"}}
-                log_msg = None
-            else:
-                tool_instance = effective_registry[tool_name]
-                result_dict = await tool_instance.execute(tool_args, session, working_directory)
-                result_dict = await _maybe_preshrink_tool_output(tool_name, result_dict, working_directory)
-                log_msg = tool_instance.label(tool_args)
-
-            result_dict["tool_call_id"] = call_id
-            tool_output = json.dumps(result_dict)
-            messages.append({"role": "tool", "name": tool_name, "content": tool_output})
-
-            ctx_after = await backend.count_tokens(backend.prepare_messages(messages), tools)
-            print(f"[tokens] context after tool result '{tool_name}': {ctx_after}/{CTX_LIMIT}")
-            await session.emit({"type": "ctx_update", "ctx_tokens": ctx_after})
-            if ctx_after > CTX_LIMIT:
-                # Emit tool_result first so frontend saves it to DB before compressing
-                await session.emit({"type": "tool_result", "tool_id": call_id, "tool_name": tool_name, "content": tool_output, "log_message": log_msg})
-                await session.emit({"type": "compressing", "ctx_tokens": ctx_after, "ctx_limit": CTX_LIMIT})
-                conv_id = await session.await_compression()
-                if conv_id is not None and session.refresh_messages_callback is not None:
-                    refreshed = await session.refresh_messages_callback(conv_id)
-                    messages[:] = refreshed
-                ctx_after_compress = await backend.count_tokens(backend.prepare_messages(messages), tools)
-                print(f"[tokens] context after compression: {ctx_after_compress}/{CTX_LIMIT}")
-                await session.emit({"type": "ctx_update", "ctx_tokens": ctx_after_compress})
-                if ctx_after_compress > CTX_LIMIT:
-                    await session.emit({"type": "error", "message": f"Context still exceeds limit after compression: {ctx_after_compress}/{CTX_LIMIT} tokens"})
-                    return True, False
-                continue
-
-            await session.emit({"type": "tool_result", "tool_id": call_id, "tool_name": tool_name, "content": tool_output, "log_message": log_msg})
+        overflow = await _execute_tool_calls(tool_calls, messages, session, tools, working_directory, extra_tools)
+        if overflow:
+            return True, False
 
     # Emit iteration_end after tool results so the frontend receives tool_result events
     # before iteration_end. The frontend rotation logic patches tool results from iteration N
