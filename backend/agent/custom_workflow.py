@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+import uuid
 from types import SimpleNamespace
 from typing import Any
 
@@ -296,8 +297,8 @@ class CustomWorkflowOrchestrator:
 
         Unlike isolated stages, this uses the original DB conversation so the model
         can reference everything the user said before the workflow ran. Workflow results
-        are injected as a separate user message so the original slash-command message
-        is left unchanged.
+        are injected as a synthetic tool result so the model treats them as internal
+        data rather than user-visible content.
         """
         working_messages = list(messages)
 
@@ -307,9 +308,19 @@ class CustomWorkflowOrchestrator:
             header += f" with the following prompt: {user_prompt}"
 
         suffix = resolve_template(stage.message_suffix, slots) if stage.message_suffix != "" else ""
-        injection = header if suffix == "" else f"{header}\n\n{suffix}"
+        tool_content = header if suffix == "" else f"{header}\n\n{suffix}"
 
-        working_messages.append({"role": "user", "content": injection})
+        tool_call_id = f"wf_{uuid.uuid4().hex[:8]}"
+        working_messages.append({
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": tool_call_id, "type": "function", "function": {"name": "workflow_result", "arguments": "{}"}}],
+        })
+        working_messages.append({
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": tool_content,
+        })
         await run_agent(session, working_messages, self._tools, self._working_directory)
 
     async def _run_isolated_agent(
