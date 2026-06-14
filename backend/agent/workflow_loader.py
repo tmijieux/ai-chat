@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -29,15 +28,72 @@ _BUILTIN_FINISH_TOOL_CLASSES: dict[str, type[BaseFinishTool]] = {
 
 
 @dataclass
-class WorkflowStageDefinition:
-    """Defines a single stage within a workflow."""
+class AgentDefinition:
+    """A bundled system prompt + tool collection, callable as a tool from workflow stages.
+
+    input_schema maps parameter names to JSON Schema fragments (type, description, etc.).
+    The agent takes its inputs as its user message and returns its finish_tool result.
+    """
 
     name: str
-    prompt: str
+    description: str
+    system_prompt: str
     tools: list[str]
     finish_tool_name: str
+    input_schema: dict[str, dict]
+    max_iterations: int = 5
+    inject_turn_reminders: bool = False
+
+
+@dataclass
+class WorkflowStageDefinition:
+    """A single step in a workflow. The type field determines which other fields are used.
+
+    Types:
+      llm         — one LLM stage loop with tools/agents and a finish tool
+      coordinator — deterministic action run by the orchestrator (no LLM)
+      branch      — evaluate a condition and jump to a named stage
+      loop        — iterate over a list or repeat until exit_condition, with inner stages
+      agent       — run the plain agent loop on the full conversation history
+    """
+
+    name: str
+    type: str = "llm"
+
+    # llm fields
+    system_prompt: str = ""
+    user_prompt: str = ""
+    tools: list[str] = field(default_factory=list)
+    agents: list[str] = field(default_factory=list)
+    finish_tool_name: str = "finish_task"
     max_iterations: int = 12
     inject_turn_reminders: bool = False
+
+    # coordinator fields
+    action: str = ""
+    action_input: dict[str, str] = field(default_factory=dict)
+    action_output: str = ""
+
+    # shared: skip this stage if condition is false (coordinator + loop inner stages)
+    condition: str = ""
+
+    # branch fields
+    if_true: str = ""
+    if_false: str = ""
+
+    # agent type fields
+    message_suffix: str = ""
+
+    # loop fields
+    over: str = ""                   # {{slot.field}} expression resolving to a list
+    item_var: str = "item"           # slot name for the current loop item
+    entry_condition: str = ""        # only enter the loop if this evaluates to true
+    exit_condition: str = ""         # exit loop early when this evaluates to true
+    on_max_retries: str = "continue" # "continue" or "abort_workflow"
+    on_retry: dict[str, str] = field(default_factory=dict)  # slot_name → template expression
+    max_retries: int = 3
+    loop_output: str = ""            # slot name to store aggregated loop results
+    inner_stages: list[WorkflowStageDefinition] = field(default_factory=list)
 
 
 @dataclass
@@ -53,9 +109,7 @@ class WorkflowDefinition:
         """Instantiate a finish tool by name (builtin or inline-defined)."""
         cls = self._finish_tool_classes.get(name)
         if cls is None:
-            raise ValueError(
-                f"Unknown finish tool '{name}' — not a builtin and not defined in finish_tools"
-            )
+            raise ValueError(f"Unknown finish tool '{name}' — not a builtin and not defined in finish_tools")
         return cls()
 
 
@@ -75,6 +129,73 @@ def _build_dynamic_finish_tool_class(tool_name: str, spec: dict) -> type[BaseFin
     )
 
 
+def _parse_stage(data: dict, finish_tool_classes: dict[str, type[BaseFinishTool]]) -> WorkflowStageDefinition:
+    """Parse one stage dict from YAML into a WorkflowStageDefinition."""
+    stage_type = data.get("type") or "llm"
+    name = data.get("name") or ""
+
+    if stage_type == "llm":
+        finish_tool_name = data.get("finish_tool") or "finish_task"
+        if finish_tool_name not in finish_tool_classes:
+            raise ValueError(f"Stage '{name}' references unknown finish tool '{finish_tool_name}'")
+        return WorkflowStageDefinition(
+            name=name,
+            type="llm",
+            system_prompt=data.get("system_prompt") or "",
+            user_prompt=data.get("user_prompt") or "",
+            tools=data.get("tools") or [],
+            agents=data.get("agents") or [],
+            finish_tool_name=finish_tool_name,
+            max_iterations=data.get("max_iterations") or 12,
+            inject_turn_reminders=bool(data.get("inject_turn_reminders")),
+            condition=data.get("condition") or "",
+        )
+
+    if stage_type == "coordinator":
+        return WorkflowStageDefinition(
+            name=name,
+            type="coordinator",
+            action=data.get("action") or "",
+            condition=data.get("condition") or "",
+            action_input=data.get("input") or {},
+            action_output=data.get("output") or "",
+        )
+
+    if stage_type == "branch":
+        return WorkflowStageDefinition(
+            name=name,
+            type="branch",
+            condition=data.get("condition") or "",
+            if_true=data.get("if_true") or "",
+            if_false=data.get("if_false") or "",
+        )
+
+    if stage_type == "agent":
+        return WorkflowStageDefinition(
+            name=name,
+            type="agent",
+            message_suffix=data.get("message_suffix") or "",
+        )
+
+    if stage_type == "loop":
+        inner_stages = [_parse_stage(s, finish_tool_classes) for s in (data.get("stages") or [])]
+        return WorkflowStageDefinition(
+            name=name,
+            type="loop",
+            over=data.get("over") or "",
+            item_var=data.get("item_var") or "item",
+            entry_condition=data.get("entry_condition") or "",
+            exit_condition=data.get("exit_condition") or "",
+            max_retries=data.get("max_retries") or 3,
+            on_max_retries=data.get("on_max_retries") or "continue",
+            on_retry=data.get("on_retry") or {},
+            loop_output=data.get("output") or "",
+            inner_stages=inner_stages,
+        )
+
+    raise ValueError(f"Stage '{name}': unknown type '{stage_type}'")
+
+
 def load_workflow(path: Path) -> WorkflowDefinition:
     """Parse a workflow YAML file and return a WorkflowDefinition."""
     with open(path, encoding="utf-8") as f:
@@ -87,26 +208,28 @@ def load_workflow(path: Path) -> WorkflowDefinition:
     for tool_name, tool_spec in (data.get("finish_tools") or {}).items():
         finish_tool_classes[tool_name] = _build_dynamic_finish_tool_class(tool_name, tool_spec)
 
-    stages: list[WorkflowStageDefinition] = []
-    for stage_data in (data.get("stages") or []):
-        stage_name: str = stage_data.get("name") or ""
-        finish_tool_name: str = stage_data.get("finish_tool") or "finish_task"
-        if finish_tool_name not in finish_tool_classes:
-            raise ValueError(
-                f"Stage '{stage_name}' references unknown finish tool '{finish_tool_name}'"
-            )
-        stages.append(WorkflowStageDefinition(
-            name=stage_name,
-            prompt=stage_data.get("prompt") or "",
-            tools=stage_data.get("tools") or [],
-            finish_tool_name=finish_tool_name,
-            max_iterations=stage_data.get("max_iterations") or 12,
-            inject_turn_reminders=bool(stage_data.get("inject_turn_reminders")),
-        ))
+    stages = [_parse_stage(s, finish_tool_classes) for s in (data.get("stages") or [])]
 
     return WorkflowDefinition(
         name=name,
         description=description,
         stages=stages,
         _finish_tool_classes=finish_tool_classes,
+    )
+
+
+def load_agent(path: Path) -> AgentDefinition:
+    """Parse an agent YAML file and return an AgentDefinition."""
+    with open(path, encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+
+    return AgentDefinition(
+        name=data.get("name") or path.stem,
+        description=data.get("description") or "",
+        system_prompt=data.get("system_prompt") or "",
+        tools=data.get("tools") or [],
+        finish_tool_name=data.get("finish_tool") or "finish_task",
+        input_schema=data.get("input") or {},
+        max_iterations=data.get("max_iterations") or 5,
+        inject_turn_reminders=bool(data.get("inject_turn_reminders")),
     )

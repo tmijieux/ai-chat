@@ -1290,7 +1290,7 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
             workflows_dir = Path(__file__).parent / "workflows"
             workflow_path = workflows_dir / f"{workflow_name}.yaml"
             workflow_def = load_workflow(workflow_path)
-            orchestrator = CustomWorkflowOrchestrator(workflow_def, working_directory)
+            orchestrator = CustomWorkflowOrchestrator(workflow_def, working_directory, tools)
             agent_task = asyncio.create_task(orchestrator.run(session, user_message, messages))
         else:
             agent_task = asyncio.create_task(run_agent(session, messages, tools, working_directory, extra_tools))

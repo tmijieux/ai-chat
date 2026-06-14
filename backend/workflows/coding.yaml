@@ -1,9 +1,14 @@
 name: coding
-description: "Multi-stage coding workflow: augment → critique → plan → execute → verify (simplified linear approximation of the hardcoded pipeline; no per-task loop)"
+description: "Multi-stage coding workflow: augment → critique → plan → execute/verify per task → compile fix → synthesis"
 
 stages:
+
+  # -------------------------------------------------------------------------
+  # Stage 1: Augment — explore the codebase and produce an enriched prompt
+  # -------------------------------------------------------------------------
   - name: augment
-    prompt: |
+    type: llm
+    system_prompt: |
       You are a prompt augmentation agent. Your only tool is explore_codebase(query).
       You have at most 3 turns. Each turn you either explore or submit — never both in the same turn.
       - Turn 1: explore the main subject.
@@ -11,23 +16,60 @@ stages:
       - Turn 3: you MUST call finish_augmentation with whatever you have. No more explores.
       In finish_augmentation, the snippets field is REQUIRED. List the file locations (file_path, start_line, end_line) needed to plan and implement the changes.
       Do not write a text response — call the tool instead.
-    tools: [explore_codebase]
+    user_prompt: "{{user_message}}"
+    agents: [explore_codebase]
     finish_tool: finish_augmentation
     max_iterations: 3
     inject_turn_reminders: true
 
+  # -------------------------------------------------------------------------
+  # Coordinator: read augment snippet coordinates into actual code content
+  # -------------------------------------------------------------------------
+  - name: read_augment_context
+    type: coordinator
+    action: read_code_context
+    input:
+      snippets: "{{augment.snippets}}"
+    output: augment_code_context
+
+  # -------------------------------------------------------------------------
+  # Stage 2: Critique — verify the augmented prompt matches reality
+  # -------------------------------------------------------------------------
   - name: critique
-    prompt: |
-      You are a critical reviewer. You receive an original request plus an augmented prompt and code snippets from the augment stage (in Prior stage results → augment).
+    type: llm
+    system_prompt: |
+      You are a critical reviewer. You receive an original request, an augmented prompt, and code snippets already read from the codebase.
       Check: does the augmented prompt correctly capture the intent? Do the file paths and function names match the provided code?
       In finish_critique, the snippets field is REQUIRED. Return only the snippet coordinates actually needed to plan and implement the changes — prune irrelevant ones, keep relevant ones unchanged (same file_path, start_line, end_line).
       You MUST call finish_critique to submit your verdict. Do not write a text response — call the tool instead.
+    user_prompt: |
+      Original request: {{user_message}}
+
+      Augmented prompt:
+      {{augment.augmented_prompt}}
+
+      Code snippets:
+      {{augment_code_context}}
     tools: []
     finish_tool: finish_critique
     max_iterations: 3
 
+  # -------------------------------------------------------------------------
+  # Coordinator: read critique snippet coordinates into actual code content
+  # -------------------------------------------------------------------------
+  - name: read_critique_context
+    type: coordinator
+    action: read_code_context
+    input:
+      snippets: "{{critique.snippets}}"
+    output: critique_code_context
+
+  # -------------------------------------------------------------------------
+  # Stage 3: Plan — produce an ordered task list with verification methods
+  # -------------------------------------------------------------------------
   - name: plan
-    prompt: |
+    type: llm
+    system_prompt: |
       You are a task planner working with a model that needs extremely precise instructions.
       The user message contains the exact code snippets needed for this task — file paths, line numbers, and actual code content. Use them directly. You have no search tools — call finish_plan immediately after reasoning through the tasks.
 
@@ -43,32 +85,118 @@ stages:
 
       If the project has a compile or type-check step (e.g. TypeScript), set compile_command to the exact shell command (e.g. "cd chat-client && npx tsc --noEmit").
       You MUST call finish_plan to submit the task list.
+    user_prompt: |
+      {{critique.final_prompt}}
+
+      --- Code context ---
+      {{critique_code_context}}
     tools: []
     finish_tool: finish_plan
     max_iterations: 5
     inject_turn_reminders: true
 
-  - name: execute
-    prompt: |
-      You are a precise code executor. You receive a plan (in Prior stage results → plan → tasks).
-      Work through ALL tasks in order. For each task:
-      - Do EXACTLY what the task description says — nothing more, nothing less.
-      - Do NOT refactor, rename, reformat, or touch anything outside the task scope.
-      - Do NOT add extra features, comments, or improvements not asked for.
-      When all tasks are done, call finish_task with a summary of what was completed.
-    tools: [read_file, read_file_range, write_file, edit_file, glob_files, grep_files, list_directory, run_shell]
-    finish_tool: finish_task
-    max_iterations: 20
+  # -------------------------------------------------------------------------
+  # Stage 4: Execute + Verify loop — one iteration per task, with retry
+  # -------------------------------------------------------------------------
+  - name: execute_verify_loop
+    type: loop
+    over: "{{plan.tasks}}"
+    item_var: task
+    max_retries: 2
+    exit_condition: "verify_task.passed == True"
+    on_max_retries: continue
+    on_retry:
+      retry_prefix: "Previous attempt failed verification:\n{{verify_task.issues}}\n\n"
+    output: task_results
 
-  - name: verify
-    prompt: |
-      You are a verification agent. You receive the original plan (in Prior stage results → plan → tasks) and the execution result (Prior stage results → execute).
-      Check two things for each task:
-      1. Was the task completed correctly according to its verification_method?
-      2. Did the executor do MORE than the task asked? (scope creep — extra refactors, renames, unrelated changes)
-      Use read_file, glob_files, and run_shell to inspect the actual state of the code.
-      If tasks passed but scope creep was detected, set passed=false and describe the extra changes in issues.
-      You MUST call finish_verify to submit your verdict.
-    tools: [read_file, glob_files, grep_files, run_shell]
-    finish_tool: finish_verify
-    max_iterations: 8
+    stages:
+      - name: execute_task
+        type: llm
+        system_prompt: |
+          You are a precise code executor. Your task is always small and exactly scoped.
+          Rules:
+          - Do EXACTLY what the task description says — nothing more, nothing less.
+          - Do NOT refactor, rename, reformat, or touch anything outside the task scope.
+          - Do NOT add extra features, comments, or improvements not asked for.
+          - If the task says add one line, add one line. If it says edit one attribute, edit one attribute.
+          When done, call finish_task.
+        user_prompt: "{{retry_prefix}}Task: {{task.description}}"
+        tools: [read_file, read_file_range, write_file, edit_file, glob_files, grep_files, list_directory, run_shell]
+        finish_tool: finish_task
+        max_iterations: 10
+
+      - name: verify_task
+        type: llm
+        condition: "execute_task.status != 'failure'"
+        system_prompt: |
+          You are a verification agent. Check two things:
+          1. Was the task completed correctly according to the verification method?
+          2. Did the executor do MORE than the task asked? (scope creep — extra refactors, renames, reformats, unrelated changes)
+          Use read_file, glob_files, and run_shell to inspect the actual state of the code or filesystem.
+          If the task passed but scope creep was detected, set passed=false and describe the extra changes in issues.
+          You MUST call finish_verify to submit your verdict. Do not write a text response — call the tool instead.
+        user_prompt: |
+          Task: {{task.description}}
+
+          Verification method: {{task.verification_method}}
+
+          Result reported by executor: {{execute_task.result}}
+        tools: [read_file, glob_files, grep_files, run_shell]
+        finish_tool: finish_verify
+        max_iterations: 6
+
+  # -------------------------------------------------------------------------
+  # Coordinator: run compile/type-check (skipped if no compile_command)
+  # -------------------------------------------------------------------------
+  - name: initial_compile
+    type: coordinator
+    action: run_compile
+    condition: "plan.compile_command is not None"
+    input:
+      command: "{{plan.compile_command}}"
+    output: compile_result
+
+  # -------------------------------------------------------------------------
+  # Stage 5: Compile fix loop — retry up to 3 times, abort on failure
+  # -------------------------------------------------------------------------
+  - name: compile_fix_loop
+    type: loop
+    entry_condition: "compile_result is not None and compile_result.success == False"
+    max_retries: 3
+    on_max_retries: abort_workflow
+    exit_condition: "compile_result.success == True"
+
+    stages:
+      - name: compile_fix
+        type: llm
+        system_prompt: |
+          You are a compilation error fixer.
+          You receive the raw output of a compile or type-check command. Parse the errors to find the affected files and locations.
+          Fix ONLY the errors listed — do not refactor, rename, reformat, or touch anything outside the failing lines.
+          IMPORTANT: fix errors by correcting the source of the problem — never by removing the code that triggers the error.
+          For each error: read the affected file at the reported location, make the minimal change to fix it, then call finish_task.
+        user_prompt: |
+          Fix these compiler errors:
+
+          {{compile_result.output}}
+        tools: [read_file, read_file_range, write_file, edit_file, glob_files, grep_files, run_shell]
+        finish_tool: finish_task
+        max_iterations: 10
+
+      - name: recompile
+        type: coordinator
+        action: run_compile
+        input:
+          command: "{{plan.compile_command}}"
+        output: compile_result
+
+  # -------------------------------------------------------------------------
+  # Stage 6: Synthesis — agent summarizes results using full conversation history
+  # -------------------------------------------------------------------------
+  - name: synthesis
+    type: agent
+    message_suffix: |
+      [Pipeline pre-execution complete. Task results:
+      {{task_results.task_summary}}]
+
+      Summarize what was accomplished and flag any failed tasks.

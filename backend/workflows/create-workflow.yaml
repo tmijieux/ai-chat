@@ -2,39 +2,60 @@ name: create-workflow
 description: "Design and write a new workflow YAML file for the backend/workflows/ directory"
 
 stages:
+
   - name: explore
-    prompt: |
+    type: llm
+    system_prompt: |
       You are a codebase explorer. Your goal is to understand the workflow system so you can help design a new one.
       Explore these things:
       1. Existing workflow YAML files in backend/workflows/ (to understand conventions and examples)
       2. Available tools: read backend/agent/tools/__init__.py to see TOOL_REGISTRY keys
       3. Available built-in finish tools: read backend/agent/finish_tools.py
-      4. Read CONTEXT.md for domain language and project conventions
-      Use glob_files, read_file, and grep_files. When done, call finish_explore with the relevant locations.
-    tools: [read_file, read_file_range, glob_files, grep_files, list_directory]
+      4. Available agents: list backend/agents/ directory
+      5. Read CONTEXT.md for domain language and project conventions
+      When done, call finish_explore with the relevant file locations.
+    user_prompt: "{{user_message}}"
+    agents: [explore_codebase]
     finish_tool: finish_explore
     max_iterations: 6
     inject_turn_reminders: true
 
   - name: design
-    prompt: |
-      You are a workflow designer. Based on the user's request and the codebase context from the explore stage (in Prior stage results → explore), design a complete workflow YAML definition.
+    type: llm
+    system_prompt: |
+      You are a workflow designer. Based on the user's request and the codebase context (in prior stage results), design a complete workflow YAML definition.
       Think through:
       - What stages are needed, and in what order?
-      - What tools does each stage need?
-      - Which built-in finish_tool captures each stage's output? (finish_explore, finish_task, finish_plan, finish_augmentation, finish_critique, finish_verify)
-      - Does any stage need a custom finish_tool defined in the finish_tools section?
-      - What system prompt in the YAML prompt field guides each stage's behavior?
+      - What type should each stage be? (llm, coordinator, branch, loop, agent)
+      - What tools and agents does each llm stage need?
+      - Which finish_tool captures each stage's output? (finish_explore, finish_task, finish_plan, finish_augmentation, finish_critique, finish_verify, or a custom one)
+      - What system_prompt and user_prompt (with {{slot}} references) guide each stage?
+      - Are loops or branches needed? What are their conditions?
+      - Does any stage need a custom finish_tool defined in finish_tools?
       Call finish_design with the complete workflow YAML as a string and design notes explaining your choices.
+    user_prompt: |
+      User request: {{user_message}}
+
+      Codebase context from exploration:
+      {{explore.summary}}
     tools: []
     finish_tool: finish_design
     max_iterations: 3
 
   - name: write
-    prompt: |
-      You are a file writer. The design stage produced a workflow_yaml string (in Prior stage results → design → workflow_yaml).
-      Write that YAML content to backend/workflows/<slug>.yaml where <slug> is a kebab-case identifier derived from the workflow_name field (also in Prior stage results → design → workflow_name).
-      After writing, call finish_task with the file path you wrote to and a confirmation message.
+    type: llm
+    system_prompt: |
+      You are a file writer. Write the workflow YAML to disk.
+      The workflow_yaml field in the prior design stage result contains the complete YAML content.
+      Write it to backend/workflows/<slug>.yaml where <slug> is a kebab-case identifier from the workflow_name field.
+      After writing, call finish_task with the file path and a confirmation message.
+    user_prompt: |
+      Write this workflow to disk:
+
+      Workflow name: {{design.workflow_name}}
+
+      YAML content:
+      {{design.workflow_yaml}}
     tools: [write_file]
     finish_tool: finish_task
     max_iterations: 3
