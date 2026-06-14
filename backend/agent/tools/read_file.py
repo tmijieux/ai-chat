@@ -7,10 +7,18 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from agent.agent import AgentSession
 
+FILE_MAX_BYTES = 40_000  # ~10k tokens — refuse full reads above this
+
 
 class ReadFileTool(BaseTool):
     name = "read_file"
-    description = "Read the full content of a file. For large files, use the limit parameter to read only the last N lines. Requires a workspace directory to be configured in conversation settings."
+    description = (
+        "Read the full content of a file. "
+        "Refuses files larger than 40 000 bytes — use grep_files with -A/-B to extract relevant sections, "
+        "then read_file_range for specific line ranges. "
+        "Use the limit parameter to tail a log file (reads the last N lines regardless of size). "
+        "Requires a workspace directory to be configured in conversation settings."
+    )
     parameters = {
         "type": "object",
         "properties": {
@@ -41,6 +49,24 @@ class ReadFileTool(BaseTool):
         absolute_path = resolve_workspace_path(path, working_directory)
         if not file_in_directory(str(absolute_path), working_directory):
             return tool_error(self.name, f"Reading outside workspace is forbidden. Workspace: {working_directory}", path=path)
+
+        try:
+            file_size = absolute_path.stat().st_size
+        except Exception as e:
+            return tool_error(self.name, f"Error reading file: {e}", path=path)
+
+        # Refuse full reads of large files — the agent must narrow down first.
+        # limit (tail) is exempt: reading the last N lines of a large log is always fine.
+        if file_size > FILE_MAX_BYTES and not (limit and limit > 0):
+            approx_lines = file_size // 80
+            return tool_error(
+                self.name,
+                f"File too large to read in full: {file_size:,} bytes (~{approx_lines:,} lines). "
+                "If you don't know the file's content yet, use grep_files with -A/-B flags to locate "
+                "the relevant section, then read_file_range (requires the grep result_id) to read "
+                "specific line ranges. If you need the last N lines of a log, use the limit parameter.",
+                path=path,
+            )
 
         try:
             async with aiofiles.open(absolute_path, encoding="utf-8") as f:

@@ -428,6 +428,7 @@ async def _summarize_search_results(result: dict, backend: LLMBackend) -> str:
     query = result.get("query", "unknown")
     results_list = result.get("results") or []
 
+    # Build one text block per result, then chunk the whole lot.
     parts = []
     for r in results_list:
         url = r.get("url", "")
@@ -435,18 +436,22 @@ async def _summarize_search_results(result: dict, backend: LLMBackend) -> str:
         if body:
             parts.append(f"URL: {url}\n{body}")
 
-    prompt = f"Query: {query}\n\n" + "\n\n---\n\n".join(parts)
+    full_text = f"Query: {query}\n\n" + "\n\n---\n\n".join(parts)
+    chunks = _split_by_lines(full_text, CHUNK_MAX_CHARS)
+    chunk_count = len(chunks)
+    summaries = []
+    for i, chunk in enumerate(chunks):
+        header = f"[chunk {i + 1}/{chunk_count}]\n" if chunk_count > 1 else ""
+        summaries.append(await _llm_complete(header + chunk, backend, system=_SUMMARIZE_SEARCH_SYSTEM))
 
-    t0 = time.perf_counter()
-    summary = await _llm_complete(prompt, backend, system=_SUMMARIZE_SEARCH_SYSTEM)
-    elapsed = time.perf_counter() - t0
-    est_tokens = len(summary) // 4
+    combined = "\n\n---\n\n".join(summaries) if chunk_count > 1 else summaries[0]
+    est_tokens = len(combined) // 4
     logger.info(
-        "summarize_search %r: %.1fs → %d chars (~%d tokens)",
-        query[:40], elapsed, len(summary), est_tokens,
+        "summarize_search %r: %d chunk(s) → %d chars (~%d tokens)",
+        query[:40], chunk_count, len(combined), est_tokens,
     )
 
-    return f"[compressed: search_web({repr(query)}) → {len(results_list)} result(s) → ~{est_tokens} tokens]\n{summary}"
+    return f"[compressed: search_web({repr(query)}) → {len(results_list)} result(s), {chunk_count} chunk(s) → ~{est_tokens} tokens]\n{combined}"
 
 
 async def _summarize_file(result: dict, backend: LLMBackend) -> str:
@@ -454,21 +459,21 @@ async def _summarize_file(result: dict, backend: LLMBackend) -> str:
     content = result.get("file_content") or ""
     line_count = len(content.splitlines())
 
-    prompt = f"File: {path}\n---\n{content}"
+    chunks = _split_by_lines(f"File: {path}\n---\n{content}", CHUNK_MAX_CHARS)
+    chunk_count = len(chunks)
+    summaries = []
+    for i, chunk in enumerate(chunks):
+        header = f"[chunk {i + 1}/{chunk_count}]\n" if chunk_count > 1 else ""
+        summaries.append(await _llm_complete(header + chunk, backend, system=_SUMMARIZE_FILE_SYSTEM))
 
-    t0 = time.perf_counter()
-    summary = await _llm_complete(prompt, backend, system=_SUMMARIZE_FILE_SYSTEM)
-    elapsed = time.perf_counter() - t0
-    est_tokens = len(summary) // 4
+    combined = "\n\n---\n\n".join(summaries) if chunk_count > 1 else summaries[0]
+    est_tokens = len(combined) // 4
     logger.info(
-        "summarize_file %s: %.1fs → %d chars (~%d tokens)",
-        path,
-        elapsed,
-        len(summary),
-        est_tokens,
+        "summarize_file %s: %d chunk(s) → %d chars (~%d tokens)",
+        path, chunk_count, len(combined), est_tokens,
     )
 
-    return f"[compressed: read_file({repr(path)}) → {line_count} lines → ~{est_tokens} tokens — prefer grep_files to extract snippets, read_file as last resort]\n{summary}"
+    return f"[compressed: read_file({repr(path)}) → {line_count} lines, {chunk_count} chunk(s) → ~{est_tokens} tokens — prefer grep_files to extract snippets, read_file as last resort]\n{combined}"
 
 
 async def compress_messages(
