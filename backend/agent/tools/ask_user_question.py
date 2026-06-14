@@ -12,9 +12,9 @@ class AskUserQuestionTool(BaseTool):
         "Ask the user a clarifying question and wait for their reply. "
         "ALWAYS use this tool instead of asking questions in plain text — "
         "it renders an interactive card in the UI and suspends execution until the user replies. "
-        "NEVER list choices or examples inside the question text. "
-        "If you have any predefined choices, pass them as the 'options' array — "
-        "an 'Other' choice is always appended automatically so the user can always type freely."
+        "ALWAYS provide an 'options' array: minimum 2 choices, prefer 3–5, never more than 6. "
+        "NEVER list choices or examples inside the question text — put them in 'options' only. "
+        "An 'Other' choice is always appended automatically so the user can always type freely."
     )
     parameters = {
         "type": "object",
