@@ -9,6 +9,8 @@ auto_safe_commands:
   - "git log"
   - "git commit"
   - "git reset"
+  - "!git reset --soft"
+  - "!git reset --hard"
 
 stages:
 

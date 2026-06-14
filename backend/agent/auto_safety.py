@@ -57,9 +57,15 @@ async def evaluate_tool_safety(
 
     if tool_name == "run_shell" and safe_command_prefixes is not None:
         command = arguments.get("command", "").strip()
-        for prefix in safe_command_prefixes:
-            if command.startswith(prefix):
-                return "safe", "workflow whitelist"
+        excluded = any(
+            command.startswith(p[1:])
+            for p in safe_command_prefixes
+            if p.startswith("!")
+        )
+        if not excluded:
+            for prefix in safe_command_prefixes:
+                if not prefix.startswith("!") and command.startswith(prefix):
+                    return "safe", "workflow whitelist"
 
     if tool_name in _FILE_WRITE_TOOLS:
         path = arguments.get("file_path", "")
