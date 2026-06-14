@@ -11,7 +11,8 @@ class AskUserQuestionTool(BaseTool):
     description = (
         "Ask the user a clarifying question and wait for their reply. "
         "Optionally provide predefined choices — an 'Other' option is always added automatically. "
-        "Use this in Plan mode when you need more information before proposing a plan."
+        "ALWAYS use this tool instead of asking questions in plain text — "
+        "it renders an interactive card in the UI and suspends execution until the user replies."
     )
     parameters = {
         "type": "object",
