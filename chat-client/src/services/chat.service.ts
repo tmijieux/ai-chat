@@ -4,6 +4,7 @@ import { catchError, retry, shareReplay, switchMap, tap } from 'rxjs/operators'
 import { throwError } from 'rxjs'
 import {
   AgentToolMeta,
+  AlwaysActiveToolMeta,
   AgentToolsResponse,
   ApiResponse,
   Conversation,
@@ -139,6 +140,10 @@ export class ChatService {
   /** Full tool metadata including token_count — loaded once on startup. */
   public readonly allTools = this._allTools.asReadonly()
 
+  private _alwaysActiveTools = signal<AlwaysActiveToolMeta[]>([])
+  /** Tools always injected by the framework (not user-toggleable). */
+  public readonly alwaysActiveTools = this._alwaysActiveTools.asReadonly()
+
   private _toolFrameworkOverhead = signal<number>(0)
   /** Fixed token overhead for the tool-calling framework (independent of which tools are active). */
   public readonly toolFrameworkOverhead = this._toolFrameworkOverhead.asReadonly()
@@ -190,6 +195,7 @@ export class ChatService {
       const names = response.tools.map((t) => t.name)
       this._allToolNames.set(names)
       this._allTools.set(response.tools)
+      this._alwaysActiveTools.set(response.always_active_tools)
       this._toolFrameworkOverhead.set(response.framework_overhead)
       this._stackingOverheadPerAdditionalTool.set(response.stacking_overhead_per_additional_tool)
       // Patch the pending new-chat settings so tools are enabled by default
@@ -417,6 +423,9 @@ export class ChatService {
     let idOfCurrentlyStreamingAssistantMessage: string | null = null
     let pendingContentText = ''
     let pendingToolCalls: ToolCallEntry[] = []
+    // Accumulates tool calls as they stream (tool_call_start + tool_call_chunk events).
+    // Finalized into pendingToolCalls on generation_end before tool execution starts.
+    let streamingToolCallsAcc: Map<string, { id: string; name: string; argsStr: string }> = new Map()
 
     let patchedUserMessage = false
     let lastKnownCtxTokens = 0
@@ -563,10 +572,21 @@ export class ChatService {
       } else if (event.type === 'tool_call_start') {
         this._callingTool.set(event.tool_name)
         this._streamingToolCallArgs.set('')
+        streamingToolCallsAcc.set(event.tool_id, { id: event.tool_id, name: event.tool_name, argsStr: '' })
       } else if (event.type === 'tool_call_chunk') {
         this._streamingToolCallArgs.update((s) => s + event.chunk)
+        const accEntry = streamingToolCallsAcc.get(event.tool_id)
+        if (accEntry !== undefined) {
+          accEntry.argsStr += event.chunk
+        }
       } else if (event.type === 'tool_call') {
-        pendingToolCalls.push({ id: event.tool_id, name: event.tool_name, args: event.arguments })
+        // Update with finalized parsed args (for streamed calls) or add new entry (for recovered calls).
+        const existingEntry = streamingToolCallsAcc.get(event.tool_id)
+        if (existingEntry !== undefined) {
+          existingEntry.argsStr = JSON.stringify(event.arguments)
+        } else {
+          streamingToolCallsAcc.set(event.tool_id, { id: event.tool_id, name: event.tool_name, argsStr: JSON.stringify(event.arguments) })
+        }
       } else if (event.type === 'tool_confirm') {
         this._messages.update((msgs) => [
           ...msgs,
@@ -591,8 +611,44 @@ export class ChatService {
       } else if (event.type === 'tool_result') {
         this._callingTool.set(null)
         this._streamingToolCallArgs.set('')
-        // Capture before markThinkingMessageAsDoneAndClearIt clears it
-        const thinkingIdBeforeResult = idOfCurrentlyStreamingThinkingMessage
+        // For recovered tool calls (not streamed during generation), streamingToolCallsAcc will
+        // have entries here. Finalize and attach them before adding the result message.
+        if (streamingToolCallsAcc.size > 0) {
+          const thinkingIdBeforeResult = idOfCurrentlyStreamingThinkingMessage
+          for (const entry of streamingToolCallsAcc.values()) {
+            let args: Record<string, unknown> = {}
+            try {
+              args = JSON.parse(entry.argsStr)
+            } catch { /* leave args empty */ }
+            pendingToolCalls.push({ id: entry.id, name: entry.name, args })
+          }
+          streamingToolCallsAcc = new Map()
+          const tokenCount = capturedGenerationCtxTokens
+          capturedGenerationCtxTokens = null
+          stopStreamingTheAssistantMessageSaveItAndClearIt(tokenCount)
+          if (pendingToolCalls.length > 0) {
+            const orphanedToolCalls = pendingToolCalls
+            pendingToolCalls = []
+            if (thinkingIdBeforeResult !== null) {
+              this._messages.update((msgs) =>
+                msgs.map((m) =>
+                  m.id === thinkingIdBeforeResult && m.kind === 'thinking'
+                    ? { ...m, tool_calls: orphanedToolCalls }
+                    : m,
+                ),
+              )
+            }
+            if (pendingThinkingContent) {
+              const thinking = pendingThinkingContent
+              pendingThinkingContent = ''
+              saveAssistant(crypto.randomUUID(), '', thinking, orphanedToolCalls, tokenCount)
+            }
+          } else if (pendingThinkingContent) {
+            const thinking = pendingThinkingContent
+            pendingThinkingContent = ''
+            saveAssistant(crypto.randomUUID(), '', thinking, [], tokenCount)
+          }
+        }
         markThinkingMessageAsDoneAndClearIt()
         const resultId = `result-${event.tool_id}`
         const resultContent = event.content ?? ''
@@ -609,34 +665,6 @@ export class ChatService {
             token_count: toolTokenCount,
           },
         ])
-        // Capture and clear before stopStreaming so any thinking-only saveAssistant also gets it.
-        const tokenCountForThisIteration = capturedGenerationCtxTokens
-        capturedGenerationCtxTokens = null
-        stopStreamingTheAssistantMessageSaveItAndClearIt(tokenCountForThisIteration)
-        // If there was no streaming assistant message (thinking → tool with no text content),
-        // pendingToolCalls was never cleared. Attach them to the thinking bubble they belong to.
-        if (pendingToolCalls.length > 0) {
-          const orphanedToolCalls = pendingToolCalls
-          pendingToolCalls = []
-          if (thinkingIdBeforeResult !== null) {
-            this._messages.update((msgs) =>
-              msgs.map((m) =>
-                m.id === thinkingIdBeforeResult && m.kind === 'thinking'
-                  ? { ...m, tool_calls: orphanedToolCalls }
-                  : m,
-              ),
-            )
-          }
-          if (pendingThinkingContent) {
-            const thinking = pendingThinkingContent
-            pendingThinkingContent = ''
-            saveAssistant(crypto.randomUUID(), '', thinking, orphanedToolCalls, tokenCountForThisIteration)
-          }
-        } else if (pendingThinkingContent) {
-          const thinking = pendingThinkingContent
-          pendingThinkingContent = ''
-          saveAssistant(crypto.randomUUID(), '', thinking, [], tokenCountForThisIteration)
-        }
         // token_count is included in the POST; delta computed in the callback after the
         // assistant POST has run and updated in-memory token_count on the preceding message.
         enqueue(async () => {
@@ -661,7 +689,41 @@ export class ChatService {
           )
         })
       } else if (event.type === 'generation_end') {
-        capturedGenerationCtxTokens = event.ctx_tokens
+        if (streamingToolCallsAcc.size > 0) {
+          // Finalize all streamed tool calls into pendingToolCalls before execution starts.
+          for (const entry of streamingToolCallsAcc.values()) {
+            let args: Record<string, unknown> = {}
+            try {
+              args = JSON.parse(entry.argsStr)
+            } catch { /* leave args empty if JSON is malformed */ }
+            pendingToolCalls.push({ id: entry.id, name: entry.name, args })
+          }
+          streamingToolCallsAcc = new Map()
+          // Finalize the assistant message now — all tool calls are known before execution starts.
+          const thinkingIdAtGenEnd = idOfCurrentlyStreamingThinkingMessage
+          stopStreamingTheAssistantMessageSaveItAndClearIt(event.ctx_tokens)
+          // Handle thinking-only messages (no content) that had tool calls.
+          if (pendingToolCalls.length > 0) {
+            const orphanedToolCalls = pendingToolCalls
+            pendingToolCalls = []
+            if (thinkingIdAtGenEnd !== null) {
+              this._messages.update((msgs) =>
+                msgs.map((m) =>
+                  m.id === thinkingIdAtGenEnd && m.kind === 'thinking'
+                    ? { ...m, tool_calls: orphanedToolCalls }
+                    : m,
+                ),
+              )
+            }
+            if (pendingThinkingContent) {
+              const thinking = pendingThinkingContent
+              pendingThinkingContent = ''
+              saveAssistant(crypto.randomUUID(), '', thinking, orphanedToolCalls, event.ctx_tokens)
+            }
+          }
+        } else {
+          capturedGenerationCtxTokens = event.ctx_tokens
+        }
       } else if (event.type === 'iteration_end') {
         const tokens = event.prompt_tokens ?? 0
         this._promptTokens.set(tokens)
@@ -669,6 +731,11 @@ export class ChatService {
         const tokenCountForIteration = capturedGenerationCtxTokens
         capturedGenerationCtxTokens = null
         stopStreamingTheAssistantMessageSaveItAndClearIt(tokenCountForIteration)
+        if (pendingThinkingContent) {
+          const thinking = pendingThinkingContent
+          pendingThinkingContent = ''
+          saveAssistant(crypto.randomUUID(), '', thinking, [], tokenCountForIteration)
+        }
       } else if (event.type === 'plan_proposal') {
         this._messages.update((msgs) => [
           ...msgs,

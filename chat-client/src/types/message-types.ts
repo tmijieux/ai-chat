@@ -122,10 +122,18 @@ export type AgentToolMeta = {
   token_count: number
 }
 
+export type AlwaysActiveToolMeta = {
+  name: string
+  description: string
+  token_count: number
+  mode_context: string
+}
+
 export type AgentToolsResponse = {
   framework_overhead: number
   stacking_overhead_per_additional_tool: number
   tools: AgentToolMeta[]
+  always_active_tools: AlwaysActiveToolMeta[]
 }
 
 /** Flat node returned by GET /api/conversations/{id}/tree */

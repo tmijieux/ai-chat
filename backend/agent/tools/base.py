@@ -30,7 +30,7 @@ TOOL_FRAMEWORK_OVERHEAD = 223
 
 # Extra tokens each additional tool (2nd, 3rd, ...) adds beyond its schema content.
 # Total tool tokens = TOOL_FRAMEWORK_OVERHEAD + sum(t.token_count) + STACKING_OVERHEAD_PER_ADDITIONAL_TOOL * (N - 1)
-STACKING_OVERHEAD_PER_ADDITIONAL_TOOL = 22
+STACKING_OVERHEAD_PER_ADDITIONAL_TOOL = 25
 
 
 class BaseTool(ABC):

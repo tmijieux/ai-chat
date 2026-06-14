@@ -20,7 +20,7 @@ class SearchWebTool(BaseTool):
         "required": ["query"],
     }
     requires_confirmation = True
-    measured_delta = 282
+    measured_delta = 281
 
     def make_validation_text_for_user_confirmation(self, args: dict) -> str:
         return f"SEARCH: {args.get('query', '')}"

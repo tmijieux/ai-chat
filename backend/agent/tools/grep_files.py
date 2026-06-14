@@ -54,7 +54,7 @@ class GrepFilesTool(BaseTool):
         "required": ["pattern", "glob"],
     }
     requires_confirmation = False
-    measured_delta = 574
+    measured_delta = 591
 
     def label(self, args: dict) -> str:
         glob = args.get("glob", "")

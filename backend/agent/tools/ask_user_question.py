@@ -32,7 +32,7 @@ class AskUserQuestionTool(BaseTool):
         "required": ["question"],
     }
     requires_confirmation = False
-    measured_delta = 275
+    measured_delta = 410
 
     def label(self, args: dict) -> str:
         return f"QUESTION: {args.get('question', '')[:80]}"

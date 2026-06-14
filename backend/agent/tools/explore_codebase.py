@@ -54,7 +54,7 @@ class ExploreCodebaseTool(BaseTool):
         "required": ["query"],
     }
     requires_confirmation = False
-    measured_delta = 343
+    measured_delta = 315
 
     def label(self, args: dict) -> str:
         return f"EXPLORE {args.get('query', '')[:60]}"

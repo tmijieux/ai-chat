@@ -30,7 +30,7 @@ class WriteFileTool(BaseTool):
         "required": ["file_path", "content"],
     }
     requires_confirmation = True
-    measured_delta = 360
+    measured_delta = 359
 
     def make_validation_text_for_user_confirmation(self, args: dict) -> str:
         path = args.get("file_path", "")

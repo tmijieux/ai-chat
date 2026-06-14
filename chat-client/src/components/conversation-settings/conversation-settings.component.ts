@@ -25,6 +25,7 @@ export class ConversationSettingsComponent implements OnInit {
 
   readonly prompts = signal<SystemPromptTemplate[]>([])
   readonly tools = this.chatSvc.allTools
+  readonly alwaysActiveTools = this.chatSvc.alwaysActiveTools
   readonly enabledToolsTokenCount = computed(() => {
     const enabledNames = new Set(this.settings().active_tool_names)
     const enabledTools = this.chatSvc.allTools().filter((t) => enabledNames.has(t.name))

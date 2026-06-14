@@ -902,6 +902,18 @@ async def list_workflows():
 @app.get("/api/agent/tools")
 async def list_agent_tools():
     from agent.tools.base import TOOL_FRAMEWORK_OVERHEAD, STACKING_OVERHEAD_PER_ADDITIONAL_TOOL
+    always_active = [
+        {
+            "name": t.name,
+            "description": t.description,
+            "token_count": t.token_count,
+            "mode_context": mode_context,
+        }
+        for t, mode_context in [
+            (CONVERSATIONAL_TOOLS["ask_user_question"], "Included in Standard and Plan modes"),
+            (PLAN_MODE_TOOLS["propose_plan"], "Included in Plan mode only"),
+        ]
+    ]
     return {
         "framework_overhead": TOOL_FRAMEWORK_OVERHEAD,
         "stacking_overhead_per_additional_tool": STACKING_OVERHEAD_PER_ADDITIONAL_TOOL,
@@ -914,6 +926,7 @@ async def list_agent_tools():
             }
             for t in TOOL_REGISTRY.values()
         ],
+        "always_active_tools": always_active,
     }
 
 
@@ -1004,8 +1017,7 @@ async def compress_conversation(
                 "summary": c["compressed_summary"],
                 "tool_call_id": original.get("tool_call_id", ""),
             })
-            prepared = backend.prepare_messages([{"role": "tool", "content": compressed_content}])
-            msg.compressed_token_count = await backend.count_tokens(prepared, [])
+            msg.compressed_token_count = await backend.count_text_tokens(compressed_content)
 
     await sess.flush()
 

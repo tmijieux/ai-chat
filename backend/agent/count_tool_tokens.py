@@ -10,7 +10,7 @@ Methodology:
 """
 
 from tokenizer import count_tokens, warmup
-from .tools import TOOL_REGISTRY
+from .tools import TOOL_REGISTRY, CONVERSATIONAL_TOOLS, PLAN_MODE_TOOLS
 
 DUMMY_MESSAGES = [{"role": "user", "content": "."}]
 MINIMAL_TOOL = [{"type": "function", "function": {"name": "x", "description": "", "parameters": {}}}]
@@ -73,6 +73,18 @@ def main():
 
     print(f"\n  formula total (OVERHEAD + sum token_count): {TOOL_FRAMEWORK_OVERHEAD + sum(t.token_count for t in TOOL_REGISTRY.values())}")
     print(f"  actual total (all tools):                   {full_count - baseline}")
+
+    # --- always-on tools (conversational + plan mode) ---
+    always_on = {**CONVERSATIONAL_TOOLS, **PLAN_MODE_TOOLS}
+    print(f"\n--- always-on tools (isolated delta, 1 tool vs no tools) ---")
+    for name, tool in always_on.items():
+        schema = {"type": "function", "function": tool.to_ollama_schema()}
+        count = _count([schema])
+        delta = count - baseline
+        expected_token_count = delta - TOOL_FRAMEWORK_OVERHEAD
+        current = tool.measured_delta
+        match = "OK" if current == delta else f"MISMATCH (stored={current}, measured={delta})"
+        print(f"  {name}: isolated_delta={delta}, token_count={expected_token_count} [{match}]")
 
 
 if __name__ == "__main__":

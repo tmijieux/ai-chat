@@ -23,7 +23,7 @@ class SummarizeSubtaskTool(BaseTool):
         "required": ["task", "content"],
     }
     requires_confirmation = False
-    measured_delta = 336
+    measured_delta = 335
 
     def label(self, args: dict) -> str:
         return f"SUMMARIZE for: {args.get('task', '')}"
