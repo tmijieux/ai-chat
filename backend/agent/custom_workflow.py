@@ -112,14 +112,17 @@ class CustomWorkflowOrchestrator:
 
     async def run(self, session: AgentSession, user_message: str, messages: list[dict]) -> None:
         """Entry point — runs all workflow stages and emits events via session."""
+        logger.info("[workflow:%s] starting — user_message=%r messages=%d", self._workflow.name, user_message, len(messages))
         try:
             await self._run_workflow(session, user_message, messages)
         except asyncio.CancelledError:
+            logger.info("[workflow:%s] aborted (CancelledError)", self._workflow.name)
             await session.emit({"type": "error", "message": f"Workflow '{self._workflow.name}' was aborted"})
         except aiohttp.ClientConnectorError as exc:
             logger.error("[workflow:%s] LLM backend connection error: %s", self._workflow.name, exc)
             await session.emit({"type": "error", "message": "LLM backend is not running"})
         except _WorkflowAbort as exc:
+            logger.error("[workflow:%s] aborted: %s", self._workflow.name, exc)
             await session.emit({"type": "error", "message": str(exc)})
         except Exception as exc:
             import traceback
@@ -134,18 +137,23 @@ class CustomWorkflowOrchestrator:
         slots: dict[str, Any] = {"user_message": effective_message}
         stages = self._workflow.stages
         stage_index = {s.name: i for i, s in enumerate(stages)}
+        logger.info("[workflow:%s] %d stages: %s", self._workflow.name, len(stages), [s.name for s in stages])
         current = 0
 
         while current < len(stages):
             stage = stages[current]
+            logger.info("[workflow:%s] dispatching stage '%s' (type=%s)", self._workflow.name, stage.name, stage.type)
             jump_to = await self._dispatch(stage, session, messages, slots)
+            logger.info("[workflow:%s] stage '%s' done — slots keys: %s", self._workflow.name, stage.name, list(slots.keys()))
             if jump_to is not None:
                 if jump_to not in stage_index:
                     raise ValueError(f"Branch target '{jump_to}' not found in workflow stages")
+                logger.info("[workflow:%s] jumping to stage '%s'", self._workflow.name, jump_to)
                 current = stage_index[jump_to]
             else:
                 current += 1
 
+        logger.info("[workflow:%s] all stages complete", self._workflow.name)
         await session.emit({"type": "done", "finished_without_response": False})
 
     async def _dispatch(
@@ -186,6 +194,8 @@ class CustomWorkflowOrchestrator:
 
         system_prompt = resolve_template(stage.system_prompt, slots)
         user_prompt = resolve_template(stage.user_prompt, slots)
+        logger.info("[workflow] llm stage '%s' — tools=%s finish_tool=%s user_prompt=%r",
+                    stage.name, stage.tools + stage.agents, stage.finish_tool_name, user_prompt[:120])
         stage_messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -205,6 +215,7 @@ class CustomWorkflowOrchestrator:
             inject_turn_reminders=stage.inject_turn_reminders,
         )
 
+        logger.info("[workflow] llm stage '%s' result keys: %s", stage.name, list(result.keys()) if result else "None")
         slots[stage.name] = result
         await session.emit({
             "type": "pipeline_summary",
@@ -221,12 +232,13 @@ class CustomWorkflowOrchestrator:
             logger.info("[workflow] skipping coordinator stage '%s' (condition false)", stage.name)
             return
 
+        logger.info("[workflow] coordinator '%s' action='%s' inputs=%s", stage.name, stage.action, list(stage.action_input.keys()))
         resolved_inputs = {k: resolve_value(v, slots) for k, v in stage.action_input.items()}
         output = await run_coordinator_action(stage.action, resolved_inputs, session, self._working_directory)
 
         if stage.action_output != "":
             slots[stage.action_output] = output
-        logger.info("[workflow] coordinator '%s' action='%s' output_slot='%s'", stage.name, stage.action, stage.action_output)
+        logger.info("[workflow] coordinator '%s' done — output_slot='%s'", stage.name, stage.action_output)
 
     def _resolve_branch(self, stage: WorkflowStageDefinition, slots: dict[str, Any]) -> str:
         """Evaluate a branch condition and return the target stage name."""
@@ -309,13 +321,20 @@ class CustomWorkflowOrchestrator:
             invocation += f" with the following prompt: {user_prompt}"
 
         working_messages = list(messages)
-        if working_messages and working_messages[-1].get("role") == "user" and not working_messages[-1].get("content", "").strip():
+        last_role = working_messages[-1].get("role") if working_messages else None
+        last_content = working_messages[-1].get("content", "") if working_messages else ""
+        logger.info("[workflow] respond stage — %d base messages, last role=%r content=%r", len(messages), last_role, (last_content or "")[:80])
+
+        if working_messages and last_role == "user" and not (last_content or "").strip():
+            logger.info("[workflow] respond: patching empty last user message with invocation header")
             working_messages[-1] = {**working_messages[-1], "content": invocation}
         else:
+            logger.info("[workflow] respond: appending new user message with invocation header")
             working_messages.append({"role": "user", "content": invocation})
 
         if stage.message_suffix != "":
             suffix = resolve_template(stage.message_suffix, slots)
+            logger.info("[workflow] respond: injecting tool result (%d chars)", len(suffix))
             tool_call_id = f"wf_{uuid.uuid4().hex[:8]}"
             working_messages.append({
                 "role": "assistant",
@@ -328,6 +347,7 @@ class CustomWorkflowOrchestrator:
                 "content": suffix,
             })
 
+        logger.info("[workflow] respond: calling run_agent with %d messages", len(working_messages))
         await run_agent(session, working_messages, self._tools, self._working_directory)
 
     async def _run_isolated_agent(

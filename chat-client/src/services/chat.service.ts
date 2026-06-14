@@ -311,7 +311,8 @@ export class ChatService {
   // -------------------------------------------------------------------------
 
   startAgentRun(input: string, imageIds: string[] = [], workflowName?: string): void {
-    const userMsg: DisplayMessage = { kind: 'user', id: crypto.randomUUID(), content: input }
+    const effectiveInput = input !== '' ? input : workflowName !== undefined ? `/${workflowName}` : input
+    const userMsg: DisplayMessage = { kind: 'user', id: crypto.randomUUID(), content: effectiveInput }
     this._messages.update((msgs) => [...msgs, userMsg])
     this._promptTokens.set(0)
 
