@@ -17,7 +17,7 @@ import tables as db
 from agent.agent import AgentSession, run_agent, _find_superseded_read_file_indices
 from agent.pipeline import PipelineOrchestrator
 from agent.compress import compress_messages
-from agent.tools import TOOL_REGISTRY, PLAN_MODE_TOOLS, get_ollama_tool_list
+from agent.tools import TOOL_REGISTRY, PLAN_MODE_TOOLS, CONVERSATIONAL_TOOLS, get_ollama_tool_list
 from llm import backend
 import whisper_pipeline
 
@@ -1185,9 +1185,15 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
         if mode == "plan":
             filtered_names = [n for n in active_tool_names if n not in _PLAN_EXCLUDED_TOOLS]
             tools = get_ollama_tool_list(filtered_names)
-            for plan_tool in PLAN_MODE_TOOLS.values():
-                tools.append({"type": "function", "function": plan_tool.to_ollama_schema()})
-            extra_tools: dict | None = dict(PLAN_MODE_TOOLS)
+            injected = {**CONVERSATIONAL_TOOLS, **PLAN_MODE_TOOLS}
+            for injected_tool in injected.values():
+                tools.append({"type": "function", "function": injected_tool.to_ollama_schema()})
+            extra_tools: dict | None = injected
+        elif mode == "standard":
+            tools = get_ollama_tool_list(active_tool_names)
+            for injected_tool in CONVERSATIONAL_TOOLS.values():
+                tools.append({"type": "function", "function": injected_tool.to_ollama_schema()})
+            extra_tools = dict(CONVERSATIONAL_TOOLS)
         else:
             tools = get_ollama_tool_list(active_tool_names)
             extra_tools = None

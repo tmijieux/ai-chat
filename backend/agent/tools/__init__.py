@@ -32,8 +32,12 @@ TOOL_REGISTRY: dict[str, BaseTool] = {
     ]
 }
 
+CONVERSATIONAL_TOOLS: dict[str, BaseTool] = {
+    t.name: t for t in [AskUserQuestionTool()]
+}
+
 PLAN_MODE_TOOLS: dict[str, BaseTool] = {
-    t.name: t for t in [ProposePlanTool(), AskUserQuestionTool()]
+    t.name: t for t in [ProposePlanTool()]
 }
 
 
