@@ -20,6 +20,8 @@ class AgentSession:
     def __init__(self):
         self.outbound: asyncio.Queue[dict] = asyncio.Queue()
         self._pending_confirms: dict[str, asyncio.Future] = {}
+        self._pending_plan_confirms: dict[str, asyncio.Future] = {}
+        self._pending_user_inputs: dict[str, asyncio.Future] = {}
         self._compression_event: asyncio.Event = asyncio.Event()
         self._compression_conv_id: str | None = None
         self.refresh_messages_callback: Callable[[str], Awaitable[list[dict]]] | None = None
@@ -53,6 +55,30 @@ class AgentSession:
         future = self._pending_confirms.pop(tool_id, None)
         if future and not future.done():
             future.set_result((approved, reason))
+
+    async def request_plan_confirm(self, plan_id: str, plan: str) -> str:
+        """Emit a plan_proposal event and suspend until the user accepts with a chosen mode."""
+        await self.emit({"type": "plan_proposal", "plan_id": plan_id, "plan": plan})
+        future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        self._pending_plan_confirms[plan_id] = future
+        return await future
+
+    def resolve_plan_confirm(self, plan_id: str, chosen_mode: str) -> None:
+        future = self._pending_plan_confirms.pop(plan_id, None)
+        if future and not future.done():
+            future.set_result(chosen_mode)
+
+    async def request_user_input(self, question_id: str, question: str) -> str:
+        """Emit an agent_question event and suspend until the user replies."""
+        await self.emit({"type": "agent_question", "question_id": question_id, "question": question})
+        future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        self._pending_user_inputs[question_id] = future
+        return await future
+
+    def resolve_user_input(self, question_id: str, reply: str) -> None:
+        future = self._pending_user_inputs.pop(question_id, None)
+        if future and not future.done():
+            future.set_result(reply)
 
     async def await_compression(self) -> str | None:
         """Suspend the agent loop until the frontend sends compression_done."""
@@ -358,13 +384,14 @@ async def run_agent(
     messages: list[dict[str, Any]],
     tools: list[dict],
     working_directory: str | None,
+    extra_tools: dict | None = None,
 ) -> None:
     """Run the full agent loop until done, emitting events via session."""
     try:
         finished = False
         finished_without_response = False
         while not finished:
-            finished, finished_without_response = await chat_with_tools(messages, session, tools, working_directory)
+            finished, finished_without_response = await chat_with_tools(messages, session, tools, working_directory, extra_tools)
         await session.emit({"type": "done", "finished_without_response": finished_without_response})
     except asyncio.CancelledError:
         await session.emit({"type": "error", "message": "Agent was aborted"})

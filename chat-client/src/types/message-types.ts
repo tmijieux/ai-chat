@@ -162,6 +162,9 @@ export type AgentEvent = (
   | { type: 'tool_result'; tool_id: string; tool_name: string; content: string; log_message?: string }
   | { type: 'iteration_end'; prompt_tokens: number; response_tokens: number }
   | { type: 'ctx_update' | 'compressing'; ctx_tokens: number }
+  | { type: 'plan_proposal'; plan_id: string; plan: string }
+  | { type: 'agent_question'; question_id: string; question: string }
+  | { type: 'mode_changed'; mode: ConversationMode }
   | { type: 'done'; finished_without_response?: boolean }
   | { type: 'error'; message: string }
 ) & { _pipeline_stage?: string }

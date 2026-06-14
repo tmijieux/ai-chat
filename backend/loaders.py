@@ -47,6 +47,7 @@ class ConversationSettings(BaseModel):
     active_prompt_id: str | None = None
     active_tool_names: list[str] = []
     working_directory: str | None = None
+    mode: str = "standard"
 
 
 class AppSettingUpdate(BaseModel):

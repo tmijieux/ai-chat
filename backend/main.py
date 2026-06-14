@@ -17,7 +17,7 @@ import tables as db
 from agent.agent import AgentSession, run_agent, _find_superseded_read_file_indices
 from agent.pipeline import PipelineOrchestrator
 from agent.compress import compress_messages
-from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
+from agent.tools import TOOL_REGISTRY, PLAN_MODE_TOOLS, get_ollama_tool_list
 from llm import backend
 import whisper_pipeline
 
@@ -1009,12 +1009,19 @@ async def compress_conversation(
 # Agent WebSocket
 # ---------------------------------------------------------------------------
 
+_PLAN_EXCLUDED_TOOLS = frozenset({"write_file", "edit_file", "run_shell"})
+
+
 async def _ws_receive_messages(websocket: WebSocket, session: AgentSession, agent_task: asyncio.Task) -> None:
     try:
         while True:
             data = await websocket.receive_json()
             if data.get("type") == "confirm":
                 session.resolve_confirm(data["tool_id"], data["approved"], data.get("reason"))
+            elif data.get("type") == "plan_accept":
+                session.resolve_plan_confirm(data["plan_id"], data["mode"])
+            elif data.get("type") == "user_question_reply":
+                session.resolve_user_input(data["question_id"], data["reply"])
             elif data.get("type") == "compression_done":
                 session.resume_after_compression(data.get("conversation_id", ""))
             elif data.get("type") == "abort":
@@ -1172,8 +1179,18 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
         settings = _parse_conv_settings(conv) if conv else ld.ConversationSettings()
         active_tool_names = settings.active_tool_names if (conv and conv.settings is not None) else list(TOOL_REGISTRY.keys())
         working_directory = settings.working_directory
+        mode = settings.mode
 
-        tools = get_ollama_tool_list(active_tool_names)
+        if mode == "plan":
+            filtered_names = [n for n in active_tool_names if n not in _PLAN_EXCLUDED_TOOLS]
+            tools = get_ollama_tool_list(filtered_names)
+            for plan_tool in PLAN_MODE_TOOLS.values():
+                tools.append({"type": "function", "function": plan_tool.to_ollama_schema()})
+            extra_tools: dict | None = dict(PLAN_MODE_TOOLS)
+        else:
+            tools = get_ollama_tool_list(active_tool_names)
+            extra_tools = None
+
         messages = await _build_inference_context(branch, settings.active_prompt_id, sess)
         if user_message_id is None:
             messages.append({"role": "user", "content": user_message})
@@ -1222,7 +1239,7 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
         if conversation_id:
             session.refresh_messages_callback = _refresh_messages
 
-        agent_task = asyncio.create_task(run_agent(session, messages, tools, working_directory))
+        agent_task = asyncio.create_task(run_agent(session, messages, tools, working_directory, extra_tools))
 
         async def send_events_to_websocket() -> None:
             while True:

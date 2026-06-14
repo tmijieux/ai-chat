@@ -11,6 +11,8 @@ from .summarize_subtask import SummarizeSubtaskTool
 from .subagent import SubAgentTool
 from .read_file_range import ReadFileRangeTool
 from .explore_codebase import ExploreCodebaseTool
+from .propose_plan import ProposePlanTool
+from .ask_user_question import AskUserQuestionTool
 
 TOOL_REGISTRY: dict[str, BaseTool] = {
     t.name: t
@@ -28,6 +30,10 @@ TOOL_REGISTRY: dict[str, BaseTool] = {
         SummarizeSubtaskTool(),
         SubAgentTool(),
     ]
+}
+
+PLAN_MODE_TOOLS: dict[str, BaseTool] = {
+    t.name: t for t in [ProposePlanTool(), AskUserQuestionTool()]
 }
 
 
