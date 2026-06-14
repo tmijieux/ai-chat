@@ -165,6 +165,56 @@ async def _llm_complete(prompt: str, backend: LLMBackend, system: str | None = N
     return result
 
 
+_REPORT_CLASSIFICATION_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "report_classification",
+        "description": "Report the compression classification for each tool call result.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "labels": {
+                    "type": "object",
+                    "description": 'Map of index (as string) to one of: "drop", "1-line-summary", "summarize", "keep".',
+                },
+                "reasonings": {
+                    "type": "object",
+                    "description": "Map of index (as string) to a one-sentence explanation of why that label was chosen.",
+                },
+                "line_summaries": {
+                    "type": "object",
+                    "description": 'Map of index (as string) to a one-line factual summary. Only for items labelled "1-line-summary".',
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "One sentence describing what the agent accomplished (or is trying to accomplish for mid-run compression).",
+                },
+            },
+            "required": ["labels", "reasonings", "summary"],
+        },
+    },
+}
+
+
+async def _llm_classify(prompt: str, backend: LLMBackend, system: str) -> dict:
+    """Call the LLM and return the parsed report_classification tool call arguments."""
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+    prepared = backend.prepare_messages(messages)
+    tool_args_str = ""
+    async for event in backend.stream_completion(
+        prepared, [_REPORT_CLASSIFICATION_TOOL], temperature=0.1, max_tokens=1024, disable_thinking=True,
+    ):
+        if event["type"] == "tool_call_arg":
+            tool_args_str += event["fragment"]
+    if not tool_args_str:
+        return {}
+    try:
+        return json.loads(tool_args_str)
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.warning("_llm_classify: failed to parse tool args: %s — raw: %r", e, tool_args_str[:300])
+        return {}
+
+
 _CLASSIFY_LABELS_DOC = """\
 Assign exactly one label per tool call:
 
@@ -203,18 +253,17 @@ Tool calls:
   {"index": 2, "tool": "grep_files", "args_summary": "'provideRouter'",           "result_metadata": {"match_count": 1}, "following_thinking": "Found it at line 18. I will edit the file now."}
 ]
 
-Example output:
-{
-  "labels": {"0": "drop", "1": "summarize", "2": "1-line-summary"},
-  "line_summaries": {"2": "provideRouter call at src/app/app.config.ts:18"},
-  "summary": "Agent located the route config and is about to add the new route."
-}\
+Example report_classification call:
+  labels:        {"0": "drop", "1": "summarize", "2": "1-line-summary"}
+  reasonings:    {"0": "Glob used only for navigation — agent moved on immediately.", "1": "Agent needs the file structure but not verbatim lines.", "2": "Single fact worth preserving — exact location already noted."}
+  line_summaries: {"2": "provideRouter call at src/app/app.config.ts:18"}
+  summary:       "Agent located the route config and is about to add the new route."\
 """
 
 _CLASSIFY_SYSTEM_POST_RUN = f"""\
 You are a context compression subagent. An AI agent has just completed a run. \
 Classify each tool result so the context stays as small as possible while keeping \
-what the agent might still need.
+what the agent might still need. Call report_classification with your results.
 
 {_CLASSIFY_LABELS_DOC}
 
@@ -223,17 +272,13 @@ Primary signal: following_thinking.
   If it uses the result conceptually → 1-line-summary or summarize.
   If it moved on entirely → drop.
 
-Return JSON with keys "labels", "line_summaries" (only for 1-line-summary items), \
-and "summary" (one sentence on what the agent accomplished).
-No prose, no markdown fences.
-
 {_CLASSIFY_EXAMPLE}\
 """
 
 _CLASSIFY_SYSTEM_MID_RUN = f"""\
 You are a context compression subagent. An AI agent hit the context limit mid-task \
 and must continue after compression. Classify each tool result to free as much space \
-as possible.
+as possible. Call report_classification with your results.
 
 The agent has NOT finished. Judge each result by whether its content will be needed \
 in upcoming steps — not by whether it was useful in past steps.
@@ -244,10 +289,6 @@ Primary signal: following_thinking.
   If the next thought cites specific lines/content verbatim → keep.
   If it uses the result conceptually → 1-line-summary or summarize.
   If it moved on entirely → drop.
-
-Return JSON with keys "labels", "line_summaries" (only for 1-line-summary items), \
-and "summary" (one sentence on what the agent has accomplished so far).
-No prose, no markdown fences.
 
 {_CLASSIFY_EXAMPLE}\
 """
@@ -276,27 +317,23 @@ Tool calls:
 """
 
     t0 = time.perf_counter()
-    raw = await _llm_complete(prompt, backend, system=system)
+    parsed = await _llm_classify(prompt, backend, system=system)
     elapsed = time.perf_counter() - t0
-    logger.info("classify LLM call: %.1fs, raw length=%d", elapsed, len(raw))
-    logger.debug("classify raw response: %s", raw[:500])
+    logger.info("classify LLM call: %.1fs", elapsed)
 
-    json_str = _extract_json(raw)
-    try:
-        parsed = json.loads(json_str)
-        labels = {str(k): str(v) for k, v in parsed.get("labels", {}).items()}
-        line_summaries = {str(k): str(v) for k, v in parsed.get("line_summaries", {}).items()}
-        summary = str(parsed.get("summary", ""))
-        logger.info("classify labels: %s | summary: %s", labels, summary[:80])
-        return labels, line_summaries, summary
-    except (json.JSONDecodeError, ValueError) as e:
-        logger.warning(
-            "compress classify parse error: %s — json_str: %r — raw: %r",
-            e,
-            json_str[:200],
-            raw[:300],
-        )
+    if not parsed:
+        logger.warning("compress classify: empty result — defaulting all to drop")
         return {str(i): "drop" for i in range(len(pairs))}, {}, ""
+
+    labels = {str(k): str(v) for k, v in (parsed.get("labels") or {}).items()}
+    reasonings = {str(k): str(v) for k, v in (parsed.get("reasonings") or {}).items()}
+    line_summaries = {str(k): str(v) for k, v in (parsed.get("line_summaries") or {}).items()}
+    summary = str(parsed.get("summary", ""))
+    logger.info("classify summary: %s", summary[:120])
+    for index, label in sorted(labels.items()):
+        reason = reasonings.get(index, "")
+        logger.info("  [%s] %s — %s", index, label, reason[:100])
+    return labels, line_summaries, summary
 
 
 _SUMMARIZE_FILE_SYSTEM = """\
