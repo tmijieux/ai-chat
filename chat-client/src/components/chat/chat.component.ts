@@ -18,6 +18,7 @@ import { ToolResultComponent } from '../tool-result/tool-result.component'
 import { ToolCallEntryComponent } from '../tool-call-entry/tool-call-entry.component'
 import { DiffBlockComponent } from '../diff-block/diff-block.component'
 import { ToolCallPreviewComponent } from '../tool-call-preview/tool-call-preview.component'
+import { DirectoryPickerComponent } from '../directory-picker/directory-picker.component'
 
 @Component({
   selector: 'app-chat',
@@ -33,6 +34,7 @@ import { ToolCallPreviewComponent } from '../tool-call-preview/tool-call-preview
     ToolCallEntryComponent,
     DiffBlockComponent,
     ToolCallPreviewComponent,
+    DirectoryPickerComponent,
   ],
   templateUrl: './chat.component.html',
   styleUrls: ['./chat.component.scss'],
@@ -45,6 +47,15 @@ export class ChatComponent implements OnDestroy {
   readonly appStatus = inject(AppStatusService)
 
   readonly drawerOpen = signal(false)
+  readonly sidebarPickerOpen = signal(false)
+
+  readonly workspaceName = computed(() => {
+    const dir = this.chatSvc.currentConversationSettings().working_directory
+    if (dir === null || dir === undefined) {
+      return null
+    }
+    return dir.split(/[\\/]/).filter((p) => p.length > 0).pop() ?? dir
+  })
   readonly rejectingToolId = signal<string | null>(null)
   readonly rejectReason = signal('')
 
@@ -259,6 +270,12 @@ export class ChatComponent implements OnDestroy {
 
   onSettingsChanged(settings: ConversationSettings): void {
     this.chatSvc.updateConversationSettings(settings).subscribe()
+  }
+
+  onSidebarWorkspaceSelected(path: string): void {
+    this.sidebarPickerOpen.set(false)
+    const settings = this.chatSvc.currentConversationSettings()
+    this.chatSvc.updateConversationSettings({ ...settings, working_directory: path }).subscribe()
   }
 
   // -------------------------------------------------------------------------

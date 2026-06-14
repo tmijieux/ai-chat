@@ -48,7 +48,18 @@
     }
   </div>
 
-  <div class="p-4 border-t border-gray-700 bg-gray-800">
+  <div class="p-4 border-t border-gray-700 bg-gray-800 flex flex-col gap-2">
+    <div
+      class="w-full py-1 px-2 rounded text-sm cursor-pointer hover:bg-gray-700 transition-all"
+      (click)="sidebarPickerOpen.set(true)"
+      title="Set workspace directory"
+    >
+      @if (workspaceName() !== null) {
+        <span class="text-gray-300">📁 {{ workspaceName() }}</span>
+      } @else {
+        <span class="text-gray-500 italic">Set workspace...</span>
+      }
+    </div>
     <button
       class="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-sm transition-all"
       [routerLink]="['/settings']"
@@ -444,5 +455,14 @@
     [settings]="chatSvc.currentConversationSettings()"
     (closed)="drawerOpen.set(false)"
     (settingsChanged)="onSettingsChanged($event)"
+  />
+}
+
+<!-- Sidebar workspace picker -->
+@if (sidebarPickerOpen()) {
+  <app-directory-picker
+    [initialPath]="chatSvc.currentConversationSettings().working_directory"
+    (selected)="onSidebarWorkspaceSelected($event)"
+    (cancelled)="sidebarPickerOpen.set(false)"
   />
 }
