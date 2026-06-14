@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 COMPRESS_THRESHOLD_CHARS = 2000  # ~500 tokens
 CHUNK_MAX_CHARS = 32_000  # ~8k tokens per chunk, leaves headroom for agent context
 
-_SKIP_CLASSIFY = {"write_file", "edit_file"}
+_SKIP_CLASSIFY = {"write_file", "edit_file", "ask_user_question", "propose_plan"}
 
 
 def _following_thinking(all_messages: list[dict], tool_id: str) -> str:
