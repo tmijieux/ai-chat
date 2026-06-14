@@ -1,18 +1,102 @@
 import json
 import asyncio
 import logging
+import os
 import re
+import uuid
+import aiofiles
 import aiohttp
 from typing import Any, Callable, Awaitable
 
 from .tools import TOOL_REGISTRY, get_ollama_tool_list
 from .auto_safety import evaluate_tool_safety, _ALWAYS_SAFE_TOOLS, _FILE_WRITE_TOOLS, is_path_inside_workspace
+from .compress import _summarize_shell_output, _summarize_search_results
 from llm import backend
 from llm.base import ToolCallStartEvent, ToolCallArgEvent
 
 CTX_LIMIT = 2**15
 
 logger = logging.getLogger(__name__)
+
+_LARGE_OUTPUT_CHARS = 20_000  # preshrink threshold for run_shell / search_web outputs
+
+
+async def _save_temp_output(content: str, prefix: str, working_directory: str) -> str:
+    """Write content to .agent_tmp/ inside the workspace and return the relative path."""
+    tmp_dir = os.path.join(working_directory, ".agent_tmp")
+    os.makedirs(tmp_dir, exist_ok=True)
+    filename = f"{prefix}_{uuid.uuid4().hex[:8]}.txt"
+    file_path = os.path.join(tmp_dir, filename)
+    async with aiofiles.open(file_path, "w", encoding="utf-8") as f:
+        await f.write(content)
+    return os.path.join(".agent_tmp", filename)
+
+
+async def _maybe_preshrink_tool_output(
+    tool_name: str,
+    result_dict: dict,
+    working_directory: str | None,
+) -> dict:
+    """If a tool output exceeds _LARGE_OUTPUT_CHARS, save raw to a temp file and replace with a summary."""
+    if working_directory is None:
+        return result_dict
+
+    if tool_name == "run_shell":
+        raw_output = result_dict.get("output")
+        if raw_output is None or raw_output == "":
+            error_dict = result_dict.get("error")
+            if error_dict is None:
+                error_dict = {}
+            raw_output = error_dict.get("message")
+            if raw_output is None:
+                raw_output = ""
+        if len(raw_output) <= _LARGE_OUTPUT_CHARS:
+            return result_dict
+        temp_path = await _save_temp_output(raw_output, "shell", working_directory)
+        summary = await _summarize_shell_output(result_dict, backend)
+        modified = dict(result_dict)
+        modified["output"] = (
+            f"[Output too large ({len(raw_output):,} chars) — auto-summarized. "
+            f"Full output saved to {temp_path}; use grep_files or read_file_range on it for details.]\n\n"
+            + summary
+        )
+        logger.info(
+            "preshrink run_shell: %d chars → saved to %s, summary %d chars",
+            len(raw_output), temp_path, len(summary),
+        )
+        return modified
+
+    if tool_name == "search_web":
+        results_list = result_dict.get("results")
+        if results_list is None:
+            results_list = []
+        total_chars = sum(len(r.get("content") or "") for r in results_list)
+        if total_chars <= _LARGE_OUTPUT_CHARS:
+            return result_dict
+        parts = [f"Query: {result_dict.get('query', '')}", ""]
+        for i, r in enumerate(results_list):
+            parts.append(f"=== Result {i + 1}: {r.get('url', '')} ===")
+            parts.append(r.get("content") or "")
+            parts.append("")
+        temp_content = "\n".join(parts)
+        temp_path = await _save_temp_output(temp_content, "search", working_directory)
+        summary = await _summarize_search_results(result_dict, backend)
+        modified = dict(result_dict)
+        modified["results"] = [{
+            "url": "[auto-summarized]",
+            "content": (
+                f"[Results too large ({total_chars:,} chars total) — auto-summarized. "
+                f"Full results saved to {temp_path}; use grep_files or read_file_range on it.]\n\n"
+                + summary
+            ),
+        }]
+        logger.info(
+            "preshrink search_web: %d total chars → saved to %s, summary %d chars",
+            total_chars, temp_path, len(summary),
+        )
+        return modified
+
+    return result_dict
 
 
 class AgentSession:
@@ -378,6 +462,7 @@ async def chat_with_tools(
             else:
                 tool_instance = effective_registry[tool_name]
                 result_dict = await tool_instance.execute(tool_args, session, working_directory)
+                result_dict = await _maybe_preshrink_tool_output(tool_name, result_dict, working_directory)
                 log_msg = tool_instance.label(tool_args)
 
             result_dict["tool_call_id"] = call_id
