@@ -418,11 +418,10 @@ export class ChatService {
     let pendingContentText = ''
     let pendingToolCalls: ToolCallEntry[] = []
 
-    // The prompt_token count reported by Ollama in iteration_end is the number of tokens in the
-    // messages sent to that iteration — which includes the tool results from the previous iteration.
-    // We therefore patch tool result IDs from the previous iteration when the next iteration_end arrives.
-    let toolResultIdsFromCurrentIteration: string[] = []
-    let toolResultIdsFromPreviousIteration: string[] = [userMessageId]
+    // Token counts are patched immediately on each tool_result using the ctx_update
+    // that the backend always emits just before it. The user message is patched on the
+    // very first ctx_update (before the first LLM generation).
+    let patchedUserMessage = false
     let lastKnownCtxTokens = 0
 
     let saveQueue: Promise<void> = Promise.resolve()
@@ -593,6 +592,21 @@ export class ChatService {
             content: resultContent,
           },
         ])
+        // Patch token count immediately — the backend always emits ctx_update just before
+        // tool_result, so lastKnownCtxTokens is already the post-result context size.
+        const capturedTokens = lastKnownCtxTokens
+        enqueue(async () => {
+          const currentMsgs = this._messages()
+          const idx = currentMsgs.findIndex((m) => m.id === resultId)
+          const prevCount = this._findCumulativeTokenCountOfClosestPrecedingMessageThatHasOne(currentMsgs, idx)
+          const tokenDelta = prevCount !== null ? capturedTokens - prevCount : null
+          await firstValueFrom(this.api.patch_message_token_count(resultId, capturedTokens, tokenDelta))
+          this._messages.update((msgs) =>
+            msgs.map((m) =>
+              m.id === resultId ? { ...m, token_count: capturedTokens, token_delta: tokenDelta } : m,
+            ),
+          )
+        })
         stopStreamingTheAssistantMessageSaveItAndClearIt()
         // If there was no streaming assistant message (thinking → tool with no text content),
         // pendingToolCalls was never cleared. Attach them to the thinking bubble they belong to.
@@ -628,35 +642,11 @@ export class ChatService {
             }),
           ),
         )
-        toolResultIdsFromCurrentIteration.push(resultId)
       } else if (event.type === 'iteration_end') {
         const tokens = event.prompt_tokens ?? 0
         this._promptTokens.set(tokens)
         markThinkingMessageAsDoneAndClearIt()
         stopStreamingTheAssistantMessageSaveItAndClearIt()
-        for (const id of toolResultIdsFromPreviousIteration) {
-          const capturedId = id
-          const currentMsgs = this._messages()
-          const idx = currentMsgs.findIndex((m) => m.id === capturedId)
-          const prevCount = this._findCumulativeTokenCountOfClosestPrecedingMessageThatHasOne(
-            currentMsgs,
-            idx,
-          )
-          const delta = prevCount !== null ? tokens - prevCount : null
-          enqueue(() =>
-            firstValueFrom(this.api.patch_message_token_count(capturedId, tokens, delta)).then(
-              () => {
-                this._messages.update((msgs) =>
-                  msgs.map((m) =>
-                    m.id === capturedId ? { ...m, token_count: tokens, token_delta: delta } : m,
-                  ),
-                )
-              },
-            ),
-          )
-        }
-        toolResultIdsFromPreviousIteration = toolResultIdsFromCurrentIteration
-        toolResultIdsFromCurrentIteration = []
       } else if (event.type === 'plan_proposal') {
         this._messages.update((msgs) => [
           ...msgs,
@@ -686,6 +676,22 @@ export class ChatService {
       } else if (event.type === 'ctx_update') {
         lastKnownCtxTokens = event.ctx_tokens ?? 0
         this._promptTokens.set(event.ctx_tokens ?? 0)
+        if (!patchedUserMessage) {
+          patchedUserMessage = true
+          const capturedTokens = lastKnownCtxTokens
+          enqueue(async () => {
+            const currentMsgs = this._messages()
+            const idx = currentMsgs.findIndex((m) => m.id === userMessageId)
+            const prevCount = this._findCumulativeTokenCountOfClosestPrecedingMessageThatHasOne(currentMsgs, idx)
+            const tokenDelta = prevCount !== null ? capturedTokens - prevCount : null
+            await firstValueFrom(this.api.patch_message_token_count(userMessageId, capturedTokens, tokenDelta))
+            this._messages.update((msgs) =>
+              msgs.map((m) =>
+                m.id === userMessageId ? { ...m, token_count: capturedTokens, token_delta: tokenDelta } : m,
+              ),
+            )
+          })
+        }
       } else if (event.type === 'compressing') {
         const convId = this._conversationId()
         if (convId) {
@@ -711,17 +717,8 @@ export class ChatService {
         this._messages.update((msgs) => msgs.filter((m) => m.kind !== 'tool_confirm' && m.kind !== 'tool_evaluating'))
         if (event.type === 'error') {
           const errorText = event.message ?? 'An error occurred'
-          const currentIterationIds = [...toolResultIdsFromCurrentIteration]
-          const capturedCtxTokens = lastKnownCtxTokens
-          // Patch token counts for tool results that never got an iteration_end, then reload.
+          // Tool results are already patched immediately on arrival — just reload and show error.
           enqueue(async () => {
-            for (const msgId of currentIterationIds) {
-              const currentMsgs = this._messages()
-              const idx = currentMsgs.findIndex((m) => m.id === msgId)
-              const prevCount = this._findCumulativeTokenCountOfClosestPrecedingMessageThatHasOne(currentMsgs, idx)
-              const delta = prevCount !== null ? capturedCtxTokens - prevCount : null
-              await firstValueFrom(this.api.patch_message_token_count(msgId, capturedCtxTokens, delta))
-            }
             await this._reloadFromDb()
             this._messages.update((msgs) => [
               ...msgs,
