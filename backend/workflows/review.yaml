@@ -1,0 +1,84 @@
+name: review
+description: "Review code for bugs, style issues, and improvements — pass a file, function name, or 'diff' to review staged changes"
+
+stages:
+
+  # ---------------------------------------------------------------------------
+  # Stage 1: Explore — locate the code the user wants reviewed
+  # ---------------------------------------------------------------------------
+  - name: explore
+    type: llm
+    system_prompt: |
+      You are a code locator. Find the code the user wants reviewed.
+      - If the user names a file: find it with glob_files, identify the relevant line range.
+      - If the user names a function or symbol: grep for it, then find its line range.
+      - If the user says "diff" or does not specify: run `git diff HEAD` to see what changed, then map changed hunks to (file_path, start_line, end_line) coordinates.
+      Call finish_explore with snippet coordinates for every relevant block.
+      Do not copy code content — the system reads the actual code after you finish.
+    user_prompt: "{{user_message}}"
+    tools: [run_shell, grep_files, glob_files]
+    finish_tool: finish_explore
+
+  # ---------------------------------------------------------------------------
+  # Coordinator: read snippet coordinates into actual code content
+  # ---------------------------------------------------------------------------
+  - name: read_context
+    type: coordinator
+    action: read_code_context
+    input:
+      snippets: "{{explore.snippets}}"
+    output: code_context
+
+  # ---------------------------------------------------------------------------
+  # Stage 2: Review — structured analysis, no tools needed
+  # ---------------------------------------------------------------------------
+  - name: review
+    type: llm
+    system_prompt: |
+      You are a precise code reviewer. Analyze the provided code and produce structured findings.
+      Three severity levels:
+      - bugs: correctness issues, crashes, data loss, security holes — must fix
+      - suggestions: non-obvious improvements to logic, naming, or structure — worth considering
+      - nitpicks: minor style or formatting inconsistencies — optional
+      For each finding: name the file, line number if known, and describe the exact problem concisely.
+      Do not write a text response — call finish_review immediately.
+    user_prompt: |
+      {{explore.summary}}
+
+      Code to review:
+      {{code_context}}
+    tools: []
+    finish_tool: finish_review
+
+  # ---------------------------------------------------------------------------
+  # Stage 3: Respond — present findings conversationally
+  # ---------------------------------------------------------------------------
+  - name: respond
+    type: respond
+    message_suffix: |
+      [Review complete.
+      Bugs: {{review.bugs}}
+      Suggestions: {{review.suggestions}}
+      Nitpicks: {{review.nitpicks}}]
+
+      Present the review findings clearly, grouped by severity. Be concise and actionable.
+
+finish_tools:
+  finish_review:
+    description: "Submit structured code review findings grouped by severity."
+    parameters:
+      bugs:
+        type: array
+        description: "Correctness issues, crashes, security holes. Each item should name file, line, and problem."
+        items:
+          type: string
+      suggestions:
+        type: array
+        description: "Non-obvious improvements to logic, naming, or structure."
+        items:
+          type: string
+      nitpicks:
+        type: array
+        description: "Minor style or formatting inconsistencies."
+        items:
+          type: string

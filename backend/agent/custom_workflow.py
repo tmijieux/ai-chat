@@ -295,15 +295,21 @@ class CustomWorkflowOrchestrator:
         """Run the plain agent loop on the full conversation history.
 
         Unlike isolated stages, this uses the original DB conversation so the model
-        can reference everything the user said before the workflow ran. The suffix
-        injects workflow results into the last user message before responding.
+        can reference everything the user said before the workflow ran. Workflow results
+        are injected as a separate user message so the original slash-command message
+        is left unchanged.
         """
         working_messages = list(messages)
-        if stage.message_suffix != "" and working_messages and working_messages[-1].get("role") == "user":
-            suffix = resolve_template(stage.message_suffix, slots)
-            last = working_messages[-1]
-            working_messages[-1] = {**last, "content": last["content"] + "\n\n" + suffix}
 
+        user_prompt = slots.get("user_message", "")
+        header = f'The user invoked the workflow "{self._workflow.name}"'
+        if user_prompt is not None and user_prompt.strip() != "":
+            header += f" with the following prompt: {user_prompt}"
+
+        suffix = resolve_template(stage.message_suffix, slots) if stage.message_suffix != "" else ""
+        injection = header if suffix == "" else f"{header}\n\n{suffix}"
+
+        working_messages.append({"role": "user", "content": injection})
         await run_agent(session, working_messages, self._tools, self._working_directory)
 
     async def _run_isolated_agent(
