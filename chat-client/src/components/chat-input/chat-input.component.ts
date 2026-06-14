@@ -1,4 +1,4 @@
-import { Component, computed, effect, ElementRef, HostListener, inject, input, output, signal, untracked, ViewChild } from '@angular/core'
+import { AfterViewInit, Component, computed, effect, ElementRef, HostListener, inject, input, output, signal, untracked, ViewChild } from '@angular/core'
 import { CommonModule } from '@angular/common'
 import { FormsModule } from '@angular/forms'
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop'
@@ -17,7 +17,7 @@ import { SlashCommandPaletteComponent } from '../slash-command-palette/slash-com
   templateUrl: './chat-input.component.html',
   styleUrls: ['./chat-input.component.scss'],
 })
-export class ChatInputComponent {
+export class ChatInputComponent implements AfterViewInit {
   private chatSvc = inject(ChatService)
   private api = inject(ApiService)
   readonly voiceSvc = inject(VoiceDictationService)
@@ -97,6 +97,10 @@ export class ChatInputComponent {
         this.currentInput.set((this._startPrefix + ' ' + raw).trim())
       }
     })
+  }
+
+  ngAfterViewInit(): void {
+    this._textareaRef?.nativeElement.focus()
   }
 
   // -------------------------------------------------------------------------
