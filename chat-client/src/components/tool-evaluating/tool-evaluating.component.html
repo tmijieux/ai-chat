@@ -11,6 +11,9 @@
     @if (verdict() === undefined) { <strong>{{ toolName() }}</strong>… }
   </span>
   @if (verdict() !== undefined && reason()) {
-    <span class="eval-badge__reason-icon" [title]="reason()">ⓘ</span>
+    <span class="eval-badge__reason-icon">
+      ⓘ
+      <span class="eval-badge__tooltip">{{ reason() }}</span>
+    </span>
   }
 </div>

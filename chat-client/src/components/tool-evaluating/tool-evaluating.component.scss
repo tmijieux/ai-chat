@@ -45,9 +45,45 @@
   }
 
   &__reason-icon {
+    position: relative;
     cursor: help;
     user-select: none;
     opacity: 0.8;
+
+    &:hover {
+      opacity: 1;
+
+      .eval-badge__tooltip {
+        display: block;
+      }
+    }
+  }
+
+  &__tooltip {
+    display: none;
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 0.4rem;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.72rem;
+    color: #cbd5e1;
+    white-space: nowrap;
+    z-index: 20;
+    pointer-events: none;
+
+    &::after {
+      content: '';
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      border: 5px solid transparent;
+      border-top-color: #334155;
+    }
   }
 }
 
