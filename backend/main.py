@@ -1068,6 +1068,25 @@ async def debug_conversation_tokens(
     logger.info("=== TOTAL raw=%d  in-context=%d (+ system/tools overhead not counted) ===", raw_total, in_context_total)
 
 
+@app.get("/api/conversations/{id}/ctx-tokens")
+async def get_conversation_ctx_tokens(
+    id: str,
+    sess: AsyncSession = Depends(get_db_session),
+):
+    """Return the actual current context token count for the conversation."""
+    conv = (await sess.scalars(select(db.Conversation).where(db.Conversation.id == id))).first()
+    if conv is None:
+        raise HTTPException(404)
+    settings = _parse_conv_settings(conv)
+    all_msgs = list((await sess.scalars(select(db.Message).where(db.Message.conversation_id == id))).all())
+    branch = _build_active_branch_path(all_msgs, conv.active_message_id)
+    _deduplicate_branch_file_reads(branch)
+    messages = await _build_inference_context(branch, settings.active_prompt_id, sess)
+    tools_list = get_ollama_tool_list(list(TOOL_REGISTRY.keys()))
+    ctx_tokens = await backend.count_tokens(backend.prepare_messages(messages), tools_list)
+    return {"ctx_tokens": ctx_tokens}
+
+
 @app.post("/api/conversations/{id}/compress")
 async def compress_conversation(
     id: str,

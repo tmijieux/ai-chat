@@ -250,6 +250,9 @@ export class ChatService {
       }
       const lastWithTokens = [...dbMessages].reverse().find((m) => m.token_count != null)
       this._promptTokens.set(lastWithTokens?.token_count ?? 0)
+      this.api.get_ctx_tokens(conversation.id).subscribe((r) => {
+        this._promptTokens.set(r.ctx_tokens)
+      })
     })
   }
 

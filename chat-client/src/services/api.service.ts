@@ -95,6 +95,10 @@ export class ApiService {
     return this.http.post<void>(`${BASE_URL}/conversations/${id}/debug-tokens`, {})
   }
 
+  get_ctx_tokens(id: string) {
+    return this.http.get<{ ctx_tokens: number }>(`${BASE_URL}/conversations/${id}/ctx-tokens`)
+  }
+
   compress_conversation(id: string, protect_last = false, is_mid_run = false) {
     const params: Record<string, string> = {}
     if (protect_last) { params['protect_last'] = 'true' }
