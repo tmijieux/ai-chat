@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import datetime
+import functools
 import io
 import math
 import re
@@ -8,6 +9,7 @@ import uuid
 import logging
 import json
 import threading
+from dataclasses import dataclass
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, Depends, HTTPException, Response, WebSocket, WebSocketDisconnect, UploadFile, Form
@@ -1222,134 +1224,177 @@ async def correct_stt(req: ld.CorrectRequest):
     return {"text": corrected}
 
 
+@dataclass
+class _ConvBranch:
+    """Result of loading a conversation and its active message branch from the database."""
+    conv: db.Conversation | None
+    branch: list[db.Message]
+
+
+@dataclass
+class _ToolSet:
+    """Tool list and optional injected extras assembled for a given conversation mode."""
+    tools: list
+    extra_tools: dict | None
+
+
+async def _load_conversation_branch(
+    sess: AsyncSession, conversation_id: str | None
+) -> _ConvBranch:
+    """Load the conversation and its active message branch from the database.
+    Deduplicates superseded file reads in place before returning."""
+    if conversation_id is None:
+        return _ConvBranch(conv=None, branch=[])
+    conv = (await sess.execute(
+        select(db.Conversation).where(db.Conversation.id == conversation_id)
+    )).scalars().first()
+    if conv is None:
+        return _ConvBranch(conv=None, branch=[])
+    all_msgs = list((await sess.execute(
+        select(db.Message).where(db.Message.conversation_id == conversation_id)
+    )).scalars().all())
+    branch = _build_active_branch_path(all_msgs, conv.active_message_id)
+    _deduplicate_branch_file_reads(branch)
+    await sess.flush()
+    return _ConvBranch(conv=conv, branch=branch)
+
+
+def _build_tool_set(mode: str, active_tool_names: list[str]) -> _ToolSet:
+    """Assemble the tool list for the given conversation mode.
+    Plan strips destructive tools and injects propose_plan + ask_user_question.
+    Standard injects ask_user_question only. Auto/Yolo use the raw tool list."""
+    if mode == "plan":
+        filtered_names = [n for n in active_tool_names if n not in _PLAN_EXCLUDED_TOOLS]
+        tools = get_ollama_tool_list(filtered_names)
+        injected = {**CONVERSATIONAL_TOOLS, **PLAN_MODE_TOOLS}
+        for injected_tool in injected.values():
+            tools.append({"type": "function", "function": injected_tool.to_ollama_schema()})
+        return _ToolSet(tools=tools, extra_tools=injected)
+    elif mode == "standard":
+        tools = get_ollama_tool_list(active_tool_names)
+        for injected_tool in CONVERSATIONAL_TOOLS.values():
+            tools.append({"type": "function", "function": injected_tool.to_ollama_schema()})
+        return _ToolSet(tools=tools, extra_tools=dict(CONVERSATIONAL_TOOLS))
+    else:
+        tools = get_ollama_tool_list(active_tool_names)
+        return _ToolSet(tools=tools, extra_tools=None)
+
+
+async def _refresh_messages(
+    sess: AsyncSession, messages: list[dict], conv_id: str
+) -> list[dict]:
+    """Patch in-memory tool messages with their compressed summaries after mid-run compression.
+    Matches by tool_call_id so assistant messages (not persisted to DB) are preserved."""
+    compressed_rows = (await sess.execute(
+        select(db.Message)
+        .where(db.Message.conversation_id == conv_id)
+        .where(db.Message.context_excluded == True)
+        .where(db.Message.compressed_summary.isnot(None))
+    )).scalars().all()
+
+    call_id_to_summary: dict[str, str] = {}
+    for m in compressed_rows:
+        try:
+            content = json.loads(m.content or "{}")
+            call_id = content.get("tool_call_id")
+            if call_id is not None and m.compressed_summary is not None:
+                call_id_to_summary[call_id] = m.compressed_summary
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    for msg in messages:
+        if msg.get("role") != "tool":
+            continue
+        try:
+            content_dict = json.loads(msg.get("content", "{}"))
+        except (json.JSONDecodeError, ValueError):
+            continue
+        call_id = content_dict.get("tool_call_id")
+        if call_id is not None and call_id in call_id_to_summary:
+            msg["content"] = json.dumps({
+                "tool": content_dict.get("tool", "tool"),
+                "status": "compressed",
+                "summary": call_id_to_summary[call_id],
+                "tool_call_id": call_id,
+            })
+
+    return messages
+
+
+def _create_agent_task(
+    session: AgentSession,
+    workflow_name: str | None,
+    working_directory: str | None,
+    user_message: str,
+    messages: list[dict],
+    tools: list,
+    extra_tools: dict | None,
+) -> asyncio.Task:
+    """Dispatch either a named workflow or the standard agentic loop as an asyncio task."""
+    if workflow_name is not None:
+        workflows_dir = Path(__file__).parent / "workflows"
+        flat_path = workflows_dir / f"{workflow_name}.yaml"
+        dir_path = workflows_dir / workflow_name
+        workflow_path = flat_path if flat_path.exists() else dir_path
+        workflow_def = load_workflow(workflow_path)
+        orchestrator = CustomWorkflowOrchestrator(workflow_def, working_directory, tools)
+        return asyncio.create_task(orchestrator.run(session, user_message, messages))
+    else:
+        return asyncio.create_task(run_agent(session, messages, tools, working_directory, extra_tools))
+
+
+async def _run_agent_event_loop(
+    websocket: WebSocket, session: AgentSession, agent_task: asyncio.Task
+) -> None:
+    """Drive the agent session over WebSocket until the agent emits done or error.
+    Forwards outbound events to the client and receives inbound control messages (confirm, abort, set_mode…)."""
+    async def send_events() -> None:
+        while True:
+            event = await session.outbound.get()
+            await websocket.send_json(event)
+            if event["type"] in ("done", "error"):
+                return
+
+    send_task = asyncio.create_task(send_events())
+    recv_task = asyncio.create_task(_ws_receive_messages(websocket, session, agent_task))
+    await send_task
+    recv_task.cancel()
+    agent_task.cancel()
+
+
 @app.websocket("/api/agent/ws")
 async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get_db_session)):
-    """
-    WebSocket endpoint for the agentic loop.
-    First client message: {"message": "...", "conversation_id": "optional"}
-    """
+    """WebSocket endpoint for the main agentic loop.
+    Client sends one init message, then exchanges control messages while the agent streams events back."""
     await websocket.accept()
     try:
         init_data = await websocket.receive_json()
         user_message: str = init_data.get("message", "")
         conversation_id: str | None = init_data.get("conversation_id")
-        # When set, the user message is already in DB (edit flow) — don't append it again.
         user_message_id: str | None = init_data.get("user_message_id")
         workflow_name: str | None = init_data.get("workflow_name") or None
 
-        conv: db.Conversation | None = None
-        branch: list[db.Message] = []
+        conv_branch = await _load_conversation_branch(sess, conversation_id)
+        settings = _parse_conv_settings(conv_branch.conv) if conv_branch.conv is not None else ld.ConversationSettings()
+        active_tool_names = settings.active_tool_names if (conv_branch.conv is not None and conv_branch.conv.settings is not None) else list(TOOL_REGISTRY.keys())
+        tool_set = _build_tool_set(settings.mode, active_tool_names)
 
-        if conversation_id:
-            result = await sess.execute(
-                select(db.Conversation).where(db.Conversation.id == conversation_id)
-            )
-            conv = result.scalars().first()
-            if conv:
-                all_msgs_result = await sess.execute(
-                    select(db.Message).where(db.Message.conversation_id == conversation_id)
-                )
-                all_msgs = list(all_msgs_result.scalars().all())
-                branch = _build_active_branch_path(all_msgs, conv.active_message_id)
-                _deduplicate_branch_file_reads(branch)
-                await sess.flush()
-
-        settings = _parse_conv_settings(conv) if conv else ld.ConversationSettings()
-        active_tool_names = settings.active_tool_names if (conv and conv.settings is not None) else list(TOOL_REGISTRY.keys())
-        working_directory = settings.working_directory
-        mode = settings.mode
-
-        if mode == "plan":
-            filtered_names = [n for n in active_tool_names if n not in _PLAN_EXCLUDED_TOOLS]
-            tools = get_ollama_tool_list(filtered_names)
-            injected = {**CONVERSATIONAL_TOOLS, **PLAN_MODE_TOOLS}
-            for injected_tool in injected.values():
-                tools.append({"type": "function", "function": injected_tool.to_ollama_schema()})
-            extra_tools: dict | None = injected
-        elif mode == "standard":
-            tools = get_ollama_tool_list(active_tool_names)
-            for injected_tool in CONVERSATIONAL_TOOLS.values():
-                tools.append({"type": "function", "function": injected_tool.to_ollama_schema()})
-            extra_tools = dict(CONVERSATIONAL_TOOLS)
-        else:
-            tools = get_ollama_tool_list(active_tool_names)
-            extra_tools = None
-
-        messages = await _build_inference_context(branch, settings.active_prompt_id, sess)
+        messages = await _build_inference_context(conv_branch.branch, settings.active_prompt_id, sess)
         if user_message_id is None:
             messages.append({"role": "user", "content": user_message})
 
         session = AgentSession()
-        session.mode = mode
-        session.working_directory = working_directory
+        session.mode = settings.mode
+        session.working_directory = settings.working_directory
         session.last_user_message = user_message
+        if conversation_id is not None:
+            session.refresh_messages_callback = functools.partial(_refresh_messages, sess, messages)
 
-        async def _refresh_messages(conv_id: str) -> list[dict]:
-            # Fetch which tool messages were compressed in DB, match by tool_call_id.
-            # We update in-memory rather than rebuilding from scratch so that assistant
-            # messages with tool_calls are preserved (they are not persisted to DB).
-            compressed_rows = (await sess.execute(
-                select(db.Message)
-                .where(db.Message.conversation_id == conv_id)
-                .where(db.Message.context_excluded == True)
-                .where(db.Message.compressed_summary.isnot(None))
-            )).scalars().all()
-
-            call_id_to_summary: dict[str, str] = {}
-            for m in compressed_rows:
-                try:
-                    content = json.loads(m.content or "{}")
-                    call_id = content.get("tool_call_id")
-                    if call_id and m.compressed_summary:
-                        call_id_to_summary[call_id] = m.compressed_summary
-                except (json.JSONDecodeError, ValueError):
-                    pass
-
-            for msg in messages:
-                if msg.get("role") != "tool":
-                    continue
-                try:
-                    content_dict = json.loads(msg.get("content", "{}"))
-                except (json.JSONDecodeError, ValueError):
-                    continue
-                call_id = content_dict.get("tool_call_id")
-                if call_id and call_id in call_id_to_summary:
-                    msg["content"] = json.dumps({
-                        "tool": content_dict.get("tool", "tool"),
-                        "status": "compressed",
-                        "summary": call_id_to_summary[call_id],
-                        "tool_call_id": call_id,
-                    })
-
-            return messages
-
-        if conversation_id:
-            session.refresh_messages_callback = _refresh_messages
-
-        if workflow_name is not None:
-            workflows_dir = Path(__file__).parent / "workflows"
-            flat_path = workflows_dir / f"{workflow_name}.yaml"
-            dir_path = workflows_dir / workflow_name
-            workflow_path = flat_path if flat_path.exists() else dir_path
-            workflow_def = load_workflow(workflow_path)
-            orchestrator = CustomWorkflowOrchestrator(workflow_def, working_directory, tools)
-            agent_task = asyncio.create_task(orchestrator.run(session, user_message, messages))
-        else:
-            agent_task = asyncio.create_task(run_agent(session, messages, tools, working_directory, extra_tools))
-
-        async def send_events_to_websocket() -> None:
-            while True:
-                event = await session.outbound.get()
-                await websocket.send_json(event)
-                if event["type"] in ("done", "error"):
-                    return
-
-        send_task = asyncio.create_task(send_events_to_websocket())
-        recv_task = asyncio.create_task(_ws_receive_messages(websocket, session, agent_task))
-
-        await send_task
-        recv_task.cancel()
-        agent_task.cancel()
+        agent_task = _create_agent_task(
+            session, workflow_name, settings.working_directory,
+            user_message, messages, tool_set.tools, tool_set.extra_tools,
+        )
+        await _run_agent_event_loop(websocket, session, agent_task)
 
     except WebSocketDisconnect:
         pass
