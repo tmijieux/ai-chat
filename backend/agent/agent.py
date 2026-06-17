@@ -98,7 +98,7 @@ async def _maybe_preshrink_tool_output(
 
 
 class AgentSession:
-    """Manages bidirectional communication between the agent loop and the WebSocket client."""
+    """Manages bidirectional communication between the agent loop and the WebSocket client (or another client)."""
 
     def __init__(self):
         self.outbound: asyncio.Queue[dict] = asyncio.Queue()

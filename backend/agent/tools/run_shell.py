@@ -3,7 +3,7 @@ import subprocess
 import shutil
 import sys
 from .base import BaseTool, tool_error, tool_rejected
-from tool_result_types import RunShellResult
+from tool_result_types import RunShellResult, ToolResult
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -60,7 +60,7 @@ class RunShellTool(BaseTool):
         label = f"[{mode}]" if _IS_WINDOWS else ""
         return f"SHELL{label}: {args.get('command', '')}"
 
-    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> RunShellResult:
+    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> ToolResult:
         if working_directory is None:
             return tool_error(self.name, "No workspace configured — shell is disabled.")
 

@@ -1,5 +1,5 @@
 from .base import BaseTool, tool_error
-from tool_result_types import SummarizeSubtaskResult
+from tool_result_types import SummarizeSubtaskResult, ToolResult
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -29,7 +29,7 @@ class SummarizeSubtaskTool(BaseTool):
     def label(self, args: dict) -> str:
         return f"SUMMARIZE for: {args.get('task', '')}"
 
-    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> SummarizeSubtaskResult:
+    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> ToolResult:
         from llm import backend
 
         task = args.get("task", "")

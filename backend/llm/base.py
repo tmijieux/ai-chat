@@ -107,8 +107,8 @@ class LLMBackend(ABC):
         disable_thinking: bool = False,
         tool_choice: dict | str | None = None,
     ) -> AsyncIterator[StreamEvent]:
-        yield
         raise NotImplementedError
+        yield  # type: ignore[misc]
 
     def prepare_messages(self, messages: Sequence[LLMMessage]) -> Sequence[LLMMessage]:
         """Convert internal message format to whatever this backend expects on the wire."""

@@ -1,7 +1,7 @@
 import asyncio
 from pathlib import Path
 from .base import BaseTool, tool_error
-from tool_result_types import ListDirectoryResult
+from tool_result_types import ListDirectoryResult, ToolResult
 from agent.file_utils import file_in_directory, resolve_workspace_path
 from typing import TYPE_CHECKING
 
@@ -36,7 +36,7 @@ class ListDirectoryTool(BaseTool):
     def label(self, args: dict) -> str:
         return f"DIRECTORY {args.get('path', '')}"
 
-    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> ListDirectoryResult:
+    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> ToolResult:
         if working_directory is None:
             return tool_error(self.name, "No workspace configured — file tools are disabled.")
 

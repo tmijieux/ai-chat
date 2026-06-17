@@ -701,7 +701,7 @@ async def get_image(image_id: str, sess: AsyncSession = Depends(get_db_session))
 # ---------------------------------------------------------------------------
 
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
-_DUMMY_USER = [{"role": "user", "content": "."}]
+_DUMMY_USER: list[LLMMessage] = [{"role": "user", "content": "."}]
 
 
 def _slugify(name: str) -> str:
@@ -740,7 +740,8 @@ def _write_prompt_file(path: Path, name: str, category: str, content: str, is_de
 async def _compute_prompt_token_count(content: str) -> int:
     """Count tokens contributed by this system prompt (with vs without)."""
     tools: list = []
-    with_prompt = await backend.count_tokens([{"role": "system", "content": content}] + _DUMMY_USER, tools)
+    system_msg: LLMMessage = {"role": "system", "content": content}
+    with_prompt = await backend.count_tokens([system_msg] + _DUMMY_USER, tools)
     baseline = await backend.count_tokens(_DUMMY_USER, tools)
     return with_prompt - baseline
 
@@ -1076,7 +1077,7 @@ async def compress_conversation(
         list((await sess.scalars(select(db.Message).where(db.Message.conversation_id == id))).all()),
         conv.active_message_id,
     )
-    compressed_dicts = [{"role": m.role, "content": m.compressed_summary if m.compressed_summary else m.content, "thinking": m.thinking} for m in compressed_branch]
+    compressed_dicts: list[LLMMessage] = [{"role": m.role, "content": m.compressed_summary if m.compressed_summary else m.content, "thinking": m.thinking} for m in compressed_branch]
     tools_list = get_ollama_tool_list([tool.name for tool in TOOL_REGISTRY.values()])
     ctx_tokens = await backend.count_tokens(backend.prepare_messages(compressed_dicts), tools_list)
 
@@ -1317,9 +1318,12 @@ async def _apply_db_compressions(
     for msg in messages:
         if msg.get("role") != "tool":
             continue
+        raw_content = msg.get("content")
+        if not isinstance(raw_content, str):
+            continue
         try:
-            content_dict: ToolResult = json.loads(msg.get("content"))
-        except (json.JSONDecodeError, ValueError, TypeError):
+            content_dict: ToolResult = json.loads(raw_content)
+        except (json.JSONDecodeError, ValueError):
             continue
         call_id = content_dict.get("tool_call_id")
         if call_id is not None and call_id in call_id_to_summary:
@@ -1388,7 +1392,11 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
 
         conv_branch = await _load_conversation_branch(sess, conversation_id)
         settings = _parse_conv_settings(conv_branch.conv) if conv_branch.conv is not None else ld.ConversationSettings()
-        active_tool_names = settings.active_tool_names if (conv_branch.conv is not None and conv_branch.conv.settings is not None) else list(TOOL_REGISTRY.keys())
+        active_tool_names = (
+            settings.active_tool_names 
+            if (conv_branch.conv is not None and conv_branch.conv.settings is not None) 
+            else list(TOOL_REGISTRY.keys())
+        )
         tool_set = _build_tool_set(settings.mode, active_tool_names)
 
         messages = await _build_inference_context(conv_branch.branch, settings.active_prompt_id, sess)

@@ -4,7 +4,7 @@ import json
 import re as _re
 from pathlib import Path
 from .base import BaseTool, tool_error, tool_rejected
-from tool_result_types import EditFileResult
+from tool_result_types import EditFileResult, ToolResult
 from agent.file_utils import file_in_directory, resolve_workspace_path
 from typing import TYPE_CHECKING
 
@@ -49,7 +49,7 @@ class EditFileTool(BaseTool):
     def label(self, args: dict) -> str:
         return f"EDIT {args.get('file_path', '')}"
 
-    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> EditFileResult:
+    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> ToolResult:
         if working_directory is None:
             return tool_error(self.name, "No workspace configured — file tools are disabled.")
 

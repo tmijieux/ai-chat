@@ -1,6 +1,6 @@
 import asyncio
 from .base import BaseTool, tool_error
-from tool_result_types import SearchWebResult
+from tool_result_types import SearchWebResult, ToolResult
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -26,7 +26,7 @@ class SearchWebTool(BaseTool):
     def make_validation_text_for_user_confirmation(self, args: dict) -> str:
         return f"SEARCH: {args.get('query', '')}"
 
-    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> SearchWebResult:
+    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> ToolResult:
         from ddgs import DDGS
         import trafilatura
 

@@ -48,3 +48,5 @@ small non-leaky well-named abstraction, then you dont have to read them.
 
 # python tools
 When invoking python always use the venv in backend/venv (windows path style venv/Scripts/python)
+for instance
+Bash(cd backend && source venv/Scripts/activate && python yourCommandHere...)

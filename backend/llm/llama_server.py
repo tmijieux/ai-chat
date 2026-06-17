@@ -105,7 +105,7 @@ class LlamaServerBackend(LLMBackend):
         for m in messages:
             msg: dict = {"role": m["role"], "content": m.get("content", "")}
 
-            if m.get("tool_calls"):
+            if "tool_calls" in m:
                 msg["tool_calls"] = [
                     {
                         "id": tc.get("id", f"tc-{i}"),
@@ -126,7 +126,10 @@ class LlamaServerBackend(LLMBackend):
             if m["role"] == "tool":
                 # OpenAI requires tool_call_id as a top-level field on tool messages
                 try:
-                    content_data = json.loads(m.get("content", "{}"))
+                    raw = m.get("content")
+                    if not isinstance(raw, str):
+                        raise ValueError(f"tool message has non-string content: {type(raw)}")
+                    content_data = json.loads(raw)
                     tool_call_id = content_data.get("tool_call_id")
                     if tool_call_id:
                         msg["tool_call_id"] = tool_call_id

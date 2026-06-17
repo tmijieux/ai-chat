@@ -1,6 +1,6 @@
 import uuid
 from .base import BaseTool
-from tool_result_types import AskUserQuestionResult
+from tool_result_types import AskUserQuestionResult, ToolResult
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -38,7 +38,7 @@ class AskUserQuestionTool(BaseTool):
     def label(self, args: dict) -> str:
         return f"QUESTION: {args.get('question', '')[:80]}"
 
-    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> AskUserQuestionResult:
+    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> ToolResult:
         """Emit an agent_question event and wait for the user's reply."""
         question = args.get("question", "")
         raw_options: list[str] | None = args.get("options")

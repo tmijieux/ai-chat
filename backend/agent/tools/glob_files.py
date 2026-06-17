@@ -2,7 +2,7 @@ import asyncio
 import uuid
 from pathlib import Path
 from .base import BaseTool, tool_error
-from tool_result_types import GlobFilesResult
+from tool_result_types import GlobFilesResult, ToolResult
 from agent.file_utils import file_in_directory, resolve_workspace_path, load_ignore_spec, is_path_ignored
 from typing import TYPE_CHECKING
 
@@ -37,7 +37,7 @@ class GlobFilesTool(BaseTool):
     def label(self, args: dict) -> str:
         return f"GLOB {args.get('pattern', '')} in {args.get('path', '.')}"
 
-    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> GlobFilesResult:
+    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> ToolResult:
         if working_directory is None:
             return tool_error(self.name, "No workspace configured — file tools are disabled.")
 
