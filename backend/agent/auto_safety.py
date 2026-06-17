@@ -31,7 +31,8 @@ Example: {"verdict": "safe", "reason": "installs a dev dependency listed in the 
 def is_path_inside_workspace(path: str, working_directory: str) -> bool:
     """Return True if path resolves to a location inside working_directory."""
     try:
-        abs_path = os.path.realpath(os.path.abspath(path))
+        p = os.path.abspath(path) if os.path.isabs(path) else os.path.join(working_directory, path)
+        abs_path = os.path.realpath(p)
         abs_workspace = os.path.realpath(os.path.abspath(working_directory))
         return abs_path == abs_workspace or abs_path.startswith(abs_workspace + os.sep)
     except (TypeError, ValueError):
