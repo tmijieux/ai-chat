@@ -57,8 +57,8 @@ class ReadFileRangeTool(BaseTool):
             )
 
         file_path = args.get("file_path", "")
-        start_line = args.get("start_line")
-        end_line = args.get("end_line")
+        start_line = int(args.get("start_line"))
+        end_line = int(args.get("end_line"))
 
         if not file_path or start_line is None or end_line is None:
             return tool_error(self.name, "file_path, start_line, and end_line are required.")

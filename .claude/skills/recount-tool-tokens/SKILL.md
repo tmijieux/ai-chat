@@ -32,6 +32,7 @@ cd backend && venv/Scripts/python -m agent.count_tool_tokens
 
 3. **Update each mismatched tool file** — tool name maps directly to its file:
    - `backend/agent/tools/{tool_name}.py`
+   - **Read the file first** before editing (the Edit tool requires a prior Read).
    - Find the line `measured_delta = <old>` and replace with the new value.
 
 4. Re-run the script to confirm all entries show `[OK]`.

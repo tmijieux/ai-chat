@@ -6,6 +6,8 @@ This app is about designing an AI agent do not be surprised if I speak about too
 
 Always read `CONTEXT.md` at the start of every conversation. It contains the app mission, domain glossary, feature intent, known bugs, and planned changes. Features documented there must not be removed or broken when implementing other features.
 
+We have a todo.md file for ideas / future plans. Check it or write to it, if and when the user mentions it.
+
 ## Off-limits
 
 Do not read `catchall.py` and backend/claude directory  — it is currently unused and irrelevant.

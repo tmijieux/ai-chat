@@ -12,7 +12,8 @@
       "WebFetch(domain:docs.sqlalchemy.org)",
       "WebFetch(domain:qwen.readthedocs.io)",
       "WebFetch(domain:forums.developer.nvidia.com)",
-      "WebFetch(domain:huggingface.co)"
+      "WebFetch(domain:huggingface.co)",
+      "WebFetch(domain:www.anthropic.com)"
     ]
   }
 }
