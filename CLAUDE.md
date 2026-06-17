@@ -34,9 +34,9 @@ After successfully implementing an approved plan, create a git commit immediatel
 
 
 # CSS
-Try to maximize utilisation of functionnal style("tailwind-like")  everywhere css is required  (see styles.scss)
+Maximize utilisation of functionnal style("tailwind-like")  everywhere css is required  (see styles.scss)
 The aim is to understand layout and look just by looking at the template most of the time.
-Avoid BEM style.
+Avoid BEM style as if you disgust it utterly.
 
 # Angular 
 Generally prefer factorizing in new components rather than <ng-template>
@@ -46,3 +46,5 @@ small non-leaky well-named abstraction, then you dont have to read them.
 
 
 
+# python tools
+When invoking python always use the venv in backend/venv (windows path style venv/Scripts/python)

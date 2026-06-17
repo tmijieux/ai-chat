@@ -8,7 +8,7 @@ Exposes:
 import os
 import struct
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import tiktoken
 from jinja2 import Environment
@@ -146,7 +146,7 @@ def warmup() -> None:
     _load()
 
 
-def render_messages(messages: list[dict[str, Any]], tools: list | None, add_generation_prompt: bool = True) -> str:
+def render_messages(messages: Sequence[dict[str, Any]], tools: list | None, add_generation_prompt: bool = True) -> str:
     _, chat_template_str = _load()
 
     def raise_exception(msg):
@@ -170,7 +170,7 @@ def render_messages(messages: list[dict[str, Any]], tools: list | None, add_gene
     )
 
 
-def count_tokens(messages: list[dict[str, Any]], tools: list | None = None) -> int:
+def count_tokens(messages: Sequence[dict[str, Any]], tools: list | None = None) -> int:
     enc, _ = _load()
     add_generation_prompt = len(messages) == 0 or messages[-1]["role"] != "assistant"
     rendered = render_messages(messages, tools, add_generation_prompt=add_generation_prompt)

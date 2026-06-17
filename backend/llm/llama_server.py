@@ -3,12 +3,13 @@ import json
 import logging
 import subprocess
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator, Sequence
 
 import aiohttp
 from fastapi import HTTPException
 
 from tokenizer import render_messages
+from message_types import LLMMessage
 from .base import (
     LLMBackend, StreamEvent,
     ContentEvent, ThinkingEvent, ToolCallStartEvent, ToolCallArgEvent, DoneEvent,
@@ -84,7 +85,7 @@ class LlamaServerBackend(LLMBackend):
                 pass
         raise HTTPException(status_code=503, detail="llama-server is not running")
 
-    async def count_tokens(self, messages: list, tools: list) -> int:
+    async def count_tokens(self, messages: Sequence[LLMMessage], tools: list) -> int:
         rendered = render_messages(messages, tools)
         return await self.count_text_tokens(rendered)
 
@@ -98,7 +99,7 @@ class LlamaServerBackend(LLMBackend):
                 data = await r.json()
                 return len(data["tokens"])
 
-    def prepare_messages(self, messages: list) -> list:
+    def prepare_messages(self, messages: Sequence[LLMMessage]) -> Sequence[LLMMessage]:
         """Convert internal format to OpenAI wire format for llama-server."""
         result = []
         for m in messages:
@@ -137,7 +138,7 @@ class LlamaServerBackend(LLMBackend):
 
     async def stream_completion(
         self,
-        messages: list,
+        messages: Sequence[LLMMessage],
         tools: list,
         temperature: float,
         max_tokens: int | None = None,

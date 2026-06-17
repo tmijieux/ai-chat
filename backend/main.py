@@ -164,9 +164,9 @@ async def _build_inference_context(
         if m.context_excluded:
             if m.compressed_summary:
                 try:
-                    original: ToolResult = json.loads(m.content or "{}")
-                except (json.JSONDecodeError, ValueError):
-                    original = {}
+                    original: ToolResult = json.loads(m.content)
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    original = {"tool": "tool", "status": "unknown"}
                 messages.append({"role": "tool", "content": json.dumps({
                     "tool": original.get("tool", "tool"),
                     "status": "compressed",
@@ -178,10 +178,10 @@ async def _build_inference_context(
             continue
         imgs = images_by_msg.get(m.id, [])
         if imgs:
-            content: list[dict] = [{"type": "text", "text": m.content}]
+            multipart_content: list[dict] = [{"type": "text", "text": m.content}]
             for img in imgs:
-                content.append({"type": "image_url", "image_url": {"url": f"data:{img.mime_type};base64,{img.data}"}})
-            messages.append({"role": m.role, "content": content})
+                multipart_content.append({"type": "image_url", "image_url": {"url": f"data:{img.mime_type};base64,{img.data}"}})
+            messages.append({"role": m.role, "content": multipart_content})
         else:
             messages.append({"role": m.role, "content": m.content})
     return messages
@@ -1038,12 +1038,17 @@ async def compress_conversation(
     user_messages = [m.content for m in reversed(branch) if m.role == "user"][:3]
     user_message = "\n---\n".join(reversed(user_messages)) if user_messages else ""
 
-    all_dicts = [{"id": m.id, "role": m.role, "content": m.content, "thinking": m.thinking} for m in branch]
-    candidate_dicts = [{"id": m.id, "role": m.role, "content": m.content, "thinking": m.thinking} for m in candidates]
+    all_dicts: list[TrackedMessage] = [{"id": m.id, "role": m.role, "content": m.content, "thinking": m.thinking} for m in branch]
+    candidate_dicts: list[TrackedMessage] = [{"id": m.id, "role": m.role, "content": m.content, "thinking": m.thinking} for m in candidates]
 
     compression_result = await compress_messages(
-        candidate_dicts, all_dicts, user_message, None, backend,
-        protect_last=protect_last, is_mid_run=is_mid_run,
+        candidate_dicts, 
+        all_dicts, 
+        user_message, 
+        conversation_summary=None, 
+        backend=backend,
+        protect_last=protect_last, 
+        is_mid_run=is_mid_run,
     )
 
     for c in compression_result.compressions:
@@ -1054,9 +1059,9 @@ async def compress_conversation(
             msg.compressed_summary = c.compressed_summary
             msg.compression_label = c.compression_label
             try:
-                original: ToolResult = json.loads(msg.content or "{}")
-            except (json.JSONDecodeError, ValueError):
-                original = {}
+                original: ToolResult = json.loads(msg.content)
+            except (json.JSONDecodeError, ValueError, TypeError):
+                original = {"tool": "tool", "status": "unknown"}
             compressed_content = json.dumps({
                 "tool": original.get("tool", "tool"),
                 "status": "compressed",
@@ -1072,10 +1077,14 @@ async def compress_conversation(
         conv.active_message_id,
     )
     compressed_dicts = [{"role": m.role, "content": m.compressed_summary if m.compressed_summary else m.content, "thinking": m.thinking} for m in compressed_branch]
-    tools_list = get_ollama_tool_list(list(TOOL_REGISTRY.values()))
+    tools_list = get_ollama_tool_list([tool.name for tool in TOOL_REGISTRY.values()])
     ctx_tokens = await backend.count_tokens(backend.prepare_messages(compressed_dicts), tools_list)
 
-    return {"compressions": compression_result.compressions, "new_summary": compression_result.new_summary, "ctx_tokens": ctx_tokens}
+    return {
+      "compressions": compression_result.compressions, 
+      "new_summary": compression_result.new_summary,
+      "ctx_tokens": ctx_tokens,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1088,7 +1097,7 @@ _PLAN_EXCLUDED_TOOLS = frozenset({"write_file", "edit_file", "run_shell"})
 _VALID_MODES = frozenset({"standard", "auto", "plan", "yolo"})
 
 
-async def _ws_receive_messages(websocket: WebSocket, session: AgentSession, agent_task: asyncio.Task) -> None:
+async def _ws_receive_messages_from_frontend(websocket: WebSocket, session: AgentSession, agent_task: asyncio.Task) -> None:
     try:
         while True:
             data = await websocket.receive_json()
@@ -1298,19 +1307,19 @@ async def _apply_db_compressions(
     call_id_to_summary: dict[str, str] = {}
     for m in compressed_rows:
         try:
-            content: ToolResult = json.loads(m.content or "{}")
+            content: ToolResult = json.loads(m.content)
             call_id = content.get("tool_call_id")
             if call_id is not None and m.compressed_summary is not None:
                 call_id_to_summary[call_id] = m.compressed_summary
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, TypeError):
             pass
 
     for msg in messages:
         if msg.get("role") != "tool":
             continue
         try:
-            content_dict: ToolResult = json.loads(msg.get("content", "{}"))
-        except (json.JSONDecodeError, ValueError):
+            content_dict: ToolResult = json.loads(msg.get("content"))
+        except (json.JSONDecodeError, ValueError, TypeError):
             continue
         call_id = content_dict.get("tool_call_id")
         if call_id is not None and call_id in call_id_to_summary:
@@ -1351,15 +1360,15 @@ async def _run_agent_event_loop(
 ) -> None:
     """Drive the agent session over WebSocket until the agent emits done or error.
     Forwards outbound events to the client and receives inbound control messages (confirm, abort, set_mode…)."""
-    async def send_events() -> None:
+    async def _send_events_from_agent_to_frontend() -> None:
         while True:
             event = await session.outbound.get()
             await websocket.send_json(event)
             if event["type"] in ("done", "error"):
                 return
 
-    send_task = asyncio.create_task(send_events())
-    recv_task = asyncio.create_task(_ws_receive_messages(websocket, session, agent_task))
+    send_task = asyncio.create_task(_send_events_from_agent_to_frontend())
+    recv_task = asyncio.create_task(_ws_receive_messages_from_frontend(websocket, session, agent_task))
     await send_task
     recv_task.cancel()
     agent_task.cancel()
@@ -1467,7 +1476,7 @@ async def pipeline_websocket(websocket: WebSocket, sess: AsyncSession = Depends(
                     return
 
         send_task = asyncio.create_task(send_pipeline_events_to_websocket())
-        recv_task = asyncio.create_task(_ws_receive_messages(websocket, session, agent_task))
+        recv_task = asyncio.create_task(_ws_receive_messages_from_frontend(websocket, session, agent_task))
 
         await send_task
         recv_task.cancel()

@@ -6,6 +6,7 @@ from typing import Literal
 import aiohttp
 
 from agent.agent import AgentSession, chat_with_tools, run_agent
+from message_types import LLMMessage
 from agent.finish_tools import (
     FinishAugmentation,
     FinishClassify,
@@ -83,7 +84,7 @@ BAD task (two files — invalid):
   "Add togglePipelineMode() to chat-input.component.ts and add a toggle button in chat-input.component.html"
 
 GOOD tasks (one file each — required):
-  Task A: "In chat-client/src/components/chat-input/chat-input.component.ts, after the closing brace of the constructor on line 61, add: togglePipelineMode(): void \{ this.chatSvc.togglePipelineMode() \}"
+  Task A: "In chat-client/src/components/chat-input/chat-input.component.ts, after the closing brace of the constructor on line 61, add: togglePipelineMode(): void \\{ this.chatSvc.togglePipelineMode() \}"
   Task B: "In chat-client/src/components/chat-input/chat-input.component.html, after the closing </button> of the Send button on line 70, add a sibling <button> with (click)=\"togglePipelineMode()\", [class.active]=\"chatSvc.pipelineMode()\", class=\"pipeline-toggle-btn\", inner text 'Pipeline'."
 
 If the project has a compile or type-check step (e.g. TypeScript, Python, Java), set compile_command to the exact shell command that checks the whole project (e.g. "cd chat-client && npx tsc --noEmit"). It will be run automatically after all tasks complete.
@@ -167,7 +168,7 @@ def _finish_tool_schema(tool) -> dict:
 
 async def _run_stage_loop(
     sub_session: AgentSession,
-    stage_messages: list[dict],
+    stage_messages: list[LLMMessage],
     tool_schemas: list[dict],
     extra_tools: dict,
     working_directory: str | None,
@@ -220,7 +221,7 @@ async def _run_stage_loop(
 
 async def run_stage(
     stage_name: str,
-    messages: list[dict],
+    messages: list[LLMMessage],
     regular_tool_names: list[str],
     finish_tool,
     parent_session: AgentSession,
@@ -291,7 +292,7 @@ class PipelineOrchestrator:
 
     def __init__(
         self,
-        system_messages: list[dict],
+        system_messages: list[LLMMessage],
         working_directory: str | None,
         regular_tools: list[dict],
     ):
@@ -303,7 +304,7 @@ class PipelineOrchestrator:
         self,
         session: AgentSession,
         user_message: str,
-        messages: list[dict],
+        messages: list[LLMMessage],
     ) -> None:
         """Entry point. Runs the full pipeline and emits events via session."""
         try:
@@ -321,7 +322,7 @@ class PipelineOrchestrator:
         self,
         session: AgentSession,
         user_message: str,
-        messages: list[dict],
+        messages: list[LLMMessage],
     ) -> None:
         wd = self._working_directory
 

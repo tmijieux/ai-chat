@@ -38,6 +38,7 @@ def _read_yn(prompt: str) -> str:
         print("Please enter 'y' or 'n'.")
 
 from agent.agent import AgentSession, run_agent
+from message_types import LLMMessage
 from agent.pipeline import PipelineOrchestrator
 from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
 from llm import backend
@@ -111,7 +112,7 @@ def _print_event(event: dict) -> None:
 
 
 async def _run_turn(
-    messages: list[dict],
+    messages: list[LLMMessage],
     tools: list[dict],
     working_directory: str | None,
 ) -> None:
@@ -139,7 +140,7 @@ async def _run_turn(
 
 
 async def _run_pipeline_turn(
-    messages: list[dict],
+    messages: list[LLMMessage],
     tools: list[dict],
     working_directory: str | None,
 ) -> None:
@@ -151,7 +152,7 @@ async def _run_pipeline_turn(
         regular_tools=tools,
     )
     user_message = next(
-        (m["content"] for m in reversed(messages) if m.get("role") == "user"), ""
+        (m["content"] for m in reversed(messages) if m.get("role") == "user" and isinstance(m["content"], str)), ""
     )
 
     session = AgentSession()
@@ -190,7 +191,7 @@ async def main() -> None:
     print(f"Running in {mode_label} mode. Workspace: {working_directory}\n")
 
     tools = get_ollama_tool_list(list(TOOL_REGISTRY.keys()))
-    messages: list[dict] = []
+    messages: list[LLMMessage] = []
 
     while True:
         try:

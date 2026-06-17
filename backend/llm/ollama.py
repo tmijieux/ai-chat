@@ -3,12 +3,13 @@ import json
 import logging
 import os
 import subprocess
-from typing import AsyncIterator
+from typing import AsyncIterator, Sequence
 
 import aiohttp
 from fastapi import HTTPException
 
 from tokenizer import count_tokens, warmup as warmup_tokenizer
+from message_types import LLMMessage
 from .base import (
     LLMBackend, StreamEvent,
     ContentEvent, ThinkingEvent, ToolCallStartEvent, ToolCallArgEvent, DoneEvent,
@@ -70,21 +71,25 @@ class OllamaBackend(LLMBackend):
                 pass
         raise HTTPException(status_code=503, detail="Ollama is not running")
 
-    async def count_tokens(self, messages: list, tools: list) -> int:
+    async def count_tokens(self, messages: Sequence[LLMMessage], tools: list) -> int:
         return count_tokens(messages, tools)
 
-    def prepare_messages(self, messages: list) -> list:
+    async def count_text_tokens(self, text: str) -> int:
+        """Count tokens for raw text by wrapping it in a dummy user message."""
+        return count_tokens([{"role": "user", "content": text}], [])
+
+    def prepare_messages(self, messages: Sequence[LLMMessage]) -> Sequence[LLMMessage]:
         result = []
         for m in messages:
             msg: dict = {"role": m["role"], "content": m.get("content", "")}
-            if m.get("tool_calls"):
+            if "tool_calls" in m:
                 msg["tool_calls"] = m["tool_calls"]
             result.append(msg)
         return result
 
     async def stream_completion(
         self,
-        messages: list,
+        messages: Sequence[LLMMessage],
         tools: list,
         temperature: float,
         max_tokens: int | None = None,

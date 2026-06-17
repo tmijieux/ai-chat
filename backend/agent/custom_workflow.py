@@ -9,6 +9,7 @@ from typing import Any
 import aiohttp
 
 from agent.agent import AgentSession, run_agent
+from message_types import LLMMessage
 from agent.finish_tools import BaseFinishTool
 from agent.pipeline import run_stage
 from agent.workflow_coordinator import run_coordinator_action
@@ -108,7 +109,7 @@ class CustomWorkflowOrchestrator:
         self._working_directory = working_directory
         self._tools = tools or []
 
-    async def run(self, session: AgentSession, user_message: str, messages: list[dict]) -> None:
+    async def run(self, session: AgentSession, user_message: str, messages: list[LLMMessage]) -> None:
         """Entry point — runs all workflow stages and emits events via session.
 
         Temporarily overrides session.mode and session.auto_safe_commands if the workflow
@@ -144,7 +145,7 @@ class CustomWorkflowOrchestrator:
                 logger.info("[workflow:%s] mode restored to '%s'", self._workflow.name, saved_mode)
 
     async def _run_workflow(
-        self, session: AgentSession, user_message: str, messages: list[dict]
+        self, session: AgentSession, user_message: str, messages: list[LLMMessage]
     ) -> None:
         effective_message = user_message if user_message.strip() != "" else f"/{self._workflow.name}"
         slots: dict[str, Any] = {"user_message": effective_message}
@@ -173,7 +174,7 @@ class CustomWorkflowOrchestrator:
         self,
         stage: WorkflowStageDefinition,
         session: AgentSession,
-        messages: list[dict],
+        messages: list[LLMMessage],
         slots: dict[str, Any],
     ) -> str | None:
         """Run one stage. Returns a jump target name for branch stages, None otherwise."""
@@ -265,7 +266,7 @@ class CustomWorkflowOrchestrator:
         self,
         stage: WorkflowStageDefinition,
         session: AgentSession,
-        messages: list[dict],
+        messages: list[LLMMessage],
         slots: dict[str, Any],
     ) -> None:
         """Run a loop stage: iterate over a list or repeat until exit_condition."""
@@ -318,7 +319,7 @@ class CustomWorkflowOrchestrator:
         self,
         stage: WorkflowStageDefinition,
         session: AgentSession,
-        messages: list[dict],
+        messages: list[LLMMessage],
         slots: dict[str, Any],
     ) -> None:
         """Run the plain agent loop on the full conversation history.
