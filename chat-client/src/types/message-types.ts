@@ -177,7 +177,7 @@ export type AgentEvent = (
   | { type: 'tool_call_start'; tool_id: string; tool_name: string }
   | { type: 'tool_call_chunk'; tool_id: string; chunk: string }
   | { type: 'tool_call'; tool_id: string; tool_name: string; arguments: Record<string, unknown> }
-  | { type: 'tool_confirm'; tool_id: string; tool_name: string; arguments: Record<string, unknown>; preview: string; diff_lines?: DiffLine[] }
+  | { type: 'tool_confirm'; tool_id: string; tool_name: string; arguments: Record<string, unknown>; preview: string; diff_lines?: DiffLine[]; evaluator_reason?: string }
   | { type: 'tool_evaluating'; tool_id: string; tool_name: string }
   | { type: 'tool_auto_approved'; tool_id: string }
   | { type: 'tool_result'; tool_id: string; tool_name: string; content: string; log_message?: string; ctx_tokens?: number }
@@ -255,6 +255,8 @@ export type DisplayMessage =
       args: Record<string, unknown>
       preview: string
       diff_lines?: DiffLine[]
+      /** Reason the auto-evaluator flagged this tool call as dangerous, if applicable. */
+      evaluator_reason?: string
       /** null = awaiting response, true/false = confirmed/rejected */
       confirmed: boolean | null
     } & SiblingMeta)

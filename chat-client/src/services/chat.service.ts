@@ -603,6 +603,7 @@ export class ChatService {
             args: event.arguments ?? {},
             preview: event.preview ?? '',
             diff_lines: event.diff_lines,
+            evaluator_reason: event.evaluator_reason,
             confirmed: null,
           },
         ])

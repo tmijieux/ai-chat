@@ -131,6 +131,7 @@ class AgentSession:
         In auto/yolo mode applies rule-based + LLM safety evaluation instead of
         prompting the user for every tool call.
         """
+        evaluator_reason: str | None = None
         if self.mode in ("auto", "yolo"):
             # Rule-based: always safe
             if tool_name in _ALWAYS_SAFE_TOOLS:
@@ -155,6 +156,7 @@ class AgentSession:
             # Dangerous: auto shows confirmation UI; yolo rejects and lets LLM handle it
             if self.mode == "yolo":
                 return False, f"Safety evaluator blocked this action: {reason}"
+            evaluator_reason = reason
 
         event: dict = {
             "type": "tool_confirm",
@@ -165,6 +167,8 @@ class AgentSession:
         }
         if diff_lines is not None:
             event["diff_lines"] = diff_lines
+        if evaluator_reason is not None:
+            event["evaluator_reason"] = evaluator_reason
         await self.emit(event)
         future: asyncio.Future[tuple[bool, str | None]] = asyncio.get_running_loop().create_future()
         self._pending_confirms[tool_id] = future
