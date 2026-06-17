@@ -22,7 +22,7 @@ from agent.agent import AgentSession, run_agent, _find_superseded_read_file_indi
 from agent.pipeline import PipelineOrchestrator
 from agent.workflow_loader import load_workflow
 from agent.custom_workflow import CustomWorkflowOrchestrator
-from agent.compress import compress_messages, CompressionResult, Compression
+from agent.compress import compress_messages
 from message_types import LLMMessage, TrackedMessage
 from tool_result_types import ToolResult
 from agent.tools import TOOL_REGISTRY, PLAN_MODE_TOOLS, CONVERSATIONAL_TOOLS, get_ollama_tool_list
@@ -156,6 +156,7 @@ async def _build_inference_context(
         .where(db.MessageImageAttachment.message_id.in_(branch_ids))
         .order_by(db.MessageImageAttachment.position)
     )).all() if branch_ids else []
+
     images_by_msg: dict[str, list] = {}
     for att, img in img_rows:
         images_by_msg.setdefault(att.message_id, []).append(img)
@@ -167,12 +168,15 @@ async def _build_inference_context(
                     original: ToolResult = json.loads(m.content)
                 except (json.JSONDecodeError, ValueError, TypeError):
                     original = {"tool": "tool", "status": "unknown"}
-                messages.append({"role": "tool", "content": json.dumps({
-                    "tool": original.get("tool", "tool"),
-                    "status": "compressed",
-                    "summary": m.compressed_summary,
-                    "tool_call_id": original.get("tool_call_id", ""),
-                })})
+                messages.append({
+                    "role": "tool", 
+                    "content": json.dumps({
+                        "tool": original.get("tool", "tool"),
+                        "status": "compressed",
+                        "summary": m.compressed_summary,
+                        "tool_call_id": original.get("tool_call_id", ""),
+                    })
+                })
             continue
         if m.content is None or m.content.strip() == "":
             continue
@@ -1016,6 +1020,44 @@ async def count_conversation_tokens(id: str, sess: AsyncSession = Depends(get_db
     return {"token_count": token_count_value, "message_id": last_id}
 
 
+@app.post("/api/conversations/{id}/debug-tokens")
+async def debug_conversation_tokens(
+    id: str,
+    sess: AsyncSession = Depends(get_db_session),
+):
+    """Count tokens per message and log a detailed breakdown to stdout."""
+    conv = (await sess.scalars(select(db.Conversation).where(db.Conversation.id == id))).first()
+    if conv is None:
+        raise HTTPException(404)
+
+    all_msgs = list((await sess.scalars(select(db.Message).where(db.Message.conversation_id == id))).all())
+    branch = _build_active_branch_path(all_msgs, conv.active_message_id)
+
+    total = 0
+    logger.info("=== DEBUG TOKEN BREAKDOWN conv=%s (%d messages) ===", id, len(branch))
+    for m in branch:
+        content_text = m.content or ""
+        thinking_text = m.thinking or ""
+        summary_text = m.compressed_summary or ""
+
+        content_tokens = await backend.count_text_tokens(content_text) if content_text else 0
+        thinking_tokens = await backend.count_text_tokens(thinking_text) if thinking_text else 0
+        summary_tokens = await backend.count_text_tokens(summary_text) if summary_text else 0
+
+        row_tokens = content_tokens + thinking_tokens
+        total += row_tokens
+        label = f"[{m.role}]"
+        if m.context_excluded:
+            label += "[excl]"
+        if m.compressed_summary:
+            label += "[cmp]"
+        logger.info(
+            "  %s id=%.8s content=%d thinking=%d summary=%d  → %d tokens",
+            label, m.id, content_tokens, thinking_tokens, summary_tokens, row_tokens,
+        )
+    logger.info("=== TOTAL (content+thinking, no overhead): %d tokens ===", total)
+
+
 @app.post("/api/conversations/{id}/compress")
 async def compress_conversation(
     id: str,
@@ -1313,6 +1355,7 @@ async def _apply_db_compressions(
             if call_id is not None and m.compressed_summary is not None:
                 call_id_to_summary[call_id] = m.compressed_summary
         except (json.JSONDecodeError, ValueError, TypeError):
+            logger.warning("continue despite error")
             pass
 
     for msg in messages:
@@ -1323,7 +1366,8 @@ async def _apply_db_compressions(
             continue
         try:
             content_dict: ToolResult = json.loads(raw_content)
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, TypeError):
+            logger.warning("continue despite error")
             continue
         call_id = content_dict.get("tool_call_id")
         if call_id is not None and call_id in call_id_to_summary:

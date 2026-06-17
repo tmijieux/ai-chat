@@ -874,10 +874,19 @@ export class ChatService {
     }
     this._isCompressing.set(true)
     try {
-      await firstValueFrom(this.api.compress_conversation(id))
+      const result = await firstValueFrom(this.api.compress_conversation(id))
+      if (result.ctx_tokens != null) {
+        this._promptTokens.set(result.ctx_tokens)
+      }
     } finally {
       this._isCompressing.set(false)
     }
+  }
+
+  debugTokens(): void {
+    const id = this._conversationId()
+    if (!id) { return }
+    this.api.debug_tokens(id).subscribe()
   }
 
   private async _reloadFromDb(): Promise<void> {
