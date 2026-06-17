@@ -100,6 +100,7 @@ class LLMBackend(ABC):
         temperature: float,
         max_tokens: int | None = None,
         disable_thinking: bool = False,
+        tool_choice: dict | str | None = None,
     ) -> AsyncIterator[StreamEvent]: ...
 
     def prepare_messages(self, messages: list) -> list:

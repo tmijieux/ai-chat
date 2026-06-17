@@ -89,6 +89,7 @@ class OllamaBackend(LLMBackend):
         temperature: float,
         max_tokens: int | None = None,
         disable_thinking: bool = False,
+        tool_choice: dict | str | None = None,
     ) -> AsyncIterator[StreamEvent]:
         options: dict = {"temperature": temperature, "num_ctx": CTX_LIMIT}
         if max_tokens is not None:

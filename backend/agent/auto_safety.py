@@ -23,9 +23,30 @@ Safe: the action is reversible or clearly scoped to the task, limited blast radi
 Dangerous: destructive, out-of-scope, could cause data loss, unintended network calls,
 or shell commands not clearly related to the user task.
 
-Respond with JSON only — no prose, no markdown fences.
-Example: {"verdict": "safe", "reason": "installs a dev dependency listed in the task"}
+You MUST call report_verdict with your decision. Do not write anything else.
 """
+
+_VERDICT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "report_verdict",
+        "description": "Report the safety verdict for the proposed tool call.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "verdict": {
+                    "type": "string",
+                    "enum": ["safe", "dangerous"],
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "One-sentence explanation of the verdict.",
+                },
+            },
+            "required": ["verdict", "reason"],
+        },
+    },
+}
 
 
 def is_path_inside_workspace(path: str, working_directory: str) -> bool:
@@ -84,27 +105,26 @@ async def evaluate_tool_safety(
     ]
     prepared = llm_backend.prepare_messages(messages)
 
-    content = ""
+    args_fragments: dict[int, str] = {}
     async for event in llm_backend.stream_completion(
-        prepared, [], temperature=0.0, max_tokens=128, disable_thinking=True
+        prepared, [_VERDICT_TOOL], temperature=0.0, max_tokens=128, disable_thinking=True,
+        tool_choice={"type": "function", "name": "report_verdict"},
     ):
-        if event["type"] == "content":
-            content += event["content"]
+        if event["type"] == "tool_call_arg":
+            idx = event["index"]
+            args_fragments[idx] = args_fragments.get(idx, "") + event["fragment"]
 
-    content = content.strip()
-    start = content.find("{")
-    end = content.rfind("}")
-    if start != -1 and end != -1 and end > start:
+    if args_fragments:
         try:
-            parsed = json.loads(content[start : end + 1])
+            parsed = json.loads(args_fragments[0])
             verdict = parsed.get("verdict", "dangerous")
             reason = str(parsed.get("reason", ""))
             if verdict not in ("safe", "dangerous"):
                 verdict = "dangerous"
             logger.info("safety eval %s → %s: %s", tool_name, verdict, reason[:80])
             return verdict, reason
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, KeyError):
             pass
 
-    logger.warning("safety evaluator unparseable response for %s: %r", tool_name, content[:200])
-    return "dangerous", "could not parse evaluator response — defaulting to dangerous"
+    logger.warning("safety evaluator did not call report_verdict for %s", tool_name)
+    return "dangerous", "evaluator did not call report_verdict — defaulting to dangerous"

@@ -142,6 +142,7 @@ class LlamaServerBackend(LLMBackend):
         temperature: float,
         max_tokens: int | None = None,
         disable_thinking: bool = False,
+        tool_choice: dict | str | None = None,
     ) -> AsyncIterator[StreamEvent]:
         body: dict = {
             "model": MODEL_NAME,
@@ -155,6 +156,8 @@ class LlamaServerBackend(LLMBackend):
             body["max_tokens"] = max_tokens
         if disable_thinking:
             body["chat_template_kwargs"] = {"enable_thinking": False}
+        if tool_choice is not None:
+            body["tool_choice"] = tool_choice
 
         tool_calls_acc: dict[int, dict] = {}  # index → {id, name, arguments_str}
         finish_reason: str = "stop"
