@@ -42,27 +42,23 @@ async def _maybe_preshrink_tool_output(
         return result_dict
 
     if tool_name == "run_shell":
-        raw_output = result_dict.get("output")
-        if raw_output is None or raw_output == "":
-            error_dict = result_dict.get("error")
-            if error_dict is None:
-                error_dict = {}
-            raw_output = error_dict.get("message")
-            if raw_output is None:
-                raw_output = ""
-        if len(raw_output) <= _LARGE_OUTPUT_CHARS:
+        stdout = result_dict.get("output") or ""
+        stderr = result_dict.get("error") or ""
+        combined = stdout + stderr
+        if len(combined) <= _LARGE_OUTPUT_CHARS:
             return result_dict
-        temp_path = await _save_temp_output(raw_output, "shell", working_directory)
+        temp_path = await _save_temp_output(combined, "shell", working_directory)
         summary = await _summarize_shell_output(result_dict, backend)
         modified = dict(result_dict)
         modified["output"] = (
-            f"[Output too large ({len(raw_output):,} chars) — auto-summarized. "
+            f"[Output too large ({len(combined):,} chars) — auto-summarized. "
             f"Full output saved to {temp_path}; use grep_files or read_file_range on it for details.]\n\n"
             + summary
         )
+        modified["error"] = ""
         logger.info(
             "preshrink run_shell: %d chars → saved to %s, summary %d chars",
-            len(raw_output), temp_path, len(summary),
+            len(combined), temp_path, len(summary),
         )
         return modified
 
