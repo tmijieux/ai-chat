@@ -95,6 +95,13 @@ class RunShellTool(BaseTool):
             if proc.returncode == 0:
                 return {"tool": self.name, "status": "success", "command": command, "output": stdout.decode()}
             else:
-                return {"tool": self.name, "status": "error", "command": command, "error": {"message": stderr.decode()}}
+                return {
+                    "tool": self.name,
+                    "status": "error",
+                    "command": command,
+                    "exit_code": proc.returncode,
+                    "output": stdout.decode(),
+                    "error": stderr.decode(),
+                }
         except Exception as e:
             return tool_error(self.name, f"Unexpected error: {e}")
