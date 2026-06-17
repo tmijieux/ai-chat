@@ -14,7 +14,7 @@ from .auto_safety import evaluate_tool_safety, _ALWAYS_SAFE_TOOLS, _FILE_WRITE_T
 from .compress import _summarize_shell_output, _summarize_search_results
 from llm import backend
 from llm.base import ToolCallStartEvent, ToolCallArgEvent
-from message_types import LLMMessage
+from message_types import LLMMessage, ToolCall, ToolCallFunction
 from tool_result_types import ToolResult
 
 CTX_LIMIT = 2**15
@@ -22,6 +22,30 @@ CTX_LIMIT = 2**15
 logger = logging.getLogger(__name__)
 
 _LARGE_OUTPUT_CHARS = 20_000  # preshrink threshold for run_shell / search_web outputs
+
+
+class ToolCallAccEntry(TypedDict):
+    id: str
+    name: str
+    arguments_str: str
+
+
+@dataclass
+class GenerationResult:
+    """Accumulated output from one LLM stream."""
+    message: LLMMessage
+    tool_calls_acc: dict[int, ToolCallAccEntry]
+    eval_count: int
+    done_reason: str
+
+
+@dataclass
+class TurnResult:
+    """Outcome of one chat_with_tools iteration."""
+    is_done: bool
+    finished_without_response: bool
+
+
 
 
 async def _save_temp_output(content: str, prefix: str, working_directory: str) -> str:
@@ -232,7 +256,7 @@ def _parse_embedded_tool_call(block_content: str) -> dict | None:
     return {"name": name, "arguments": arguments}
 
 
-def _extract_tool_calls_from_thinking(thinking: str) -> list[dict]:
+def _extract_tool_calls_from_thinking(thinking: str) -> list[ToolCall]:
     """
     Recover tool calls that the model emitted inside the thinking block without closing </think>.
     Qwen3 uses <tool_call><function=NAME><parameter=K>V</parameter>…</function></tool_call>.
@@ -351,7 +375,7 @@ async def _track_tokens(
     tools: list[dict],
     session: "AgentSession",
     label: str,
-    prepared: list[LLMMessage] | None = None,
+    prepared: Sequence[LLMMessage] | None = None,
 ) -> int:
     """Count context tokens, log the result, and emit ctx_update to the frontend."""
     if prepared is None:
@@ -362,16 +386,17 @@ async def _track_tokens(
     return tokens
 
 
-def _parse_tool_calls(tool_calls_acc: dict[int, dict], message: dict) -> list[dict]:
+def _parse_tool_calls(tool_calls_acc: dict[int, ToolCallAccEntry], message: LLMMessage) -> list[ToolCall]:
     """Build the tool_calls list from streamed fragments, with thinking-block recovery fallback."""
-    tool_calls: list[dict] = []
+
+    tool_calls: list[ToolCall] = []
     for acc in (tool_calls_acc[i] for i in sorted(tool_calls_acc)):
         try:
             arguments = json.loads(acc["arguments_str"]) if acc["arguments_str"] else {}
         except json.JSONDecodeError:
             logger.warning("Malformed tool call arguments for %s, skipping: %r", acc["name"], acc["arguments_str"])
             continue
-        tool_calls.append({"id": acc["id"], "function": {"name": acc["name"], "arguments": arguments}})
+        tool_calls.append(ToolCall(id=acc["id"], function=ToolCallFunction(name=acc["name"], arguments=arguments)))
 
     # Recover tool calls embedded in thinking when the model forgot to close </think> first.
     # Only attempt recovery when both regular content and stream-parsed tool calls are absent.
@@ -385,7 +410,7 @@ def _parse_tool_calls(tool_calls_acc: dict[int, dict], message: dict) -> list[di
 
 
 async def _execute_tool_calls(
-    tool_calls: list[dict],
+    tool_calls: list[ToolCall],
     messages: list[LLMMessage],
     session: AgentSession,
     tools: list[dict],
@@ -446,28 +471,6 @@ async def _execute_tool_calls(
     return False
 
 
-class ToolCallAccEntry(TypedDict):
-    id: str
-    name: str
-    arguments_str: str
-
-
-@dataclass
-class GenerationResult:
-    """Accumulated output from one LLM stream."""
-    message: LLMMessage
-    tool_calls_acc: dict[int, ToolCallAccEntry]
-    eval_count: int
-    done_reason: str
-
-
-@dataclass
-class TurnResult:
-    """Outcome of one chat_with_tools iteration."""
-    is_done: bool
-    finished_without_response: bool
-
-
 async def _stream_llm(
     prepared: Sequence[LLMMessage],
     tools: list[dict],
@@ -516,7 +519,7 @@ async def _stream_llm(
 
 async def _append_assistant_message(
     message: LLMMessage,
-    tool_calls: list[dict],
+    tool_calls: list[ToolCall],
     messages: list[LLMMessage],
     tools: list[dict],
     session: AgentSession,
@@ -568,7 +571,10 @@ async def chat_with_tools(
     print(f"[tokens] prompt_tokens={prompt_eval_count} completion_tokens={generation.eval_count} finish_reason={generation.done_reason}")
 
     if generation.done_reason == "length":
-        await session.emit({"type": "error", "message": f"Context limit reached during generation: {prompt_eval_count + generation.eval_count}/{CTX_LIMIT} tokens. The response was cut off."})
+        await session.emit({
+            "type": "error", 
+            "message": f"Context limit reached during generation: {prompt_eval_count + generation.eval_count}/{CTX_LIMIT} tokens. The response was cut off."
+        })
         return TurnResult(is_done=True, finished_without_response=False)
 
     tool_calls = _parse_tool_calls(generation.tool_calls_acc, generation.message)
