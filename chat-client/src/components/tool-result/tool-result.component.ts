@@ -91,19 +91,19 @@ export class ToolResultComponent {
     }
   }
 
-  formatShellResult(content: string): { icon: string; output: string } | null {
+  formatShellResult(content: string): { icon: string; stdout: string; stderr: string } | null {
     try {
       const r = JSON.parse(content)
       if (r.tool !== 'run_shell') {
         return null
       }
       if (r.status === 'rejected') {
-        return { icon: '✗ rejected', output: r.reason ?? '' }
+        return { icon: '✗ rejected', stdout: r.reason ?? '', stderr: '' }
       }
       const ok = r.status === 'success'
-      const icon = ok ? '✓ exit 0' : '✗ exit 1'
-      const output = ok ? (r.output ?? '') : (r.error?.message ?? '')
-      return { icon, output }
+      const exitCode = ok ? 0 : (r.exit_code ?? 1)
+      const icon = ok ? '✓ exit 0' : `✗ exit ${exitCode}`
+      return { icon, stdout: r.output ?? '', stderr: r.error ?? '' }
     } catch {
       return null
     }

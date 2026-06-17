@@ -58,8 +58,12 @@
           <div class="tool-result-simple">
             <span class="tool-result-icon">{{ shell.icon }}</span>
           </div>
-          @if (shell.output) {
-            <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap">{{ shell.output }}</pre>
+          @if (shell.stdout) {
+            <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap">{{ shell.stdout }}</pre>
+          }
+          @if (shell.stderr) {
+            <div class="text-xs px-3 pt-1 text-muted italic">stderr</div>
+            <pre class="text-xs px-3 pb-3 overflow-auto max-h-40 whitespace-pre-wrap text-warning">{{ shell.stderr }}</pre>
           }
         </div>
       } @else if (fileContent) {
