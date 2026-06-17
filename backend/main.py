@@ -1033,7 +1033,8 @@ async def debug_conversation_tokens(
     all_msgs = list((await sess.scalars(select(db.Message).where(db.Message.conversation_id == id))).all())
     branch = _build_active_branch_path(all_msgs, conv.active_message_id)
 
-    total = 0
+    in_context_total = 0
+    raw_total = 0
     logger.info("=== DEBUG TOKEN BREAKDOWN conv=%s (%d messages) ===", id, len(branch))
     for m in branch:
         content_text = m.content or ""
@@ -1044,18 +1045,27 @@ async def debug_conversation_tokens(
         thinking_tokens = await backend.count_text_tokens(thinking_text) if thinking_text else 0
         summary_tokens = await backend.count_text_tokens(summary_text) if summary_text else 0
 
-        row_tokens = content_tokens + thinking_tokens
-        total += row_tokens
+        raw_tokens = content_tokens + thinking_tokens
+
+        # In-context size: excluded messages contribute only their summary (or nothing if no summary)
+        if m.context_excluded:
+            in_context_tokens = summary_tokens
+        else:
+            in_context_tokens = raw_tokens
+
+        in_context_total += in_context_tokens
+        raw_total += raw_tokens
+
         label = f"[{m.role}]"
         if m.context_excluded:
             label += "[excl]"
         if m.compressed_summary:
             label += "[cmp]"
         logger.info(
-            "  %s id=%.8s content=%d thinking=%d summary=%d  → %d tokens",
-            label, m.id, content_tokens, thinking_tokens, summary_tokens, row_tokens,
+            "  %s id=%.8s raw=%d (content=%d thinking=%d) summary=%d  in-ctx=%d",
+            label, m.id, raw_tokens, content_tokens, thinking_tokens, summary_tokens, in_context_tokens,
         )
-    logger.info("=== TOTAL (content+thinking, no overhead): %d tokens ===", total)
+    logger.info("=== TOTAL raw=%d  in-context=%d (+ system/tools overhead not counted) ===", raw_total, in_context_total)
 
 
 @app.post("/api/conversations/{id}/compress")
