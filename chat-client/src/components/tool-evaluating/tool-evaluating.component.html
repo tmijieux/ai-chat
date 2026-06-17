@@ -1,4 +1,16 @@
-<div class="eval-badge">
-  <span class="eval-badge__spinner"></span>
-  <span class="eval-badge__text">Evaluating safety of <strong>{{ toolName() }}</strong>…</span>
+<div class="eval-badge" [class.eval-badge--safe]="verdict() === 'safe'" [class.eval-badge--dangerous]="verdict() === 'dangerous'">
+  @if (verdict() === 'safe') {
+    <span class="eval-badge__icon eval-badge__icon--safe">✓</span>
+  } @else if (verdict() === 'dangerous') {
+    <span class="eval-badge__icon eval-badge__icon--dangerous">✗</span>
+  } @else {
+    <span class="eval-badge__spinner"></span>
+  }
+  <span class="eval-badge__text">
+    @if (verdict() === 'safe') { Auto-approved } @else if (verdict() === 'dangerous') { Flagged as dangerous } @else { Evaluating safety of }
+    @if (verdict() === undefined) { <strong>{{ toolName() }}</strong>… }
+  </span>
+  @if (verdict() === 'dangerous' && reason()) {
+    <span class="eval-badge__reason-icon" [title]="reason()">ⓘ</span>
+  }
 </div>

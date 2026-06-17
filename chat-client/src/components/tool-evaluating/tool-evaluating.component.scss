@@ -9,6 +9,18 @@
   font-size: 0.75rem;
   color: #ca8a04;
 
+  &--safe {
+    background: rgba(74, 222, 128, 0.08);
+    border-color: rgba(74, 222, 128, 0.3);
+    color: #4ade80;
+  }
+
+  &--dangerous {
+    background: rgba(248, 113, 113, 0.08);
+    border-color: rgba(248, 113, 113, 0.3);
+    color: #f87171;
+  }
+
   &__spinner {
     width: 0.7rem;
     height: 0.7rem;
@@ -19,8 +31,23 @@
     flex-shrink: 0;
   }
 
+  &__icon {
+    font-size: 0.8rem;
+    font-weight: 700;
+    flex-shrink: 0;
+
+    &--safe { color: #4ade80; }
+    &--dangerous { color: #f87171; }
+  }
+
   &__text strong {
     font-weight: 600;
+  }
+
+  &__reason-icon {
+    cursor: help;
+    user-select: none;
+    opacity: 0.8;
   }
 }
 

@@ -66,10 +66,14 @@ class GrepFilesTool(BaseTool):
             return tool_error(self.name, "No workspace configured — file tools are disabled.")
 
         pattern = args.get("pattern", "")
+        if pattern.strip() in (".*", "^.*", ".*$", "^.*$"):
+            return tool_error(self.name, "the pattern '.*' is not allowed. Search for specific content.")
+        
         path = args.get("path", ".")
         glob_pattern = args.get("glob", None)
         if glob_pattern is None:
             return tool_error(self.name, "the 'glob' argument is missing")
+
         case_insensitive = args.get("case_insensitive", False)
         lines_after = int(args.get("-A", 0))
         lines_before = int(args.get("-B", 0))

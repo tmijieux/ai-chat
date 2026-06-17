@@ -300,12 +300,6 @@
               <div class="flex items-center gap-2 mb-2">
                 <span class="tool-confirm-label">Tool request:</span>
                 <code class="tool-confirm-tool-name">{{ msg.tool_name }}</code>
-                @if (msg.evaluator_reason) {
-                  <span
-                    class="tool-confirm-evaluator-reason"
-                    [title]="'Auto-evaluator: ' + msg.evaluator_reason"
-                  >ⓘ</span>
-                }
                 @if (msg.confirmed === true) {
                   <span class="ml-auto text-sm font-medium" style="color:#4ade80">Approved</span>
                 }
@@ -366,7 +360,7 @@
 
           <!-- Safety evaluation spinner (auto mode) -->
           @if (msg.kind === 'tool_evaluating') {
-            <app-tool-evaluating [toolName]="msg.tool_name" />
+            <app-tool-evaluating [toolName]="msg.tool_name" [verdict]="msg.verdict" [reason]="msg.reason" />
           }
 
           <!-- Plan proposal card -->

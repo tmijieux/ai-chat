@@ -593,27 +593,37 @@ export class ChatService {
           streamingToolCallsAcc.set(event.tool_id, { id: event.tool_id, name: event.tool_name, argsStr: JSON.stringify(event.arguments) })
         }
       } else if (event.type === 'tool_confirm') {
-        this._messages.update((msgs) => [
-          ...msgs,
-          {
-            kind: 'tool_confirm',
-            id: event.tool_id!,
-            tool_id: event.tool_id!,
-            tool_name: event.tool_name ?? '',
-            args: event.arguments ?? {},
-            preview: event.preview ?? '',
-            diff_lines: event.diff_lines,
-            evaluator_reason: event.evaluator_reason,
-            confirmed: null,
-          },
-        ])
+        this._messages.update((msgs) => {
+          const updated = event.evaluator_reason
+            ? msgs.map((m) =>
+                m.kind === 'tool_evaluating' && m.tool_id === event.tool_id
+                  ? { ...m, verdict: 'dangerous' as const, reason: event.evaluator_reason }
+                  : m,
+              )
+            : msgs
+          return [
+            ...updated,
+            {
+              kind: 'tool_confirm' as const,
+              id: event.tool_id!,
+              tool_id: event.tool_id!,
+              tool_name: event.tool_name ?? '',
+              args: event.arguments ?? {},
+              preview: event.preview ?? '',
+              diff_lines: event.diff_lines,
+              confirmed: null,
+            },
+          ]
+        })
       } else if (event.type === 'tool_evaluating') {
         this._messages.update((msgs) => [
           ...msgs,
           { kind: 'tool_evaluating' as const, id: event.tool_id, tool_id: event.tool_id, tool_name: event.tool_name },
         ])
       } else if (event.type === 'tool_auto_approved') {
-        this._messages.update((msgs) => msgs.filter((m) => !(m.kind === 'tool_evaluating' && m.tool_id === event.tool_id)))
+        this._messages.update((msgs) =>
+          msgs.map((m) => m.kind === 'tool_evaluating' && m.tool_id === event.tool_id ? { ...m, verdict: 'safe' as const } : m),
+        )
       } else if (event.type === 'tool_result') {
         this._callingTool.set(null)
         this._streamingToolCallArgs.set('')

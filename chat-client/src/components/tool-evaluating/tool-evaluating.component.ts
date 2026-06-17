@@ -9,4 +9,6 @@ import { Component, input } from '@angular/core'
 })
 export class ToolEvaluatingComponent {
   readonly toolName = input.required<string>()
+  readonly verdict = input<'safe' | 'dangerous' | undefined>(undefined)
+  readonly reason = input<string | undefined>(undefined)
 }

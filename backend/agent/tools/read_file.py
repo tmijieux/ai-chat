@@ -56,7 +56,7 @@ class ReadFileTool(BaseTool):
         if grep_count < 2:
             return tool_error(
                 self.name,
-                f"Cannot read file before grepping it at least twice. "
+                f"Cannot read file before grepping it at least twice. Wildcard patterns \".*\"  are not allowed! Search for what you need."
                 f"grep_files has matched '{posix_key}' {grep_count} time(s) so far. "
                 "Use grep_files with -B/-A to extract the relevant section. "
                 "Only call read_file if multiple grep_files attempts on this file did not yield useful results.",

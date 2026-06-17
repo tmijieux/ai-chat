@@ -255,8 +255,6 @@ export type DisplayMessage =
       args: Record<string, unknown>
       preview: string
       diff_lines?: DiffLine[]
-      /** Reason the auto-evaluator flagged this tool call as dangerous, if applicable. */
-      evaluator_reason?: string
       /** null = awaiting response, true/false = confirmed/rejected */
       confirmed: boolean | null
     } & SiblingMeta)
@@ -273,7 +271,7 @@ export type DisplayMessage =
       token_delta?: number | null
       context_excluded?: boolean
     } & SiblingMeta)
-  | { kind: 'tool_evaluating'; id: string; tool_id: string; tool_name: string }
+  | { kind: 'tool_evaluating'; id: string; tool_id: string; tool_name: string; verdict?: 'safe' | 'dangerous'; reason?: string }
   | { kind: 'plan_proposal'; id: string; plan_id: string; plan: string; resolved: boolean; resolution?: string }
   | { kind: 'agent_question'; id: string; question_id: string; question: string; options?: string[]; resolved: boolean }
   | { kind: 'error'; id: string; message: string }
