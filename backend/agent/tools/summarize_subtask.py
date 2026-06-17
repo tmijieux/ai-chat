@@ -7,7 +7,7 @@ if TYPE_CHECKING:
 
 class SummarizeSubtaskTool(BaseTool):
     name = "summarize_subtask"
-    description = "Summarize a large piece of content relative to a specific task using a fresh LLM call. Use this to compress large tool outputs (file reads, search results) that would overflow context."
+    description = "A subagent that summarize a large piece of content relative to a specific task using a fresh LLM call. Use this to compress large tool outputs (file reads, search results) that would overflow context."
     parameters = {
         "type": "object",
         "properties": {
@@ -23,7 +23,7 @@ class SummarizeSubtaskTool(BaseTool):
         "required": ["task", "content"],
     }
     requires_confirmation = False
-    measured_delta = 335
+    measured_delta = 337
 
     def label(self, args: dict) -> str:
         return f"SUMMARIZE for: {args.get('task', '')}"

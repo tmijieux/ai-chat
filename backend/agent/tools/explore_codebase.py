@@ -39,7 +39,7 @@ def _read_lines(file_path: str, start_line: int, end_line: int, working_director
 class ExploreCodebaseTool(BaseTool):
     name = "explore_codebase"
     description = (
-        "Run a focused code search to locate source code relevant to a query. "
+        "A subagent that run a focused code search to locate source code relevant to a query(prompt)"
         "Returns file locations with the actual code content read by the system. "
         "Use this instead of calling grep_files/glob_files directly."
     )
@@ -54,7 +54,7 @@ class ExploreCodebaseTool(BaseTool):
         "required": ["query"],
     }
     requires_confirmation = False
-    measured_delta = 315
+    measured_delta = 320
 
     def label(self, args: dict) -> str:
         return f"EXPLORE {args.get('query', '')[:60]}"
