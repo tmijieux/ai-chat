@@ -6,7 +6,8 @@ import re
 import uuid
 import aiofiles
 import aiohttp
-from typing import Any, Callable, Awaitable
+from dataclasses import dataclass
+from typing import Any, Callable, Awaitable, Sequence, TypedDict
 
 from .tools import TOOL_REGISTRY, get_ollama_tool_list
 from .auto_safety import evaluate_tool_safety, _ALWAYS_SAFE_TOOLS, _FILE_WRITE_TOOLS, is_path_inside_workspace
@@ -294,7 +295,7 @@ def _deduplicate_file_reads(messages: list[LLMMessage]) -> None:
 
 
 
-def _log_context(messages: list[LLMMessage]) -> None:
+def _log_context(messages: Sequence[LLMMessage]) -> None:
     print(f"\n=== CONTEXT ({len(messages)} messages) ===")
     for m in messages:
         role = m.get("role", "?")
@@ -445,26 +446,37 @@ async def _execute_tool_calls(
     return False
 
 
-async def chat_with_tools(
-    messages: list[LLMMessage],
-    session: AgentSession,
+class ToolCallAccEntry(TypedDict):
+    id: str
+    name: str
+    arguments_str: str
+
+
+@dataclass
+class GenerationResult:
+    """Accumulated output from one LLM stream."""
+    message: LLMMessage
+    tool_calls_acc: dict[int, ToolCallAccEntry]
+    eval_count: int
+    done_reason: str
+
+
+@dataclass
+class TurnResult:
+    """Outcome of one chat_with_tools iteration."""
+    is_done: bool
+    finished_without_response: bool
+
+
+async def _stream_llm(
+    prepared: Sequence[LLMMessage],
     tools: list[dict],
-    working_directory: str | None,
-    extra_tools: dict | None = None,
-) -> tuple[bool, bool]:
-    """
-    One iteration of the LLM call + tool execution loop.
-    Returns True when the agent is done (no tool calls were made).
-    """
-    prepared = backend.prepare_messages(messages)
-    _log_context(prepared)
-
-    ctx_before_generation = await _track_tokens(messages, tools, session, "context before generation", prepared=prepared)
-    max_tokens = CTX_LIMIT - ctx_before_generation
-
-    message: dict[str, Any] = {"role": "assistant", "content": "", "thinking": ""}
-    tool_calls_acc: dict[int, dict] = {}  # index → {id, name, arguments_str}
-    prompt_eval_count: int = ctx_before_generation
+    max_tokens: int,
+    session: AgentSession,
+) -> GenerationResult:
+    """Stream one LLM completion, emit events to session, and return accumulated result."""
+    message: LLMMessage = {"role": "assistant", "content": "", "thinking": ""}
+    tool_calls_acc: dict[int, ToolCallAccEntry] = {}
     eval_count: int = 0
     done_reason: str = ""
 
@@ -472,16 +484,16 @@ async def chat_with_tools(
         etype = event["type"]
 
         if etype == "thinking":
-            message["thinking"] += event["content"]
+            message["thinking"] = (message.get("thinking") or "") + event["content"]
             await session.emit({"type": "thinking", "content": event["content"]})
 
         elif etype == "content":
-            message["content"] += event["content"]
+            message["content"] = (message.get("content") or "") + event["content"]
             await session.emit({"type": "content", "content": event["content"]})
 
         elif etype == "tool_call_start":
             idx = event["index"]
-            tool_calls_acc[idx] = {"id": event["id"], "name": event["name"], "arguments_str": ""}
+            tool_calls_acc[idx] = ToolCallAccEntry(id=event["id"], name=event["name"], arguments_str="")
             await session.emit({"type": "tool_call_start", "tool_id": event["id"], "tool_name": event["name"]})
 
         elif etype == "tool_call_arg":
@@ -491,47 +503,86 @@ async def chat_with_tools(
             await session.emit({"type": "tool_call_chunk", "tool_id": tool_calls_acc.get(idx, {}).get("id", ""), "chunk": event["fragment"]})
 
         elif etype == "done":
-            prompt_eval_count = ctx_before_generation
             eval_count = event["completion_tokens"]
             done_reason = event["finish_reason"]
-            print(f"[tokens] prompt_tokens={prompt_eval_count} completion_tokens={eval_count} finish_reason={done_reason}")
 
-    if done_reason == "length":
-        await session.emit({"type": "error", "message": f"Context limit reached during generation: {prompt_eval_count + eval_count}/{CTX_LIMIT} tokens. The response was cut off."})
-        return True, False
+    return GenerationResult(
+        message=message,
+        tool_calls_acc=tool_calls_acc,
+        eval_count=eval_count,
+        done_reason=done_reason,
+    )
 
-    tool_calls = _parse_tool_calls(tool_calls_acc, message)
 
-    finished_without_response = len(message["content"]) == 0 and len(tool_calls) == 0
-    if finished_without_response:
-        logger.warning("Agent finished without response: no content, no tool calls")
+async def _append_assistant_message(
+    message: LLMMessage,
+    tool_calls: list[dict],
+    messages: list[LLMMessage],
+    tools: list[dict],
+    session: AgentSession,
+) -> bool:
+    """Append the assistant turn to messages. Returns True if a message was appended."""
+    content = message.get("content") or ""
+    thinking = message.get("thinking") or ""
 
-    message_appended = False
-    if len(message["content"]) > 0:
+    if len(content) > 0:
         messages[:] = [m for m in messages if not m.get("_transient")]
         if len(tool_calls) > 0:
             message["tool_calls"] = tool_calls
         messages.append(message)
-        message_appended = True
-    elif len(message["thinking"]) > 0 or len(tool_calls) > 0:
-        # Strip embedded <tool_call> blocks from thinking stored in context — the model already
-        # sees them as tool_calls entries, keeping the raw XML would confuse it.
-        thinking_for_context = _strip_tool_call_blocks(message["thinking"]) if tool_calls and tool_calls[0].get("_recovered") else message["thinking"]
+        appended = True
+    elif len(thinking) > 0 or len(tool_calls) > 0:
+        thinking_for_context = _strip_tool_call_blocks(thinking) if tool_calls and tool_calls[0].get("_recovered") else thinking
         messages.append({
             "role": "assistant",
             "content": f"<think>{thinking_for_context}</think>",
             "tool_calls": tool_calls,
         })
-        message_appended = True
+        appended = True
+    else:
+        appended = False
 
-    if message_appended:
+    if appended:
         ctx_after_gen = await _track_tokens(messages, tools, session, "context after generation")
         await session.emit({"type": "generation_end", "ctx_tokens": ctx_after_gen})
+
+    return appended
+
+
+async def chat_with_tools(
+    messages: list[LLMMessage],
+    session: AgentSession,
+    tools: list[dict],
+    working_directory: str | None,
+    extra_tools: dict | None = None,
+) -> TurnResult:
+    """One iteration of the LLM call + tool execution loop."""
+    prepared = backend.prepare_messages(messages)
+    _log_context(prepared)
+
+    prompt_eval_count = await _track_tokens(messages, tools, session, "context before generation", prepared=prepared)
+    max_tokens = CTX_LIMIT - prompt_eval_count
+
+    generation = await _stream_llm(prepared, tools, max_tokens, session)
+
+    print(f"[tokens] prompt_tokens={prompt_eval_count} completion_tokens={generation.eval_count} finish_reason={generation.done_reason}")
+
+    if generation.done_reason == "length":
+        await session.emit({"type": "error", "message": f"Context limit reached during generation: {prompt_eval_count + generation.eval_count}/{CTX_LIMIT} tokens. The response was cut off."})
+        return TurnResult(is_done=True, finished_without_response=False)
+
+    tool_calls = _parse_tool_calls(generation.tool_calls_acc, generation.message)
+
+    finished_without_response = len(generation.message.get("content") or "") == 0 and len(tool_calls) == 0
+    if finished_without_response:
+        logger.warning("Agent finished without response: no content, no tool calls")
+
+    await _append_assistant_message(generation.message, tool_calls, messages, tools, session)
 
     if len(tool_calls) > 0:
         overflow = await _execute_tool_calls(tool_calls, messages, session, tools, working_directory, extra_tools)
         if overflow:
-            return True, False
+            return TurnResult(is_done=True, finished_without_response=False)
 
     # Emit iteration_end after tool results so the frontend receives tool_result events
     # before iteration_end. The frontend rotation logic patches tool results from iteration N
@@ -539,11 +590,11 @@ async def chat_with_tools(
     await session.emit({
         "type": "iteration_end",
         "prompt_tokens": prompt_eval_count,
-        "response_tokens": eval_count,
+        "response_tokens": generation.eval_count,
     })
 
     _deduplicate_file_reads(messages)
-    return len(tool_calls) == 0, finished_without_response
+    return TurnResult(is_done=len(tool_calls) == 0, finished_without_response=finished_without_response)
 
 
 async def run_agent(
@@ -555,11 +606,10 @@ async def run_agent(
 ) -> None:
     """Run the full agent loop until done, emitting events via session."""
     try:
-        finished = False
-        finished_without_response = False
-        while not finished:
-            finished, finished_without_response = await chat_with_tools(messages, session, tools, working_directory, extra_tools)
-        await session.emit({"type": "done", "finished_without_response": finished_without_response})
+        turn = TurnResult(is_done=False, finished_without_response=False)
+        while not turn.is_done:
+            turn = await chat_with_tools(messages, session, tools, working_directory, extra_tools)
+        await session.emit({"type": "done", "finished_without_response": turn.finished_without_response})
     except asyncio.CancelledError:
         await session.emit({"type": "error", "message": "Agent was aborted"})
     except aiohttp.ClientConnectorError as e:
