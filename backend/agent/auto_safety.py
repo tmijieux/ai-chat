@@ -78,7 +78,10 @@ async def evaluate_tool_safety(
         f"Tool: {tool_name}\n"
         f"Arguments: {json.dumps(arguments, ensure_ascii=False)[:800]}"
     )
-    messages = [{"role": "user", "content": prompt}]
+    messages = [
+        {"role": "system", "content": _EVAL_SYSTEM},
+        {"role": "user", "content": prompt},
+    ]
     prepared = llm_backend.prepare_messages(messages)
 
     content = ""
