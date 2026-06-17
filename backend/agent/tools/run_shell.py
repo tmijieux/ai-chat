@@ -3,6 +3,7 @@ import subprocess
 import shutil
 import sys
 from .base import BaseTool, tool_error, tool_rejected
+from tool_result_types import RunShellResult
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -59,7 +60,7 @@ class RunShellTool(BaseTool):
         label = f"[{mode}]" if _IS_WINDOWS else ""
         return f"SHELL{label}: {args.get('command', '')}"
 
-    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
+    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> RunShellResult:
         if working_directory is None:
             return tool_error(self.name, "No workspace configured — shell is disabled.")
 
@@ -93,15 +94,22 @@ class RunShellTool(BaseTool):
 
             stdout, stderr = await proc.communicate()
             if proc.returncode == 0:
-                return {"tool": self.name, "status": "success", "command": command, "output": stdout.decode(), "error": stderr.decode()}
+                return RunShellResult(
+                    tool=self.name,
+                    status="success",
+                    command=command,
+                    output=stdout.decode(),
+                    stderr=stderr.decode(),
+                )
             else:
-                return {
-                    "tool": self.name,
-                    "status": "error",
-                    "command": command,
-                    "exit_code": proc.returncode,
-                    "output": stdout.decode(),
-                    "error": stderr.decode(),
-                }
+                return RunShellResult(
+                    tool=self.name,
+                    status="error",
+                    command=command,
+                    exit_code=proc.returncode,
+                    output=stdout.decode(),
+                    stderr=stderr.decode(),
+                    error={"message": f"exit code {proc.returncode}"},
+                )
         except Exception as e:
             return tool_error(self.name, f"Unexpected error: {e}")

@@ -2,10 +2,43 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 from llm.base import LLMBackend
+from message_types import LLMMessage, TrackedMessage
+from tool_result_types import ToolResult
 
 logger = logging.getLogger(__name__)
+
+
+
+
+@dataclass
+class ClassifiablePair:
+    """One tool message prepared for the classifier: index into candidate_messages plus LLM prompt metadata."""
+    index: int
+    message_id: str
+    tool_call_id: str
+    tool: str
+    args_summary: str
+    result_metadata: dict
+    following_thinking: str
+
+
+@dataclass
+class Compression:
+    """A single compressed tool message: which message was compressed, the summary text, and the classifier label."""
+    message_id: str
+    compressed_summary: str
+    compression_label: str
+
+
+@dataclass
+class CompressionResult:
+    """Outcome of a compress_messages call: the list of per-message compressions and the updated conversation summary."""
+    compressions: list[Compression]
+    new_summary: str
+
 
 KEEP_SUMMARIZE_THRESHOLD_CHARS = 800  # ~200 tokens — threshold for auto-summarizing "keep" items
 CHUNK_MAX_CHARS = 32_000  # ~8k tokens per chunk, leaves headroom for agent context
@@ -15,7 +48,7 @@ _GREP_MAX_CHARS = 4000
 _SKIP_CLASSIFY = {"write_file", "edit_file", "ask_user_question", "propose_plan"}
 
 
-def _following_thinking(all_messages: list[dict], tool_id: str) -> str:
+def _following_thinking(all_messages: list[TrackedMessage], tool_id: str) -> str:
     """Return up to 600 chars of thinking from the first assistant message after the given tool result."""
     found = False
     for m in all_messages:
@@ -34,7 +67,7 @@ def _following_thinking(all_messages: list[dict], tool_id: str) -> str:
     return ""
 
 
-def _key_args(result: dict) -> str:
+def _key_args(result: ToolResult) -> str:
     tool = result.get("tool", "")
     if tool in ("read_file", "list_directory"):
         return repr(result.get("path", ""))
@@ -49,7 +82,7 @@ def _key_args(result: dict) -> str:
     return ""
 
 
-def _result_metadata(result: dict) -> dict:
+def _result_metadata(result: ToolResult) -> dict[str, Any]:
     tool = result.get("tool", "")
     meta: dict = {"status": result.get("status", "unknown")}
     if tool == "glob_files":
@@ -65,7 +98,7 @@ def _result_metadata(result: dict) -> dict:
         meta["line_count"] = len(content.splitlines())
     elif tool == "run_shell":
         meta["exit_code"] = result.get("exit_code", 0)
-        output = result.get("output") or result.get("stdout") or ""
+        output = result.get("output") or result.get("stderr") or ""
         meta["line_count"] = len(output.splitlines())
     elif tool == "search_web":
         results_list = result.get("results") or []
@@ -74,7 +107,7 @@ def _result_metadata(result: dict) -> dict:
     return meta
 
 
-def _compact_summary(result: dict) -> str:
+def _compact_summary(result: ToolResult) -> str:
     tool = result.get("tool", "unknown")
     key = _key_args(result)
     status = result.get("status", "unknown")
@@ -321,7 +354,7 @@ class ClassifyResult:
 
 
 async def _classify_and_summarize(
-    pairs: list[dict],
+    pairs: list[ClassifiablePair],
     user_message: str,
     conversation_summary: str | None,
     backend: LLMBackend,
@@ -332,8 +365,11 @@ async def _classify_and_summarize(
     conv_line = f"Conversation so far: {conversation_summary}\n" if conversation_summary else ""
     llm_pairs = [
         {
-            "id": p["message_id"],
-            **{k: v for k, v in p.items() if k not in ("index", "message_id", "tool_call_id")},
+            "id": p.message_id,
+            "tool": p.tool,
+            "args_summary": p.args_summary,
+            "result_metadata": p.result_metadata,
+            "following_thinking": p.following_thinking,
         }
         for p in pairs
     ]
@@ -353,7 +389,7 @@ Tool calls:
     if not parsed:
         logger.warning("compress classify: empty result — defaulting all to drop")
         return ClassifyResult(
-            labels={p["message_id"]: "drop" for p in pairs},
+            labels={p.message_id: "drop" for p in pairs},
             line_summaries={},
             reasonings={},
             conversation_summary=conversation_summary or "",
@@ -564,38 +600,12 @@ async def _summarize_file(result: dict, backend: LLMBackend) -> str:
     return f"[compressed: read_file({repr(path)}) → {line_count} lines, {chunk_count} chunk(s) → ~{est_tokens} tokens — prefer grep_files to extract snippets, read_file as last resort]\n{combined}"
 
 
-async def compress_messages(
-    candidate_messages: list[dict],
-    all_messages: list[dict],
-    user_message: str,
-    conversation_summary: str | None,
-    backend: LLMBackend,
-    protect_last: bool = False,
-    is_mid_run: bool = False,
-) -> tuple[list[dict[str, str]], str]:
-    """
-    Classify and compress a list of tool result messages.
-
-    candidate_messages: tool-role messages to consider for compression.
-      Each dict must have: id, role, content.
-    all_messages: full ordered branch (for following_thinking lookup).
-      Each dict must have: role, content, thinking.
-
-    Labels from classifier:
-      drop           → metadata one-liner stub
-      1-line-summary → LLM-provided one-line description from line_summaries
-      summarize      → LLM paragraph summary (always, regardless of size)
-      keep           → full content, but LLM-summarized if > KEEP_SUMMARIZE_THRESHOLD_CHARS
-
-    protect_last: if True and the last classifiable item gets label drop or 1-line-summary,
-      promote it to summarize so it is never reduced to a stub.
-
-    Returns:
-      compressions: list of {message_id, compressed_summary}
-      new_summary:  updated one-sentence conversation summary
-    """
-    t_total = time.perf_counter()
-
+def _build_classifiable_pairs(
+    candidate_messages: list[TrackedMessage],
+    all_messages: list[TrackedMessage],
+) -> list[ClassifiablePair]:
+    """Build the list of classifiable pairs from candidate tool messages.
+    Filters out non-tool messages and tools in _SKIP_CLASSIFY, and attaches metadata needed by the classifier."""
     pairs = []
     for i, msg in enumerate(candidate_messages):
         if msg.get("role") != "tool":
@@ -604,48 +614,139 @@ async def compress_messages(
             result = json.loads(msg.get("content") or "{}")
         except (json.JSONDecodeError, ValueError):
             continue
-        tool = result.get("tool", "")
+        tool: str = result.get("tool", "")
         if tool in _SKIP_CLASSIFY:
             logger.debug("skipping classify for %s (tool=%s)", msg.get("id"), tool)
             continue
         tool_call_id = result.get("tool_call_id", "")
-        pairs.append({
-            "index": i,
-            "message_id": msg["id"],
-            "tool_call_id": tool_call_id,
-            "tool": tool,
-            "args_summary": _key_args(result),
-            "result_metadata": _result_metadata(result),
-            "following_thinking": _following_thinking(all_messages, tool_call_id),
-        })
+        pairs.append(ClassifiablePair(
+            index=i,
+            message_id=msg["id"],
+            tool_call_id=tool_call_id,
+            tool=tool,
+            args_summary=_key_args(result),
+            result_metadata=_result_metadata(result),
+            following_thinking=_following_thinking(all_messages, tool_call_id),
+        ))
+    return pairs
 
+
+async def _apply_compression_label(
+    label: str,
+    tool: str,
+    result: ToolResult,
+    content_len: int,
+    line_summary: str,
+    reasoning: str,
+    backend: LLMBackend,
+) -> str | None:
+    """Produce a compressed_summary for one tool message given its classifier label.
+    Returns None for keep items that don't exceed any size threshold (full content is preserved)."""
+    if label == "drop":
+        summary = _compact_summary(result)
+        if reasoning != "":
+            summary += f"\nReason: {reasoning}"
+        logger.info("drop → compact: %s", summary)
+        return summary
+
+    if label == "1-line-summary":
+        provided = line_summary.strip()
+        summary = f"{_compact_summary(result)} — {provided}" if provided != "" else _compact_summary(result)
+        if reasoning != "":
+            summary += f"\nReason: {reasoning}"
+        logger.info("1-line-summary: %s", summary)
+        return summary
+
+    if label == "summarize":
+        if tool == "read_file":
+            return await _summarize_file(result, backend)
+        if tool == "search_web":
+            return await _summarize_search_results(result, backend)
+        if tool == "run_shell":
+            return await _summarize_shell_output(result, backend)
+        if tool == "glob_files":
+            return _compact_glob_result(result)
+        if tool == "grep_files":
+            return _compact_grep_result(result)
+        logger.info("summarize → done for %s", tool)
+        return _compact_summary(result)
+
+    if label == "keep":
+        if tool == "read_file":
+            file_content = result.get("file_content") or ""
+            if len(file_content) > KEEP_SUMMARIZE_THRESHOLD_CHARS:
+                logger.info("keep read_file over threshold (%d chars) → summarizing", len(file_content))
+                return await _summarize_file(result, backend)
+        elif tool == "search_web":
+            results_list = result.get("results") or []
+            total_chars = sum(len(r.get("content") or "") for r in results_list)
+            if total_chars > KEEP_SUMMARIZE_THRESHOLD_CHARS:
+                logger.info("keep search_web over threshold (%d chars) → summarizing", total_chars)
+                return await _summarize_search_results(result, backend)
+        elif tool == "run_shell":
+            raw_output = result.get("output") or (result.get("error") or {}).get("message") or ""
+            if len(raw_output) > KEEP_SUMMARIZE_THRESHOLD_CHARS:
+                logger.info("keep run_shell over threshold (%d chars) → summarizing", len(raw_output))
+                return await _summarize_shell_output(result, backend)
+        elif tool == "glob_files":
+            files = result.get("files") or []
+            if len(files) > _GLOB_MAX_FILES:
+                logger.info("keep glob_files over %d files → truncating", _GLOB_MAX_FILES)
+                return _compact_glob_result(result)
+        elif tool == "grep_files":
+            if content_len > _GREP_MAX_CHARS:
+                logger.info("keep grep_files over threshold (%d chars) → truncating", content_len)
+                return _compact_grep_result(result)
+
+    return None
+
+
+async def compress_messages(
+    candidate_messages: list[TrackedMessage],
+    all_messages: list[TrackedMessage],
+    user_message: str,
+    conversation_summary: str | None,
+    backend: LLMBackend,
+    protect_last: bool = False,
+    is_mid_run: bool = False,
+) -> CompressionResult:
+    """Classify and compress a list of tool result messages.
+
+    candidate_messages: tool-role messages to consider for compression.
+    all_messages: full ordered branch (for following_thinking lookup).
+
+    Labels from classifier:
+      drop           → metadata one-liner stub
+      1-line-summary → LLM-provided one-line description
+      summarize      → LLM paragraph summary
+      keep           → full content, LLM-summarized only if over KEEP_SUMMARIZE_THRESHOLD_CHARS
+
+    protect_last: promotes the last classifiable item from drop/1-line-summary to summarize."""
+    t_total = time.perf_counter()
+
+    pairs = _build_classifiable_pairs(candidate_messages, all_messages)
     logger.info(
         "compress_messages: %d candidate messages → %d classifiable pairs",
-        len(candidate_messages),
-        len(pairs),
+        len(candidate_messages), len(pairs),
     )
 
     if not pairs:
-        return [], conversation_summary or ""
+        return CompressionResult(compressions=[], new_summary=conversation_summary or "")
 
-    classify = await _classify_and_summarize(
-        pairs, user_message, conversation_summary, backend, is_mid_run=is_mid_run,
-    )
+
+    classify = await _classify_and_summarize(pairs, user_message, conversation_summary, backend, is_mid_run=is_mid_run)
     labels = classify.labels
-    line_summaries = classify.line_summaries
-    reasonings = classify.reasonings
     new_summary = classify.conversation_summary
 
     if protect_last and pairs:
-        last_key = pairs[-1]["message_id"]
+        last_key = pairs[-1].message_id
         if labels.get(last_key) in ("drop", "1-line-summary"):
             labels[last_key] = "summarize"
 
-    compressions: list[dict[str, str]] = []
-
+    compressions: list[Compression] = []
     for p in pairs:
-        label = labels.get(p["message_id"], "drop")
-        msg = candidate_messages[p["index"]]
+        label = labels.get(p.message_id, "drop")
+        msg = candidate_messages[p.index]
         try:
             result = json.loads(msg.get("content") or "{}")
         except (json.JSONDecodeError, ValueError):
@@ -653,85 +754,24 @@ async def compress_messages(
 
         tool = result.get("tool", "")
         content_len = len(msg.get("content") or "")
-        compressed_summary: str | None = None
+        logger.debug("pair index=%d tool=%s label=%s content_len=%d", p.index, tool, label, content_len)
 
-        logger.debug(
-            "pair index=%d tool=%s label=%s content_len=%d",
-            p["index"], tool, label, content_len,
+        compressed_summary = await _apply_compression_label(
+            label=label,
+            tool=tool,
+            result=result,
+            content_len=content_len,
+            line_summary=classify.line_summaries.get(p.message_id, ""),
+            reasoning=classify.reasonings.get(p.message_id, ""),
+            backend=backend,
         )
-
-        reasoning = reasonings.get(p["message_id"], "").strip()
-
-        if label == "drop":
-            compressed_summary = _compact_summary(result)
-            if reasoning != "":
-                compressed_summary += f"\nReason: {reasoning}"
-            logger.info("drop → compact: %s", compressed_summary)
-
-        elif label == "1-line-summary":
-            provided = line_summaries.get(p["message_id"], "").strip()
-            if provided != "":
-                compressed_summary = f"{_compact_summary(result)} — {provided}"
-            else:
-                compressed_summary = _compact_summary(result)
-            if reasoning != "":
-                compressed_summary += f"\nReason: {reasoning}"
-            logger.info("1-line-summary: %s", compressed_summary)
-
-        elif label == "summarize":
-            if tool == "read_file":
-                compressed_summary = await _summarize_file(result, backend)
-            elif tool == "search_web":
-                compressed_summary = await _summarize_search_results(result, backend)
-            elif tool == "run_shell":
-                compressed_summary = await _summarize_shell_output(result, backend)
-            elif tool == "glob_files":
-                compressed_summary = _compact_glob_result(result)
-            elif tool == "grep_files":
-                compressed_summary = _compact_grep_result(result)
-            else:
-                compressed_summary = _compact_summary(result)
-            logger.info("summarize → done for %s", tool)
-
-        elif label == "keep":
-            # Still shorten if content exceeds the lower keep threshold
-            if tool == "read_file":
-                file_content = result.get("file_content") or ""
-                if len(file_content) > KEEP_SUMMARIZE_THRESHOLD_CHARS:
-                    logger.info("keep read_file over threshold (%d chars) → summarizing", len(file_content))
-                    compressed_summary = await _summarize_file(result, backend)
-            elif tool == "search_web":
-                results_list = result.get("results") or []
-                total_chars = sum(len(r.get("content") or "") for r in results_list)
-                if total_chars > KEEP_SUMMARIZE_THRESHOLD_CHARS:
-                    logger.info("keep search_web over threshold (%d chars) → summarizing", total_chars)
-                    compressed_summary = await _summarize_search_results(result, backend)
-            elif tool == "run_shell":
-                raw_output = (result.get("output") or (result.get("error") or {}).get("message") or "")
-                if len(raw_output) > KEEP_SUMMARIZE_THRESHOLD_CHARS:
-                    logger.info("keep run_shell over threshold (%d chars) → summarizing", len(raw_output))
-                    compressed_summary = await _summarize_shell_output(result, backend)
-            elif tool == "glob_files":
-                files = result.get("files") or []
-                if len(files) > _GLOB_MAX_FILES:
-                    logger.info("keep glob_files over %d files → truncating", _GLOB_MAX_FILES)
-                    compressed_summary = _compact_glob_result(result)
-            elif tool == "grep_files":
-                if content_len > _GREP_MAX_CHARS:
-                    logger.info("keep grep_files over threshold (%d chars) → truncating", content_len)
-                    compressed_summary = _compact_grep_result(result)
-
         if compressed_summary is not None:
-            compressions.append({
-                "message_id": p["message_id"],
-                "compressed_summary": compressed_summary,
-                "compression_label": label,
-            })
+            compressions.append(Compression(
+                message_id=p.message_id,
+                compressed_summary=compressed_summary,
+                compression_label=label,
+            ))
 
     elapsed_total = time.perf_counter() - t_total
-    logger.info(
-        "compress_messages done: %d compressions in %.1fs",
-        len(compressions),
-        elapsed_total,
-    )
-    return compressions, new_summary or conversation_summary or ""
+    logger.info("compress_messages done: %d compressions in %.1fs", len(compressions), elapsed_total)
+    return CompressionResult(compressions=compressions, new_summary=new_summary or conversation_summary or "")

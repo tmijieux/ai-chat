@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import TYPE_CHECKING
 from .base import BaseTool, tool_error
+from tool_result_types import ExploreCodebaseResult
 
 if TYPE_CHECKING:
     from agent.agent import AgentSession
@@ -59,7 +60,7 @@ class ExploreCodebaseTool(BaseTool):
     def label(self, args: dict) -> str:
         return f"EXPLORE {args.get('query', '')[:60]}"
 
-    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
+    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> ExploreCodebaseResult:
         if working_directory is None:
             return tool_error(self.name, "No workspace configured — file tools are disabled.")
 
@@ -106,9 +107,9 @@ class ExploreCodebaseTool(BaseTool):
                 "code": code or "(could not read file)",
             })
 
-        return {
-            "tool": self.name,
-            "status": "success",
-            "summary": summary,
-            "snippets": enriched_snippets,
-        }
+        return ExploreCodebaseResult(
+            tool=self.name,
+            status="success",
+            summary=summary,
+            snippets=enriched_snippets,
+        )

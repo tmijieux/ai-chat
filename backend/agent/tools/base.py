@@ -1,20 +1,23 @@
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
+from tool_result_types import ToolResult
+
 if TYPE_CHECKING:
     from agent.agent import AgentSession
 
 
-def tool_rejected(tool_name: str, reason: str | None = None) -> dict:
+def tool_rejected(tool_name: str, reason: str | None = None) -> ToolResult:
     """Return a result indicating the user declined to run this tool."""
-    result: dict = {"tool": tool_name, "status": "rejected"}
-    if reason:
+    result: ToolResult = {"tool": tool_name, "status": "rejected"}
+    if reason is not None:
         result["reason"] = reason
     return result
 
 
-def tool_error(tool_name: str, error: str, user_message: str | None = None, **extra) -> dict:
-    result: dict = {
+def tool_error(tool_name: str, error: str, user_message: str | None = None, **extra) -> ToolResult:
+    """Return a result indicating the tool failed with an error."""
+    result: ToolResult = {
         "tool": tool_name,
         "status": "error",
         "error": {"message": error},
@@ -59,6 +62,6 @@ class BaseTool(ABC):
         return self.make_validation_text_for_user_confirmation(args)
 
     @abstractmethod
-    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
-        """Return a plain dict (Tool Result Envelope). Framework serializes to JSON."""
+    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> ToolResult:
+        """Return a ToolResult envelope. Framework serializes to JSON and appends tool_call_id."""
         ...

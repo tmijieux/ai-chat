@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import TYPE_CHECKING
 from .base import BaseTool, tool_error
+from tool_result_types import ReadFileRangeResult
 from agent.file_utils import file_in_directory, resolve_workspace_path
 
 if TYPE_CHECKING:
@@ -45,7 +46,7 @@ class ReadFileRangeTool(BaseTool):
     def label(self, args: dict) -> str:
         return f"READ {args.get('file_path', '')} lines {args.get('start_line')}–{args.get('end_line')}"
 
-    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
+    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> ReadFileRangeResult:
         if working_directory is None:
             return tool_error(self.name, "No workspace configured — file tools are disabled.")
 
@@ -85,11 +86,11 @@ class ReadFileRangeTool(BaseTool):
         selected = lines[slice_start:slice_end]
         numbered = "\n".join(f"{slice_start + i + 1}: {line}" for i, line in enumerate(selected))
 
-        return {
-            "tool": self.name,
-            "status": "success",
-            "file_path": file_path,
-            "start_line": start_line,
-            "end_line": slice_end,
-            "content": numbered,
-        }
+        return ReadFileRangeResult(
+            tool=self.name,
+            status="success",
+            file_path=file_path,
+            start_line=start_line,
+            end_line=slice_end,
+            content=numbered,
+        )

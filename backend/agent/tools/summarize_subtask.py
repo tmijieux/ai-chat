@@ -1,4 +1,5 @@
 from .base import BaseTool, tool_error
+from tool_result_types import SummarizeSubtaskResult
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -28,7 +29,7 @@ class SummarizeSubtaskTool(BaseTool):
     def label(self, args: dict) -> str:
         return f"SUMMARIZE for: {args.get('task', '')}"
 
-    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
+    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> SummarizeSubtaskResult:
         from llm import backend
 
         task = args.get("task", "")
@@ -46,6 +47,10 @@ class SummarizeSubtaskTool(BaseTool):
             async for event in backend.stream_completion(messages, [], temperature=0.1):
                 if event["type"] == "content":
                     summary += event["content"]
-            return {"tool": self.name, "status": "success", "summary": summary}
+            return SummarizeSubtaskResult(
+                tool=self.name,
+                status="success",
+                summary=summary,
+            )
         except Exception as e:
             return tool_error(self.name, f"Summarization error: {e}")

@@ -3,6 +3,7 @@ import re
 import uuid
 from pathlib import Path
 from .base import BaseTool, tool_error
+from tool_result_types import GrepFilesResult
 from agent.file_utils import file_in_directory, resolve_workspace_path, load_ignore_spec, is_path_ignored
 from typing import TYPE_CHECKING
 import logging
@@ -61,7 +62,7 @@ class GrepFilesTool(BaseTool):
         glob_suffix = f" [{glob}]" if glob else ""
         return f"GREP '{args.get('pattern', '')}' in {args.get('path', '.')}{glob_suffix}"
 
-    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
+    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> GrepFilesResult:
         if working_directory is None:
             return tool_error(self.name, "No workspace configured — file tools are disabled.")
 
@@ -149,14 +150,14 @@ class GrepFilesTool(BaseTool):
 
         result_id = str(uuid.uuid4())[:8]
         session._search_result_ids.add(result_id)
-        return {
-            "tool": self.name,
-            "pattern": pattern,
-            "path": path,
-            "glob_pattern": glob_pattern,
-            "status": "success",
-            "result_id": result_id,
-            "matches": matches,
-            "total": total_match_count,
-            "truncated": total_match_count >= max_matches,
-        }
+        return GrepFilesResult(
+            tool=self.name,
+            status="success",
+            pattern=pattern,
+            path=path,
+            glob_pattern=glob_pattern,
+            result_id=result_id,
+            matches=matches,
+            total=total_match_count,
+            truncated=total_match_count >= max_matches,
+        )

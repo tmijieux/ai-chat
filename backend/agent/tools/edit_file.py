@@ -4,6 +4,7 @@ import json
 import re as _re
 from pathlib import Path
 from .base import BaseTool, tool_error, tool_rejected
+from tool_result_types import EditFileResult
 from agent.file_utils import file_in_directory, resolve_workspace_path
 from typing import TYPE_CHECKING
 
@@ -48,7 +49,7 @@ class EditFileTool(BaseTool):
     def label(self, args: dict) -> str:
         return f"EDIT {args.get('file_path', '')}"
 
-    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
+    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> EditFileResult:
         if working_directory is None:
             return tool_error(self.name, "No workspace configured — file tools are disabled.")
 
@@ -135,6 +136,10 @@ class EditFileTool(BaseTool):
                 new_content = current_content[:idx] + new_string + current_content[idx + len(old_string):]
             async with aiofiles.open(absolute_path, "w", encoding="utf-8") as f:
                 await f.write(new_content)
-            return {"tool": self.name, "status": "success", "path": str(absolute_path)}
+            return EditFileResult(
+                tool=self.name,
+                status="success",
+                path=str(absolute_path),
+            )
         except Exception as e:
             return tool_error(self.name, f"Unexpected error: {e}")

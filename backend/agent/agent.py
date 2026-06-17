@@ -13,6 +13,8 @@ from .auto_safety import evaluate_tool_safety, _ALWAYS_SAFE_TOOLS, _FILE_WRITE_T
 from .compress import _summarize_shell_output, _summarize_search_results
 from llm import backend
 from llm.base import ToolCallStartEvent, ToolCallArgEvent
+from message_types import LLMMessage
+from tool_result_types import ToolResult
 
 CTX_LIMIT = 2**15
 
@@ -105,7 +107,7 @@ class AgentSession:
         self._pending_user_inputs: dict[str, asyncio.Future] = {}
         self._compression_event: asyncio.Event = asyncio.Event()
         self._compression_conv_id: str | None = None
-        self.refresh_messages_callback: Callable[[str], Awaitable[list[dict]]] | None = None
+        self.apply_db_compressions_callback: Callable[[str], Awaitable[list[LLMMessage]]] | None = None
         self.finish_result: dict | None = None
         self._search_result_ids: set[str] = set()
         self._grepped_files: dict[str, int] = {}  # posix rel_path → count of grep calls that matched it
@@ -261,7 +263,7 @@ def _find_superseded_read_file_indices(pairs: list[tuple[str, str]]) -> list[int
         if role != "tool":
             continue
         try:
-            content = json.loads(content_str or "")
+            content: ToolResult = json.loads(content_str or "")
         except (json.JSONDecodeError, ValueError):
             continue
         if content.get("tool") != "read_file" or content.get("status") != "success":
@@ -270,7 +272,7 @@ def _find_superseded_read_file_indices(pairs: list[tuple[str, str]]) -> list[int
     return [i for indices in path_indices.values() for i in indices[:-1]]
 
 
-def _deduplicate_file_reads(messages: list[dict[str, Any]]) -> None:
+def _deduplicate_file_reads(messages: list[LLMMessage]) -> None:
     pairs = [(m.get("role", ""), m.get("content", "")) for m in messages]
     for i in _find_superseded_read_file_indices(pairs):
         try:
@@ -292,7 +294,7 @@ def _deduplicate_file_reads(messages: list[dict[str, Any]]) -> None:
 
 
 
-def _log_context(messages: list[dict[str, Any]]) -> None:
+def _log_context(messages: list[LLMMessage]) -> None:
     print(f"\n=== CONTEXT ({len(messages)} messages) ===")
     for m in messages:
         role = m.get("role", "?")
@@ -309,7 +311,7 @@ def _log_context(messages: list[dict[str, Any]]) -> None:
             print(f"  [user] {content[:200].replace('\n', ' ')}")
         elif role == "tool":
             try:
-                j = json.loads(content)
+                j: ToolResult = json.loads(content)
                 tool = j.get("tool", "?")
                 status = j.get("status", "?")
                 path = j.get("path", "")
@@ -344,11 +346,11 @@ def _log_context(messages: list[dict[str, Any]]) -> None:
 
 
 async def _track_tokens(
-    messages: list[dict[str, Any]],
+    messages: list[LLMMessage],
     tools: list[dict],
     session: "AgentSession",
     label: str,
-    prepared: list[dict] | None = None,
+    prepared: list[LLMMessage] | None = None,
 ) -> int:
     """Count context tokens, log the result, and emit ctx_update to the frontend."""
     if prepared is None:
@@ -383,7 +385,7 @@ def _parse_tool_calls(tool_calls_acc: dict[int, dict], message: dict) -> list[di
 
 async def _execute_tool_calls(
     tool_calls: list[dict],
-    messages: list[dict[str, Any]],
+    messages: list[LLMMessage],
     session: AgentSession,
     tools: list[dict],
     working_directory: str | None,
@@ -429,8 +431,8 @@ async def _execute_tool_calls(
             await session.emit({"type": "tool_result", "tool_id": call_id, "tool_name": tool_name, "content": tool_output, "log_message": log_msg, "ctx_tokens": ctx_after})
             await session.emit({"type": "compressing", "ctx_tokens": ctx_after, "ctx_limit": CTX_LIMIT})
             conv_id = await session.await_compression()
-            if conv_id is not None and session.refresh_messages_callback is not None:
-                refreshed = await session.refresh_messages_callback(conv_id)
+            if conv_id is not None and session.apply_db_compressions_callback is not None:
+                refreshed = await session.apply_db_compressions_callback(conv_id)
                 messages[:] = refreshed
             ctx_after_compress = await _track_tokens(messages, tools, session, "context after compression")
             if ctx_after_compress > CTX_LIMIT:
@@ -444,12 +446,12 @@ async def _execute_tool_calls(
 
 
 async def chat_with_tools(
-    messages: list[dict[str, Any]],
+    messages: list[LLMMessage],
     session: AgentSession,
     tools: list[dict],
     working_directory: str | None,
     extra_tools: dict | None = None,
-) -> tuple[bool,bool]:
+) -> tuple[bool, bool]:
     """
     One iteration of the LLM call + tool execution loop.
     Returns True when the agent is done (no tool calls were made).
@@ -546,7 +548,7 @@ async def chat_with_tools(
 
 async def run_agent(
     session: AgentSession,
-    messages: list[dict[str, Any]],
+    messages: list[LLMMessage],
     tools: list[dict],
     working_directory: str | None,
     extra_tools: dict | None = None,

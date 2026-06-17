@@ -10,6 +10,7 @@ import logging
 import json
 import threading
 from dataclasses import dataclass
+from typing import Any
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, Depends, HTTPException, Response, WebSocket, WebSocketDisconnect, UploadFile, Form
@@ -21,7 +22,9 @@ from agent.agent import AgentSession, run_agent, _find_superseded_read_file_indi
 from agent.pipeline import PipelineOrchestrator
 from agent.workflow_loader import load_workflow
 from agent.custom_workflow import CustomWorkflowOrchestrator
-from agent.compress import compress_messages
+from agent.compress import compress_messages, CompressionResult, Compression
+from message_types import LLMMessage, TrackedMessage
+from tool_result_types import ToolResult
 from agent.tools import TOOL_REGISTRY, PLAN_MODE_TOOLS, CONVERSATIONAL_TOOLS, get_ollama_tool_list
 from llm import backend
 import whisper_pipeline
@@ -134,9 +137,9 @@ async def _build_inference_context(
     branch: list[db.Message],
     prompt_id: str | None,
     sess: AsyncSession,
-) -> list[dict]:
+) -> list[LLMMessage]:
     """Build the message list sent to the LLM. Prepends system prompt from file if prompt_id (slug) given."""
-    messages: list[dict] = []
+    messages: list[LLMMessage] = []
     if prompt_id is not None:
         prompt_path = _PROMPTS_DIR / f"{prompt_id}.yaml"
         if prompt_path.exists():
@@ -161,7 +164,7 @@ async def _build_inference_context(
         if m.context_excluded:
             if m.compressed_summary:
                 try:
-                    original = json.loads(m.content or "{}")
+                    original: ToolResult = json.loads(m.content or "{}")
                 except (json.JSONDecodeError, ValueError):
                     original = {}
                 messages.append({"role": "tool", "content": json.dumps({
@@ -1038,26 +1041,26 @@ async def compress_conversation(
     all_dicts = [{"id": m.id, "role": m.role, "content": m.content, "thinking": m.thinking} for m in branch]
     candidate_dicts = [{"id": m.id, "role": m.role, "content": m.content, "thinking": m.thinking} for m in candidates]
 
-    compressions, new_summary = await compress_messages(
+    compression_result = await compress_messages(
         candidate_dicts, all_dicts, user_message, None, backend,
         protect_last=protect_last, is_mid_run=is_mid_run,
     )
 
-    for c in compressions:
-        msg = next((m for m in candidates if m.id == c["message_id"]), None)
+    for c in compression_result.compressions:
+        msg = next((m for m in candidates if m.id == c.message_id), None)
         if msg is not None:
             msg.context_excluded = True
             msg.exclusion_reason = "compressed"
-            msg.compressed_summary = c["compressed_summary"]
-            msg.compression_label = c.get("compression_label")
+            msg.compressed_summary = c.compressed_summary
+            msg.compression_label = c.compression_label
             try:
-                original = json.loads(msg.content or "{}")
+                original: ToolResult = json.loads(msg.content or "{}")
             except (json.JSONDecodeError, ValueError):
                 original = {}
             compressed_content = json.dumps({
                 "tool": original.get("tool", "tool"),
                 "status": "compressed",
-                "summary": c["compressed_summary"],
+                "summary": c.compressed_summary,
                 "tool_call_id": original.get("tool_call_id", ""),
             })
             msg.compressed_token_count = await backend.count_text_tokens(compressed_content)
@@ -1072,7 +1075,7 @@ async def compress_conversation(
     tools_list = get_ollama_tool_list(list(TOOL_REGISTRY.values()))
     ctx_tokens = await backend.count_tokens(backend.prepare_messages(compressed_dicts), tools_list)
 
-    return {"compressions": compressions, "new_summary": new_summary, "ctx_tokens": ctx_tokens}
+    return {"compressions": compression_result.compressions, "new_summary": compression_result.new_summary, "ctx_tokens": ctx_tokens}
 
 
 # ---------------------------------------------------------------------------
@@ -1225,41 +1228,41 @@ async def correct_stt(req: ld.CorrectRequest):
 
 
 @dataclass
-class _ConvBranch:
+class ConvBranch:
     """Result of loading a conversation and its active message branch from the database."""
     conv: db.Conversation | None
     branch: list[db.Message]
 
 
 @dataclass
-class _ToolSet:
+class ToolSet:
     """Tool list and optional injected extras assembled for a given conversation mode."""
-    tools: list
-    extra_tools: dict | None
+    tools: list[dict]
+    extra_tools: dict[str, Any] | None
 
 
 async def _load_conversation_branch(
     sess: AsyncSession, conversation_id: str | None
-) -> _ConvBranch:
+) -> ConvBranch:
     """Load the conversation and its active message branch from the database.
     Deduplicates superseded file reads in place before returning."""
     if conversation_id is None:
-        return _ConvBranch(conv=None, branch=[])
+        return ConvBranch(conv=None, branch=[])
     conv = (await sess.execute(
         select(db.Conversation).where(db.Conversation.id == conversation_id)
     )).scalars().first()
     if conv is None:
-        return _ConvBranch(conv=None, branch=[])
+        return ConvBranch(conv=None, branch=[])
     all_msgs = list((await sess.execute(
         select(db.Message).where(db.Message.conversation_id == conversation_id)
     )).scalars().all())
     branch = _build_active_branch_path(all_msgs, conv.active_message_id)
     _deduplicate_branch_file_reads(branch)
     await sess.flush()
-    return _ConvBranch(conv=conv, branch=branch)
+    return ConvBranch(conv=conv, branch=branch)
 
 
-def _build_tool_set(mode: str, active_tool_names: list[str]) -> _ToolSet:
+def _build_tool_set(mode: str, active_tool_names: list[str]) -> ToolSet:
     """Assemble the tool list for the given conversation mode.
     Plan strips destructive tools and injects propose_plan + ask_user_question.
     Standard injects ask_user_question only. Auto/Yolo use the raw tool list."""
@@ -1269,20 +1272,20 @@ def _build_tool_set(mode: str, active_tool_names: list[str]) -> _ToolSet:
         injected = {**CONVERSATIONAL_TOOLS, **PLAN_MODE_TOOLS}
         for injected_tool in injected.values():
             tools.append({"type": "function", "function": injected_tool.to_ollama_schema()})
-        return _ToolSet(tools=tools, extra_tools=injected)
+        return ToolSet(tools=tools, extra_tools=injected)
     elif mode == "standard":
         tools = get_ollama_tool_list(active_tool_names)
         for injected_tool in CONVERSATIONAL_TOOLS.values():
             tools.append({"type": "function", "function": injected_tool.to_ollama_schema()})
-        return _ToolSet(tools=tools, extra_tools=dict(CONVERSATIONAL_TOOLS))
+        return ToolSet(tools=tools, extra_tools=dict(CONVERSATIONAL_TOOLS))
     else:
         tools = get_ollama_tool_list(active_tool_names)
-        return _ToolSet(tools=tools, extra_tools=None)
+        return ToolSet(tools=tools, extra_tools=None)
 
 
-async def _refresh_messages(
-    sess: AsyncSession, messages: list[dict], conv_id: str
-) -> list[dict]:
+async def _apply_db_compressions(
+    sess: AsyncSession, messages: list[LLMMessage], conv_id: str
+) -> list[LLMMessage]:
     """Patch in-memory tool messages with their compressed summaries after mid-run compression.
     Matches by tool_call_id so assistant messages (not persisted to DB) are preserved."""
     compressed_rows = (await sess.execute(
@@ -1295,7 +1298,7 @@ async def _refresh_messages(
     call_id_to_summary: dict[str, str] = {}
     for m in compressed_rows:
         try:
-            content = json.loads(m.content or "{}")
+            content: ToolResult = json.loads(m.content or "{}")
             call_id = content.get("tool_call_id")
             if call_id is not None and m.compressed_summary is not None:
                 call_id_to_summary[call_id] = m.compressed_summary
@@ -1306,7 +1309,7 @@ async def _refresh_messages(
         if msg.get("role") != "tool":
             continue
         try:
-            content_dict = json.loads(msg.get("content", "{}"))
+            content_dict: ToolResult = json.loads(msg.get("content", "{}"))
         except (json.JSONDecodeError, ValueError):
             continue
         call_id = content_dict.get("tool_call_id")
@@ -1326,9 +1329,9 @@ def _create_agent_task(
     workflow_name: str | None,
     working_directory: str | None,
     user_message: str,
-    messages: list[dict],
-    tools: list,
-    extra_tools: dict | None,
+    messages: list[LLMMessage],
+    tools: list[dict],
+    extra_tools: dict[str, Any] | None,
 ) -> asyncio.Task:
     """Dispatch either a named workflow or the standard agentic loop as an asyncio task."""
     if workflow_name is not None:
@@ -1388,7 +1391,7 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
         session.working_directory = settings.working_directory
         session.last_user_message = user_message
         if conversation_id is not None:
-            session.refresh_messages_callback = functools.partial(_refresh_messages, sess, messages)
+            session.apply_db_compressions_callback = functools.partial(_apply_db_compressions, sess, messages)
 
         agent_task = _create_agent_task(
             session, workflow_name, settings.working_directory,

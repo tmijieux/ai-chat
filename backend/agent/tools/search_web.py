@@ -1,5 +1,6 @@
 import asyncio
 from .base import BaseTool, tool_error
+from tool_result_types import SearchWebResult
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -25,7 +26,7 @@ class SearchWebTool(BaseTool):
     def make_validation_text_for_user_confirmation(self, args: dict) -> str:
         return f"SEARCH: {args.get('query', '')}"
 
-    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
+    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> SearchWebResult:
         from ddgs import DDGS
         import trafilatura
 
@@ -57,12 +58,12 @@ class SearchWebTool(BaseTool):
 
         try:
             results = await asyncio.to_thread(_do_search)
-            return {
-                "tool": self.name,
-                "status": "success",
-                "query": query,
-                "results": results,
-                "total_results": len(results),
-            }
+            return SearchWebResult(
+                tool=self.name,
+                status="success",
+                query=query,
+                results=results,
+                total_results=len(results),
+            )
         except Exception as e:
             return tool_error(self.name, f"Search error: {e}")

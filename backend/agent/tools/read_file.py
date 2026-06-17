@@ -1,6 +1,7 @@
 import aiofiles
 from pathlib import Path
 from .base import BaseTool, tool_error
+from tool_result_types import ReadFileResult
 from agent.file_utils import file_in_directory, resolve_workspace_path
 from typing import TYPE_CHECKING
 
@@ -40,7 +41,7 @@ class ReadFileTool(BaseTool):
     def label(self, args: dict) -> str:
         return f"READ {args.get('file_path', '')}"
 
-    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
+    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> ReadFileResult:
         if working_directory is None:
             return tool_error(self.name, "No workspace configured — file tools are disabled.")
 
@@ -87,6 +88,11 @@ class ReadFileTool(BaseTool):
             if limit and limit > 0:
                 lines = file_content.splitlines()
                 file_content = "\n".join(lines[-limit:])
-            return {"tool": self.name, "status": "success", "path": path, "file_content": file_content}
+            return ReadFileResult(
+                tool=self.name,
+                status="success",
+                path=path,
+                file_content=file_content,
+            )
         except Exception as e:
             return tool_error(self.name, f"Error reading file: {e}", path=path)

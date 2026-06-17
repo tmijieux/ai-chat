@@ -2,6 +2,7 @@ import asyncio
 import uuid
 from pathlib import Path
 from .base import BaseTool, tool_error
+from tool_result_types import GlobFilesResult
 from agent.file_utils import file_in_directory, resolve_workspace_path, load_ignore_spec, is_path_ignored
 from typing import TYPE_CHECKING
 
@@ -36,7 +37,7 @@ class GlobFilesTool(BaseTool):
     def label(self, args: dict) -> str:
         return f"GLOB {args.get('pattern', '')} in {args.get('path', '.')}"
 
-    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
+    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> GlobFilesResult:
         if working_directory is None:
             return tool_error(self.name, "No workspace configured — file tools are disabled.")
 
@@ -61,14 +62,14 @@ class GlobFilesTool(BaseTool):
             )
             result_id = str(uuid.uuid4())[:8]
             session._search_result_ids.add(result_id)
-            return {
-                "tool": self.name,
-                "pattern": pattern,
-                "path": path,
-                "status": "success",
-                "result_id": result_id,
-                "files": files,
-                "file_count": len(files),
-            }
+            return GlobFilesResult(
+                tool=self.name,
+                status="success",
+                pattern=pattern,
+                path=path,
+                result_id=result_id,
+                files=files,
+                file_count=len(files),
+            )
         except Exception as e:
             return tool_error(self.name, f"Error during glob: {e}")

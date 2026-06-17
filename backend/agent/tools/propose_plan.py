@@ -1,5 +1,6 @@
 import uuid
 from .base import BaseTool
+from tool_result_types import ProposePlanResult
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -31,7 +32,7 @@ class ProposePlanTool(BaseTool):
         plan = args.get("plan", "")
         return f"PLAN: {plan[:60]}..." if len(plan) > 60 else f"PLAN: {plan}"
 
-    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
+    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> ProposePlanResult:
         """Emit a plan_proposal event and wait for the user to accept or send feedback."""
         plan = args.get("plan", "")
         plan_id = str(uuid.uuid4())
@@ -42,10 +43,18 @@ class ProposePlanTool(BaseTool):
             chosen_mode = payload.get("mode", "standard")
             comment = payload.get("comment") or ""
             await session.emit({"type": "mode_changed", "mode": chosen_mode})
-            result: dict = {"tool": self.name, "status": "accepted", "chosen_mode": chosen_mode}
+            result = ProposePlanResult(
+                tool=self.name,
+                status="accepted",
+                chosen_mode=chosen_mode,
+            )
             if comment != "":
                 result["comment"] = comment
             return result
         else:
             feedback = payload.get("feedback") or ""
-            return {"tool": self.name, "status": "feedback", "feedback": feedback}
+            return ProposePlanResult(
+                tool=self.name,
+                status="feedback",
+                feedback=feedback,
+            )

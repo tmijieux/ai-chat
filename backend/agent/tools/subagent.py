@@ -1,5 +1,6 @@
 import asyncio
 from .base import BaseTool, tool_error
+from tool_result_types import SubagentResult
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -36,7 +37,7 @@ class SubAgentTool(BaseTool):
     def label(self, args: dict) -> str:
         return f"SUBAGENT: {args.get('task', '')[:80]}"
 
-    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
+    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> SubagentResult:
         from agent.agent import AgentSession as _AgentSession, run_agent
         from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
 
@@ -73,4 +74,8 @@ class SubAgentTool(BaseTool):
         if not final_content:
             return tool_error(self.name, "Sub-agent finished without producing a response")
 
-        return {"tool": self.name, "status": "success", "result": final_content}
+        return SubagentResult(
+            tool=self.name,
+            status="success",
+            result=final_content,
+        )
