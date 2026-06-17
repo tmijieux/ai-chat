@@ -298,6 +298,8 @@ def _find_superseded_read_file_indices(pairs: list[tuple[str, str]]) -> list[int
 
 
 def _deduplicate_file_reads(messages: list[LLMMessage]) -> None:
+    """modifies messages to remove file read that were superseded"""
+
     pairs = [(m.get("role", ""), m.get("content", "")) for m in messages]
     for i in _find_superseded_read_file_indices(pairs):
         try:
@@ -454,7 +456,14 @@ async def _execute_tool_calls(
 
         if ctx_after > CTX_LIMIT:
             # Emit tool_result first so frontend saves it to DB before compressing.
-            await session.emit({"type": "tool_result", "tool_id": call_id, "tool_name": tool_name, "content": tool_output, "log_message": log_msg, "ctx_tokens": ctx_after})
+            await session.emit({
+                "type": "tool_result",
+                "tool_id": call_id,
+                "tool_name": tool_name,
+                "content": tool_output,
+                "log_message": log_msg,
+                "ctx_tokens": ctx_after,
+            })
             await session.emit({"type": "compressing", "ctx_tokens": ctx_after, "ctx_limit": CTX_LIMIT})
             conv_id = await session.await_compression()
             if conv_id is not None and session.apply_db_compressions_callback is not None:
@@ -462,11 +471,21 @@ async def _execute_tool_calls(
                 messages[:] = refreshed
             ctx_after_compress = await _track_tokens(messages, tools, session, "context after compression")
             if ctx_after_compress > CTX_LIMIT:
-                await session.emit({"type": "error", "message": f"Context still exceeds limit after compression: {ctx_after_compress}/{CTX_LIMIT} tokens"})
+                await session.emit({
+                   "type": "error",
+                   "message": f"Context still exceeds limit after compression: {ctx_after_compress}/{CTX_LIMIT} tokens"
+                })
                 return True
             continue
 
-        await session.emit({"type": "tool_result", "tool_id": call_id, "tool_name": tool_name, "content": tool_output, "log_message": log_msg, "ctx_tokens": ctx_after})
+        await session.emit({
+            "type": "tool_result",
+            "tool_id": call_id,
+            "tool_name": tool_name,
+            "content": tool_output,
+            "log_message": log_msg,
+            "ctx_tokens": ctx_after,
+        })
 
     return False
 
@@ -525,6 +544,7 @@ async def _append_assistant_message(
     session: AgentSession,
 ) -> bool:
     """Append the assistant turn to messages. Returns True if a message was appended."""
+
     content = message.get("content") or ""
     thinking = message.get("thinking") or ""
 
@@ -535,7 +555,11 @@ async def _append_assistant_message(
         messages.append(message)
         appended = True
     elif len(thinking) > 0 or len(tool_calls) > 0:
-        thinking_for_context = _strip_tool_call_blocks(thinking) if tool_calls and tool_calls[0].get("_recovered") else thinking
+        thinking_for_context = (
+            _strip_tool_call_blocks(thinking)
+            if tool_calls and tool_calls[0].get("_recovered")
+            else thinking
+        )
         messages.append({
             "role": "assistant",
             "content": f"<think>{thinking_for_context}</think>",
@@ -572,8 +596,8 @@ async def chat_with_tools(
 
     if generation.done_reason == "length":
         await session.emit({
-            "type": "error", 
-            "message": f"Context limit reached during generation: {prompt_eval_count + generation.eval_count}/{CTX_LIMIT} tokens. The response was cut off."
+            "type": "error",
+            "message": f"Context limit reached during generation: {prompt_eval_count + generation.eval_count}/{CTX_LIMIT} tokens. The response was cut off.",
         })
         return TurnResult(is_done=True, finished_without_response=False)
 
@@ -600,7 +624,10 @@ async def chat_with_tools(
     })
 
     _deduplicate_file_reads(messages)
-    return TurnResult(is_done=len(tool_calls) == 0, finished_without_response=finished_without_response)
+    return TurnResult(
+      is_done=len(tool_calls) == 0,
+      finished_without_response=finished_without_response
+    )
 
 
 async def run_agent(

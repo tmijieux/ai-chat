@@ -169,7 +169,7 @@ async def _build_inference_context(
                 except (json.JSONDecodeError, ValueError, TypeError):
                     original = {"tool": "tool", "status": "unknown"}
                 messages.append({
-                    "role": "tool", 
+                    "role": "tool",
                     "content": json.dumps({
                         "tool": original.get("tool", "tool"),
                         "status": "compressed",
@@ -1114,12 +1114,12 @@ async def compress_conversation(
     candidate_dicts: list[TrackedMessage] = [{"id": m.id, "role": m.role, "content": m.content, "thinking": m.thinking} for m in candidates]
 
     compression_result = await compress_messages(
-        candidate_dicts, 
-        all_dicts, 
-        user_message, 
-        conversation_summary=None, 
+        candidate_dicts,
+        all_dicts,
+        user_message,
+        conversation_summary=None,
         backend=backend,
-        protect_last=protect_last, 
+        protect_last=protect_last,
         is_mid_run=is_mid_run,
     )
 
@@ -1153,7 +1153,7 @@ async def compress_conversation(
     ctx_tokens = await backend.count_tokens(backend.prepare_messages(compressed_dicts), tools_list)
 
     return {
-      "compressions": compression_result.compressions, 
+      "compressions": compression_result.compressions,
       "new_summary": compression_result.new_summary,
       "ctx_tokens": ctx_tokens,
     }
@@ -1466,8 +1466,8 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
         conv_branch = await _load_conversation_branch(sess, conversation_id)
         settings = _parse_conv_settings(conv_branch.conv) if conv_branch.conv is not None else ld.ConversationSettings()
         active_tool_names = (
-            settings.active_tool_names 
-            if (conv_branch.conv is not None and conv_branch.conv.settings is not None) 
+            settings.active_tool_names
+            if (conv_branch.conv is not None and conv_branch.conv.settings is not None)
             else list(TOOL_REGISTRY.keys())
         )
         tool_set = _build_tool_set(settings.mode, active_tool_names)
