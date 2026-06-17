@@ -151,7 +151,7 @@ class AgentSession:
             )
             if verdict == "safe":
                 if self.mode == "auto":
-                    await self.emit({"type": "tool_auto_approved", "tool_id": tool_id})
+                    await self.emit({"type": "tool_auto_approved", "tool_id": tool_id, "reason": reason})
                 return True, None
             # Dangerous: auto shows confirmation UI; yolo rejects and lets LLM handle it
             if self.mode == "yolo":

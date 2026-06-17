@@ -622,7 +622,7 @@ export class ChatService {
         ])
       } else if (event.type === 'tool_auto_approved') {
         this._messages.update((msgs) =>
-          msgs.map((m) => m.kind === 'tool_evaluating' && m.tool_id === event.tool_id ? { ...m, verdict: 'safe' as const } : m),
+          msgs.map((m) => m.kind === 'tool_evaluating' && m.tool_id === event.tool_id ? { ...m, verdict: 'safe' as const, reason: event.reason } : m),
         )
       } else if (event.type === 'tool_result') {
         this._callingTool.set(null)

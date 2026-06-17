@@ -10,7 +10,7 @@
     @if (verdict() === 'safe') { Auto-approved } @else if (verdict() === 'dangerous') { Flagged as dangerous } @else { Evaluating safety of }
     @if (verdict() === undefined) { <strong>{{ toolName() }}</strong>… }
   </span>
-  @if (verdict() === 'dangerous' && reason()) {
+  @if (verdict() !== undefined && reason()) {
     <span class="eval-badge__reason-icon" [title]="reason()">ⓘ</span>
   }
 </div>
