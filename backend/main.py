@@ -1080,6 +1080,9 @@ async def compress_conversation(
 _PLAN_EXCLUDED_TOOLS = frozenset({"write_file", "edit_file", "run_shell"})
 
 
+_VALID_MODES = frozenset({"standard", "auto", "plan", "yolo"})
+
+
 async def _ws_receive_messages(websocket: WebSocket, session: AgentSession, agent_task: asyncio.Task) -> None:
     try:
         while True:
@@ -1093,6 +1096,11 @@ async def _ws_receive_messages(websocket: WebSocket, session: AgentSession, agen
                 session.resolve_user_input(data["question_id"], data["reply"])
             elif data.get("type") == "compression_done":
                 session.resume_after_compression(data.get("conversation_id", ""))
+            elif data.get("type") == "set_mode":
+                new_mode = data.get("mode")
+                if new_mode in _VALID_MODES:
+                    session.mode = new_mode
+                    logger.info("session mode updated mid-run to '%s'", new_mode)
             elif data.get("type") == "abort":
                 agent_task.cancel()
                 return

@@ -83,6 +83,12 @@ export class AgentService {
     }
   }
 
+  setMode(mode: string): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: 'set_mode', mode }))
+    }
+  }
+
   abort(): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: 'abort' }))

@@ -375,7 +375,11 @@ export class ChatService {
   // -------------------------------------------------------------------------
 
   updateConversationSettings(settings: ConversationSettings): Observable<unknown> {
+    const previousMode = this._conversationSettings()?.mode
     this._conversationSettings.set(settings)
+    if (this.agentSvc.running() && settings.mode !== previousMode) {
+      this.agentSvc.setMode(settings.mode)
+    }
     const id = this._conversationId()
     if (!id) {
       if (settings.working_directory !== null) {
