@@ -93,7 +93,7 @@ class RunShellTool(BaseTool):
 
             stdout, stderr = await proc.communicate()
             if proc.returncode == 0:
-                return {"tool": self.name, "status": "success", "command": command, "output": stdout.decode()}
+                return {"tool": self.name, "status": "success", "command": command, "output": stdout.decode(), "error": stderr.decode()}
             else:
                 return {
                     "tool": self.name,
