@@ -57,8 +57,6 @@ The confirmation card disappears from the message list once the agent run is com
 ## Chat Auto-scroll
 The message list auto-scrolls to the bottom when new content arrives, but only if the user was already at the bottom. Scrolling up manually disables auto-scroll — no jumps while reading. Scrolling back to within 50 px of the bottom re-enables it.
 
-**Not yet implemented.**
-
 ## Vision / Image Input
 Allow pasting or dragging images into the chat input area. Multiple images per message are supported.
 
@@ -148,9 +146,9 @@ Stateful models use one-token-at-a-time decode with internal KV cache (`_decode_
 **Streaming partials:** `VoiceDictationService` collects 200ms chunks via `MediaRecorder`. After every 3 new chunks (≈600ms), `_maybeFirePartial()` sends the full accumulated blob to `POST /api/transcribe` and updates `partialText` signal. On release: the last in-flight partial (or a new call if none) becomes the final, then chains to `/api/correct`. Frontend effect in `ChatInputComponent` writes `_startPrefix + partial` to `currentInput` on every partial update.
 
 
-**Mic button states (not yet implemented):** Four states driven by signals — idle (gray, `title="Hold to dictate (or hold Alt)"`), idle with textarea selection (gray + replace-hint indicator), recording (red pulse), transcribing (yellow pulse). Selection state tracked via `selectionchange` event on the textarea.
+**Mic button states:** Three states implemented — idle (gray), recording (red pulse), transcribing (yellow pulse). Fourth state — idle with textarea selection showing a replace-hint indicator — is **not yet implemented** (requires `selectionchange` tracking on the textarea).
 
-**30-second limit (not yet implemented):** Whisper's mel spectrogram window is fixed at 30s — audio beyond that is silently truncated. The mic button shows a progress indicator as recording approaches 30s and auto-stops at 28s with a visual warning.
+**30-second limit (not yet implemented):** Whisper's mel spectrogram window is fixed at 30s — audio beyond that is silently truncated. The mic button should show a progress indicator as recording approaches 30s and auto-stop at 28s with a visual warning.
 
 ## Backend Readiness
 
@@ -213,9 +211,7 @@ Framework-level compression pipeline that runs after each completed agent run. T
 **Not yet implemented:**
 - **Active file tracking**: the file currently being written/edited should never be summarized in Stage 2. Currently all `read_file` results are eligible.
 - **Conversation title update**: after the first agent run, generate a short goal-framed title from the first user message. Only update once; preserve manual renames.
-- **Oversized output summarization** for non-`read_file` tools (e.g. `run_shell` with large stdout).
-
-Never compressed by Stage 2: `write_file`, `edit_file`, `run_shell` results; thinking messages.
+Never compressed by Stage 2: `write_file`, `edit_file` results; thinking messages. `run_shell` and `search_web` are summarized in Stage 2 and also pre-shrunk at output time in `_maybe_preshrink_tool_output` (`agent.py`) when output exceeds `_LARGE_OUTPUT_CHARS`.
 
 ## Status Bar
 Always-visible top bar in the chat area. Shows token info: `Context Tokens: N / 32,768 (%)`. The value is the last measured token count — always from a real API call, never estimated. On conversation load, the count is refreshed immediately via `GET /api/conversations/{id}/ctx-tokens` so it reflects the current context even without a new inference. Shows 0 on a new chat. When the conversation mode is not Standard, a colored badge showing the active mode name (`PLAN`, `AUTO`, `YOLO`) is displayed next to the token count. The ⚙ button opens the [[Conversation Settings Drawer]]. A 🔍 button logs a per-message token breakdown to the backend console for debugging.
@@ -223,9 +219,10 @@ Always-visible top bar in the chat area. Shows token info: `Context Tokens: N / 
 ## Conversation Turn
 The unit of visual grouping in the chat. One top-level bubble per speaker per iteration:
 - **User bubble** — user message.
-- **Assistant bubble** — groups everything the assistant produced in one iteration: collapsed thinking block (expands while streaming, collapses when done) + response text + tool confirmation card + simplified tool call summary (tool name only, no full args). All nested inside one bubble so the "who is speaking" boundary is visually clear.
-- **Tool result bubble** — the tool's response; separate because it is a different speaker.
-This grouping is the **target design** (not yet fully implemented). Current state has thinking as a separate flat message from tools and assitant response.
+- **Assistant bubble** — groups everything the assistant produced in one iteration: collapsed thinking block (expands while streaming, collapses when done) + response text + tool confirmation card + simplified tool call summary (tool name only, no full args). All nested inside one `grouped-bubble` container.
+- **Tool result bubble** — the tool's response; separate because it is a different speaker. Grouped visually via `toolResultStart` flag.
+
+`turnStart` and `toolResultStart` flags are computed in `messagesWithMeta` in `chat.component.ts` and drive separator rendering.
 
 ## Sidebar
 Left-side panel, always visible. Contains:
@@ -239,7 +236,7 @@ Conversation title is set to the first 20 characters of the first user message. 
 
 ## Conversation Settings Drawer
 Right-side panel opened via the ⚙ button in the status bar. Per-conversation configuration that persists to DB. Sections:
-1. **Mode** — segmented control selecting the active [[Conversation Mode]] for this conversation. **Not yet implemented in the drawer** (mode is currently switchable only via the [[Slash Command Palette]]).
+1. **Mode** — segmented control selecting the active [[Conversation Mode]] for this conversation. ✅ Implemented in the drawer.
 2. **Workspace** — text input + Browse (custom `DirectoryPickerComponent`) + clear. See [[Workspace]].
 3. **System prompt** — dropdown of all `SystemPromptTemplate`s; selecting one sets `active_prompt_id`. Shows token count per option.
 4. **Tools** — per-tool checkboxes with token cost and "requires confirmation" badge; select-all / deselect-all toggle; total token cost of all enabled tools shown at top of section.
@@ -293,14 +290,14 @@ Reference file compression (Stage 2 of the [[Post-Iteration Sub-Agent]]) is impl
 Per-conversation setting that controls how the agent runs. Persisted in `ConversationSettings.mode`. Switchable via the [[Slash Command Palette]] or the [[Conversation Settings Drawer]].
 
 - **Standard** — default. Classic agentic loop; all tool confirmations shown to the user as usual.
-- **Plan** — no file-editing or shell tools available. The agent uses `propose_plan` to surface a structured plan for the user to review, and `ask_user_question` to request clarification. Plan cards have three accept buttons that simultaneously accept the plan and switch to a chosen execution mode (Standard, Auto, or YOLO). **Not yet implemented beyond mode persistence.**
-- **Auto** — tool confirmations are auto-evaluated: read-only tools and file edits inside the workspace are always safe; other tools (shell, web search, out-of-workspace writes) are evaluated by an LLM sub-agent and auto-approved if deemed safe, or escalated to the user if deemed dangerous. **Not yet implemented beyond mode persistence.**
-- **YOLO** — autonomous loop. Before executing, the agent produces verification scripts saved to `.yolo_verify/` in the workspace. The main task then runs with broad auto-approval, looping automatically until the agent calls `finish_yolo`. The framework then runs the verification scripts directly (not via LLM). If any fail, the agent is re-prompted with failure details. When max retries are exhausted, a recovery UI offers the user a choice to give a hint and continue, or bail to another mode. **Not yet implemented beyond mode persistence.**
+- **Plan** — no file-editing or shell tools available (`_PLAN_EXCLUDED_TOOLS`). The agent uses `propose_plan` to surface a structured plan for the user to review, and `ask_user_question` to request clarification. Plan cards have three accept buttons that simultaneously accept the plan and switch to a chosen execution mode (Standard, Auto, or YOLO). ✅ Implemented.
+- **Auto** — tool confirmations are auto-evaluated: read-only tools and file edits inside the workspace are always safe; other tools (shell, web search, out-of-workspace writes) are evaluated by an LLM sub-agent (`auto_safety.py`) and auto-approved if deemed safe, or escalated to the user if deemed dangerous. A `tool_evaluating` spinner appears while the LLM evaluates. ✅ Implemented.
+- **YOLO** — autonomous loop with broad auto-approval. The safety evaluator is used to classify tools but the agent does not pause for confirmation — rejections are returned as tool errors so the agent can adapt. Verification script generation (`.yolo_verify/`), `finish_yolo` tool, and post-execution test running are **not yet implemented**.
 
 ## Slash Command Palette
 Triggered by typing `/` at the start of the chat input. Opens a floating popup above the textarea with two sections:
 
-- **Modes** — `/standard`, `/auto`, `/plan`, `/yolo`. Selecting one switches the conversation mode persistently.
+- **Modes** — `/standard`, `/auto`, `/plan`, `/yolo`. Selecting one switches the conversation mode persistently. Mode can also be changed from the [[Conversation Settings Drawer]].
 - **Workflows** — one entry per workflow definition in `backend/workflows/`. Selecting one invokes that workflow for the current message only (one-shot, does not change the base mode).
 
 Keyboard: ArrowUp/Down to navigate, Enter to select, Tab to autocomplete the command name with a trailing space (so the user can continue typing a prompt argument), Escape to dismiss and clear the `/` from the input.
@@ -314,4 +311,4 @@ Workflows can include a `prepare_verification` stage that generates executable v
 
 A `create-workflow` workflow (self-hosted) helps users design and write new workflow YAML files.
 
-**Partially implemented:** YAML files are discovered and listed via `GET /api/workflows` and appear in the [[Slash Command Palette]]. Full orchestration engine not yet implemented.
+**Implementation status:** YAML files are discovered and listed via `GET /api/workflows` and appear in the [[Slash Command Palette]]. Stage execution is handled by `PipelineOrchestrator` (`agent/pipeline.py`) and `CustomWorkflowOrchestrator` (`agent/custom_workflow.py`). The `prepare_verification` stage and post-execution script running are not yet fully wired.
