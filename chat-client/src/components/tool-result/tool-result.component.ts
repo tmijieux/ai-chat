@@ -103,7 +103,7 @@ export class ToolResultComponent {
       const ok = r.status === 'success'
       const exitCode = ok ? 0 : (r.exit_code ?? 1)
       const icon = ok ? '✓ exit 0' : `✗ exit ${exitCode}`
-      return { icon, stdout: r.output ?? '', stderr: r.error ?? '' }
+      return { icon, stdout: r.output ?? '', stderr: r.stderr ?? '' }
     } catch {
       return null
     }
