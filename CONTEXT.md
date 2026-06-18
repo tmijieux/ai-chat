@@ -118,12 +118,6 @@ Deletes only one message, re-parenting its direct children to the deleted messag
 ## Tool Result Envelope
 The structured JSON dict that every tool's `execute()` returns. Contains at minimum `tool` (tool name) and any relevant paths or identifiers (e.g. `path` for file tools). Serialized to JSON by the framework layer, never by the tool itself. Allows deterministic parsing of tool-role messages by the context manager.
 
-## Active File
-**Not yet implemented.** Concept for the planned [[Post-Iteration Sub-Agent]] pipeline: the file most recently written to via `write_file` or `edit_file` in the current agent session, identified by parsing tool-role message history. Will always be kept at full content in context — never compressed.
-
-## Reference File
-**Not yet implemented.** Concept for the planned [[Post-Iteration Sub-Agent]] pipeline: a file read into context but not actively being modified, identified by parsing tool-role message history. Will be compressed to API surface (signatures, types, exports) by the post-iteration sub-agent when context pressure requires it.
-
 ## Voice Dictation
 
 Hold-to-record mic button in `ChatInputComponent`. Three visual states: gray (idle), red pulsing (recording), yellow pulsing (transcribing). Hold mousedown → record; release anywhere (mouseup on document) → stop. Alt held 500ms in textarea → same. Partial transcripts appear in the textarea while speaking; final result replaces them on release.
@@ -146,7 +140,7 @@ Stateful models use one-token-at-a-time decode with internal KV cache (`_decode_
 **Streaming partials:** `VoiceDictationService` collects 200ms chunks via `MediaRecorder`. After every 3 new chunks (≈600ms), `_maybeFirePartial()` sends the full accumulated blob to `POST /api/transcribe` and updates `partialText` signal. On release: the last in-flight partial (or a new call if none) becomes the final, then chains to `/api/correct`. Frontend effect in `ChatInputComponent` writes `_startPrefix + partial` to `currentInput` on every partial update.
 
 
-**Mic button states:** Three states implemented — idle (gray), recording (red pulse), transcribing (yellow pulse). Fourth state — idle with textarea selection showing a replace-hint indicator — is **not yet implemented** (requires `selectionchange` tracking on the textarea).
+**Mic button states:** Three states:  — idle (gray), recording (red pulse), transcribing (yellow pulse). Fourth state — idle with textarea selection showing a replace-hint indicator — is **not yet implemented** (requires `selectionchange` tracking on the textarea).
 
 **30-second limit (not yet implemented):** Whisper's mel spectrogram window is fixed at 30s — audio beyond that is silently truncated. The mic button should show a progress indicator as recording approaches 30s and auto-stop at 28s with a visual warning.
 
@@ -163,7 +157,7 @@ Startup API calls (system prompts, agent tools) retry up to 10 times with 2s del
 
 ## Date Injection
 
-The current date (`YYYY-MM-DD` UTC) is prepended to the active system prompt content at inference time in `_build_inference_context`. This ensures the agent always knows the current date without it being baked into any prompt template.
+The current date (`YYYY-MM-DD` UTC) is prepended to the active system prompt content at inference time. This ensures the agent always knows the current date without it being baked into any prompt template.
 
 ## Known Bugs
 - **`is_default` uniqueness not enforced**: Setting a new prompt as default does not clear the previous default. Backend must clear the flag atomically.
@@ -181,13 +175,13 @@ A structured synthetic message (`role = "context_summary"`) inserted into the co
 
 **Folding:** when compression runs again, the live working memory's `working_memory_json` is passed as context to the new write call alongside a fresh digest of messages since the last working memory. The old working memory message is then excluded.
 
-**Feature flag:** `WORKING_MEMORY_ENABLED = False` in `backend/agent/compress.py`. Stage 1/2 (tool compression) runs independently of this flag. Flip to `True` to activate Stage 3.
+**Disabled by default:** Stage 3 is built and wired but not yet active. Stage 1/2 run independently and are unaffected. See ADR-0008.
 
 **UI:** rendered as a purple dashed card labeled "Working Memory" in the message list. Superseded (excluded) working memory messages show a `[superseded]` badge and reduced opacity.
 
 ## Strategic Direction: Context Management
 
-Context management is a primary improvement area. Stage 1/2 compresses individual tool-role messages. Stage 3 (working memory, feature-flagged) squashes entire exploration sequences into structured summaries — see [[Working Memory]].
+Context management is a primary improvement area. Stage 1/2 compresses individual tool-role messages. Stage 3 (working memory, disabled by default pending validation) squashes entire exploration sequences into structured summaries — see [[Working Memory]].
 
 ## Open Questions
 - **`summarize_subtask` tool**: whether the agent calls it autonomously or it is framework-triggered is TBD.
@@ -200,18 +194,17 @@ Framework-level compression pipeline that runs after each completed agent run. T
 
 **Stage 2 — Reference file summarization** ✅: for each `keep` `read_file` result exceeding ~2 000 chars, an LLM call produces an API surface summary (module purpose, function signatures, key constants, imports). Stored as `compressed_summary` with a `[compressed: N lines → ~M tokens]` header. Target: 400–800 tokens. `search_web` results with total body content exceeding ~2 000 chars are also LLM-summarized in Stage 2, producing a concise summary of the search findings.
 
-**Stage 3 — Working memory synthesis** (feature-flagged, `WORKING_MEMORY_ENABLED = False`): after Stages 1/2, the `_apply_working_memory` helper in `main.py` collects all messages before the last user message into a digest (`build_digest` in `compress.py`), calls `write_working_memory` for one LLM pass that produces structured JSON, inserts the `context_summary` message into the tree, and marks all covered messages excluded. See [[Working Memory]] for full design.
+**Stage 3 — Working memory synthesis** (disabled by default pending validation): after Stages 1/2, all messages before the last user message are collected into a token-bounded digest, a single LLM pass produces structured JSON, and the result is inserted into the tree as a `context_summary` message with all covered messages marked excluded. See [[Working Memory]] and ADR-0008.
 
 **Compression triggers:**
 - Post-run: frontend calls `POST /api/conversations/{id}/compress` after every agent run.
 - Mid-run overflow ✅: when `ctx_after > CTX_LIMIT` after a tool result, the agent emits `tool_result` first, then `compressing`. The frontend compresses and sends `compression_done`. If still over limit after compression, emits an error.
 - Length stop ✅: when `done_reason == "length"` (LLM output cut off mid-generation), the agent emits `compressing` and awaits compression, then retries the iteration. The `TurnResult.length_compressed` flag prevents infinite retry if compression doesn't help.
-- Iteration threshold (feature-flagged): `run_agent` counts iterations and emits `compressing` when `iteration_count >= WORKING_MEMORY_ITERATION_THRESHOLD` (default 10), then resets the counter.
+- Iteration threshold (disabled by default pending validation): the agent counts iterations within a run and triggers compression when the threshold (default 10) is reached, then resets the counter.
 
 **Not yet implemented:**
-- **Active file tracking**: the file currently being written/edited should never be summarized in Stage 2. Currently all `read_file` results are eligible.
 - **Conversation title update**: after the first agent run, generate a short goal-framed title from the first user message. Only update once; preserve manual renames.
-Never compressed by Stage 2: `write_file`, `edit_file` results; thinking messages. `run_shell` and `search_web` are summarized in Stage 2 and also pre-shrunk at output time in `_maybe_preshrink_tool_output` (`agent.py`) when output exceeds `_LARGE_OUTPUT_CHARS`.
+Never compressed by Stage 2: `write_file`, `edit_file` results; thinking messages. `run_shell` and `search_web` results are summarized by Stage 2 and also pre-shrunk immediately at output time when they exceed a size threshold.
 
 ## Status Bar
 Always-visible top bar in the chat area. Shows token info: `Context Tokens: N / 32,768 (%)`. The value is the last measured token count — always from a real API call, never estimated. On conversation load, the count is refreshed immediately via `GET /api/conversations/{id}/ctx-tokens` so it reflects the current context even without a new inference. Shows 0 on a new chat. When the conversation mode is not Standard, a colored badge showing the active mode name (`PLAN`, `AUTO`, `YOLO`) is displayed next to the token count. The ⚙ button opens the [[Conversation Settings Drawer]]. A 🔍 button logs a per-message token breakdown to the backend console for debugging.
@@ -222,7 +215,7 @@ The unit of visual grouping in the chat. One top-level bubble per speaker per it
 - **Assistant bubble** — groups everything the assistant produced in one iteration: collapsed thinking block (expands while streaming, collapses when done) + response text + tool confirmation card + simplified tool call summary (tool name only, no full args). All nested inside one `grouped-bubble` container.
 - **Tool result bubble** — the tool's response; separate because it is a different speaker. Grouped visually via `toolResultStart` flag.
 
-`turnStart` and `toolResultStart` flags are computed in `messagesWithMeta` in `chat.component.ts` and drive separator rendering.
+Turn and tool-result group boundaries are computed from the message list and drive separator rendering.
 
 ## Sidebar
 Left-side panel, always visible. Contains:
@@ -278,11 +271,18 @@ Five places in the UI where token information is shown — all intentional, all 
 5. **Settings page / prompt list** — each prompt option label includes `(~N tok)`.
 
 ## Context Eviction
-Framework-level pruning of tool-role messages before the next main iteration. Current implementation: duplicate file reads — evict older reads of the same path, keep only the most recent (fully implemented: backend deduplication + frontend "excluded from context" label).
 
-Evicted messages remain visible in the UI with an "excluded from context" label. They retain their stored `token_count` so the user can see what was saved. The status bar and downstream deltas reflect the post-eviction reality from the next API call.
+A message can be excluded from the LLM inference context while remaining visible in the UI. The `context_excluded` flag marks it as excluded; `exclusion_reason` records why. Excluded messages are never deleted.
 
-Reference file compression (Stage 2 of the [[Post-Iteration Sub-Agent]]) is implemented — large `read_file` results are summarized and stored as `compressed_summary`. Not yet implemented: **oversized output summarization** for non-`read_file` tools (e.g. `run_shell` with large stdout).
+Excluded messages appear in the UI with a dimmed "excluded from context" label. When a compressed summary exists it is shown instead of the full content. Their stored token count lets the user see what was saved. The status bar always reflects the post-eviction token count from the next real API call.
+
+Three mechanisms produce exclusions:
+
+1. **Duplicate file-read deduplication** — older reads of the same file path are evicted before each inference, keeping only the most recent. Happens automatically with no user action.
+
+2. **Tool compression (Stage 1/2)** — the compress endpoint classifies and summarizes tool-role messages. The original content is preserved in the DB; a compact summary is injected into the LLM context instead. See [[Post-Iteration Sub-Agent]].
+
+3. **Working memory (Stage 3)** — all messages before the last user message are excluded and replaced by a single structured summary message. Built but disabled by default pending validation. See [[Working Memory]].
 
 **Interaction with token counting — known hard problem:** after an eviction or manual deletion, downstream messages have stale stored cumulatives. Design intent: re-estimate their displayed cumulative by walking forward through still-in-context messages and summing their stored deltas (each delta was computed from two actual API measurements at generation time and remains valid). The status bar always shows the last real API measurement regardless. Exact re-estimation logic is still being refined.
 

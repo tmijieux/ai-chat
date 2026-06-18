@@ -6,6 +6,16 @@ The  app in this workspace is an AI agent. Do not be surprised if I speak about 
 
 Always read `CONTEXT.md` at the start of every conversation. It contains the app mission, domain glossary, feature intent, known bugs, and planned changes. Features documented there must not be removed or broken when implementing other features.
 
+CONTEXT.md is for storing features description of features we want to keep in app and a glossary of term and concepts.
+When implementing features ensure that you are not removing features mentionned in CONTEXT.md  
+
+Do not put implementation details in CONTEXT.md. 
+Do not mention code snippets/method name about implementation in CONTEXT.md.
+
+Implementation decisions belong in ADRs in `docs/adr/`. Use the `grill-with-docs` skill conventions: only create an ADR when the decision is hard to reverse, surprising without context, and the result of a real trade-off. Number sequentially (`0008-slug.md`). See existing ADRs in `docs/adr/` for examples.
+
+Ensure that this documentations stays up to date after updating implementations or implementing new features.
+
 We have a todo.md file for ideas / future plans. Check it or write to it, if and when the user mentions it.
 
 ## Off-limits
@@ -43,8 +53,6 @@ Generally prefer factorizing in new components rather than <ng-template>
 because it helps with keeping component small (in code-behind as well)
 It also help the reading comprehension when small component encapsulate 
 small non-leaky well-named abstraction, then you dont have to read them.
-
-
 
 # python tools
 When invoking python always use the venv in backend/venv (windows path style venv/Scripts/python)
