@@ -4,7 +4,7 @@
 
 The  app in this workspace is an AI agent. Do not be surprised if I speak about tools/agent stuff up front and read `CONTEXT.md`. I always speaking about my app and not about Claude unless I mention your name. If I did not explicitely talked about you by mentioning your name, then Starts investigating the code about the mentionned problem.
 
-Always read `CONTEXT.md` at the start of every conversation. It contains the app mission, domain glossary, feature intent, known bugs, and planned changes. Features documented there must not be removed or broken when implementing other features.
+*ALWAYS* read `CONTEXT.md` at the start of every conversation. It contains the app mission, domain glossary, feature intent, known bugs, and planned changes. Features documented there must not be removed or broken when implementing other features.
 
 CONTEXT.md is for storing features description of features we want to keep in app and a glossary of term and concepts.
 When implementing features ensure that you are not removing features mentionned in CONTEXT.md  
@@ -17,6 +17,9 @@ Implementation decisions belong in ADRs in `docs/adr/`. Use the `grill-with-docs
 Ensure that this documentations stays up to date after updating implementations or implementing new features.
 
 We have a todo.md file for ideas / future plans. Check it or write to it, if and when the user mentions it.
+
+CLAUDE.md is **NOT** for implementation details about the app. 
+CLAUDE.md is for global Claude behavior directives, workflows that claude should follow.
 
 ## Off-limits
 
@@ -41,10 +44,11 @@ After successfully implementing an approved plan, create a git commit immediatel
 - **No boolean lazy evaluation for fallbacks** — never `x or default` to substitute a missing value; use explicit `if x is None` checks instead.
 - **Docstrings on every function** — document both purpose and important details about implementation. One sentence is enough for simple helpers.
 - **Dataclasses for complex return types** — never return a plain tuple with 3+ values or multiple same-typed values (e.g. two `dict[str, str]`). Define a `@dataclass` with named fields instead.
+- **always use braces.** Do not put if on a single line: ensure new line after opening brace.
 
 
 # CSS
-Maximize utilisation of functionnal style("tailwind-like")  everywhere css is required  (see styles.scss)
+Maximize utilisation of functionnal style("tailwind-like")  everywhere css is required (see styles.scss).
 The aim is to understand layout and look just by looking at the template most of the time.
 Avoid BEM style as if you disgust it utterly.
 

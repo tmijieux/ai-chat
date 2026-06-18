@@ -303,8 +303,8 @@ Keyboard: ArrowUp/Down to navigate, Enter to select, Tab to autocomplete the com
 
 The command token is parsed and consumed at send time — the remaining text after the command is the message body. Works whether the user selected from the palette or typed the full `/command prompt` manually.
 
-## Workflow
-A named, user-defined multi-stage agent execution flow stored as a YAML file in `backend/workflows/`. Workflows are the structured, ordered-stage variant of automation — distinct from simple skills (prompt injection). Each stage specifies a prompt, a set of tools, a finish tool, and iteration limits. The agent in each stage can only use the tools listed for that stage and must call the stage's finish tool to advance.
+## Workflow / skills
+A named, user-defined multi-stage agent execution flow stored as a YAML file in `backend/workflows/`. Workflows are the structured, ordered-stage variant of automation — distinct from simple skills (prompt injection) but they are able to implement skills in Claude sense(they are a superset of skills). Each stage specifies a prompt, a set of tools, a finish tool, and iteration limits. The agent in each stage can only use the tools listed for that stage and must call the stage's finish tool to advance.
 
 Workflows can include a `prepare_verification` stage that generates executable verification scripts. After an execution stage, the framework runs those scripts directly (no LLM involvement) and uses the results to determine pass/fail.
 
