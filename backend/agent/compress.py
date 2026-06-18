@@ -775,3 +775,173 @@ async def compress_messages(
     elapsed_total = time.perf_counter() - t_total
     logger.info("compress_messages done: %d compressions in %.1fs", len(compressions), elapsed_total)
     return CompressionResult(compressions=compressions, new_summary=new_summary or conversation_summary or "")
+
+
+# ---------------------------------------------------------------------------
+# Working memory
+# ---------------------------------------------------------------------------
+
+WORKING_MEMORY_ENABLED = False
+DIGEST_TOKEN_BUDGET = 6000
+_DIGEST_PIECE_MAX_CHARS = 1600    # ~400 tokens cap per piece before budget truncation
+_THINKING_EXCERPT_MAX_CHARS = 300
+_ASSISTANT_RESPONSE_MAX_CHARS = 800
+WORKING_MEMORY_ITERATION_THRESHOLD = 10
+
+
+@dataclass
+class MessageSnapshot:
+    """Lightweight snapshot of a DB message passed to build_digest — no DB dependency in compress.py."""
+    role: str
+    content: str | None
+    thinking: str | None
+    compressed_summary: str | None
+
+
+@dataclass
+class DigestEntry:
+    """Slim representation of one message for the working memory writer."""
+    role: str
+    content: str
+
+
+@dataclass
+class WorkingMemoryResult:
+    """Output of write_working_memory."""
+    working_memory_json: dict
+    rendered: str
+
+
+def build_digest(snapshots: list[MessageSnapshot]) -> list[DigestEntry]:
+    """Build a token-bounded digest from message snapshots for the working memory writer.
+
+    Tool messages use compressed_summary when available. Assistant messages get a thinking excerpt
+    and a response excerpt. Budget is enforced via proportional truncation (4 chars ≈ 1 token).
+    """
+    entries: list[DigestEntry] = []
+
+    for snapshot in snapshots:
+        if snapshot.role == "user":
+            content = (snapshot.content or "")[:_DIGEST_PIECE_MAX_CHARS]
+            if content != "":
+                entries.append(DigestEntry(role="user", content=content))
+
+        elif snapshot.role == "assistant":
+            thinking_excerpt = (snapshot.thinking or "")[:_THINKING_EXCERPT_MAX_CHARS]
+            response = snapshot.content or ""
+            # Messages whose content is only a <think> wrapper drive tool calls — not useful in the digest
+            if response.startswith("<think>"):
+                response = ""
+            response = response[:_ASSISTANT_RESPONSE_MAX_CHARS]
+            parts: list[str] = []
+            if thinking_excerpt != "":
+                parts.append(f"[thinking] {thinking_excerpt}")
+            if response != "":
+                parts.append(response)
+            if parts:
+                entries.append(DigestEntry(role="assistant", content="\n".join(parts)))
+
+        elif snapshot.role == "tool":
+            if snapshot.compressed_summary is not None and snapshot.compressed_summary != "":
+                content = snapshot.compressed_summary[:_DIGEST_PIECE_MAX_CHARS]
+            else:
+                try:
+                    result = json.loads(snapshot.content or "{}")
+                except (json.JSONDecodeError, ValueError):
+                    result = {}
+                content = _compact_summary(result)
+            if content != "":
+                entries.append(DigestEntry(role="tool", content=content))
+
+    # Budget enforcement via proportional scaling when over-budget
+    budget_chars = DIGEST_TOKEN_BUDGET * 4
+    total_chars = sum(len(e.content) for e in entries)
+    if total_chars > budget_chars:
+        scale = budget_chars / total_chars
+        for entry in entries:
+            entry.content = entry.content[:max(1, int(len(entry.content) * scale))]
+
+    return entries
+
+
+_WORKING_MEMORY_WRITER_SYSTEM = """\
+You are writing a structured working memory summary for an AI agent session.
+Your output replaces a long sequence of messages, preserving only what matters for continuing the work.
+
+Output a JSON object with these optional keys (include only those that apply):
+  goal        — what the user is currently trying to accomplish (string)
+  learned     — key facts discovered: file locations, architecture, patterns (list of strings)
+  done        — completed actions: files edited, tasks finished (list of strings)
+  rejected    — approaches tried and abandoned, with reason (list of strings)
+  dead_ends   — paths explored that were not useful (list of strings)
+
+Rules:
+- Be concise and factual. No prose.
+- Preserve specific file paths, function names, line numbers.
+- If a previous working memory is provided, incorporate its information and update it.
+- Output valid JSON only, no markdown fences or surrounding text.\
+"""
+
+
+def _render_working_memory(working_memory_json: dict) -> str:
+    """Render working memory JSON to the markdown string injected into the LLM context."""
+    lines = ["[Context: agent working memory]", ""]
+
+    if "goal" in working_memory_json:
+        lines.append(f"**Goal:** {working_memory_json['goal']}")
+
+    for key, label in [("learned", "Learned"), ("done", "Done"), ("rejected", "Rejected"), ("dead_ends", "Dead ends")]:
+        value = working_memory_json.get(key)
+        if value is None:
+            continue
+        if isinstance(value, list):
+            lines.append(f"**{label}:**")
+            for item in value:
+                lines.append(f"- {item}")
+        else:
+            lines.append(f"**{label}:** {value}")
+
+    return "\n".join(lines)
+
+
+async def write_working_memory(
+    previous_working_memory_json: dict | None,
+    digest: list[DigestEntry],
+    backend: LLMBackend,
+) -> WorkingMemoryResult:
+    """Write or update the working memory from a digest of recent agent activity.
+
+    previous_working_memory_json folds prior context forward; pass None for the first run.
+    Returns new structured JSON and its rendered markdown form.
+    """
+    parts: list[str] = []
+
+    if previous_working_memory_json is not None:
+        parts.append(
+            "Previous working memory:\n"
+            + json.dumps(previous_working_memory_json, ensure_ascii=False, indent=2)
+        )
+
+    parts.append("Recent activity (in order):")
+    for entry in digest:
+        parts.append(f"[{entry.role}] {entry.content}")
+
+    prompt = "\n\n".join(parts)
+    raw = await _llm_complete(prompt, backend, system=_WORKING_MEMORY_WRITER_SYSTEM)
+
+    try:
+        working_memory_json = json.loads(_extract_json(raw))
+    except (json.JSONDecodeError, ValueError):
+        logger.warning(
+            "write_working_memory: failed to parse JSON response — using empty dict. raw=%r",
+            raw[:300],
+        )
+        working_memory_json = {}
+
+    rendered = _render_working_memory(working_memory_json)
+    logger.info(
+        "write_working_memory: %d chars rendered, sections=%s",
+        len(rendered),
+        list(working_memory_json.keys()),
+    )
+    return WorkingMemoryResult(working_memory_json=working_memory_json, rendered=rendered)

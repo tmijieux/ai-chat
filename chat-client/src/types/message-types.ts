@@ -1,4 +1,4 @@
-export type Role = 'user' | 'assistant' | 'system' | 'tool'
+export type Role = 'user' | 'assistant' | 'system' | 'tool' | 'context_summary'
 
 export type AppStatus = { llm: boolean; whisper: boolean }
 
@@ -275,6 +275,12 @@ export type DisplayMessage =
   | { kind: 'plan_proposal'; id: string; plan_id: string; plan: string; resolved: boolean; resolution?: string }
   | { kind: 'agent_question'; id: string; question_id: string; question: string; options?: string[]; resolved: boolean }
   | { kind: 'error'; id: string; message: string }
+  | ({
+      kind: 'context_summary'
+      id: string
+      content: string
+      context_excluded?: boolean
+    } & SiblingMeta)
 
 /**
  * DisplayMessage enriched with token contribution metadata and sibling navigation.

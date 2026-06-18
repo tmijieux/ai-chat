@@ -400,6 +400,22 @@
             </div>
           }
 
+          <!-- Working memory summary -->
+          @if (msg.kind === 'context_summary') {
+            <div class="max-w-3xl w-full min-w-0">
+              <div class="rounded-xl overflow-hidden shadow-sm border border-dashed border-purple-400 bg-purple-50 p-relative" [class.opacity-40]="msg.context_excluded">
+                <div class="flex items-center gap-2 px-3 py-2 border-b border-purple-200 text-purple-700 text-xs font-medium select-none">
+                  <span>⬡</span>
+                  <span>Working Memory</span>
+                  @if (msg.context_excluded) { <span class="text-purple-400">[superseded]</span> }
+                </div>
+                <div class="px-3 py-2 prose-bubble text-sm">
+                  <markdown [data]="msg.content" />
+                </div>
+              </div>
+            </div>
+          }
+
           <!-- Tool result (collapsible) -->
           @if (msg.kind === 'tool_result') {
             <app-tool-result [msg]="msg" />
@@ -407,7 +423,7 @@
         </div>
 
         <!-- Action buttons (revealed on .msg-row hover, hidden for tool_confirm and error) -->
-        @if (msg.kind !== 'tool_confirm' && msg.kind !== 'tool_evaluating' && msg.kind !== 'error' && msg.kind !== 'plan_proposal' && msg.kind !== 'agent_question') {
+        @if (msg.kind !== 'tool_confirm' && msg.kind !== 'tool_evaluating' && msg.kind !== 'error' && msg.kind !== 'plan_proposal' && msg.kind !== 'agent_question' && msg.kind !== 'context_summary') {
           <div class="msg-row-actions">
             @if (msg.kind === 'user' && editingMessageId() !== msg.id) {
               <button class="msg-action-btn" title="Edit" (click)="startEdit(msg.id, msg.content)">

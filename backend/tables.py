@@ -36,6 +36,8 @@ class Message(Base):
     tool_calls = column(Text, nullable=True)
     # True when the agent stopped without producing a response (thinking-only, no content/tool calls)
     is_degenerate = column(Boolean, nullable=False, default=False)
+    # JSON blob for working memory messages (role=context_summary): structured sections persisted for folding
+    working_memory_json = column(Text, nullable=True)
 
 
 class Image(Base):

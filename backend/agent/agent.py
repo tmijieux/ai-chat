@@ -11,7 +11,7 @@ from typing import Any, Callable, Awaitable, Sequence, TypedDict
 
 from .tools import TOOL_REGISTRY, get_ollama_tool_list
 from .auto_safety import evaluate_tool_safety, _ALWAYS_SAFE_TOOLS, _FILE_WRITE_TOOLS, is_path_inside_workspace
-from .compress import _summarize_shell_output, _summarize_search_results
+from .compress import _summarize_shell_output, _summarize_search_results, WORKING_MEMORY_ENABLED, WORKING_MEMORY_ITERATION_THRESHOLD
 from llm import backend
 from llm.base import ToolCallStartEvent, ToolCallArgEvent
 from message_types import LLMMessage, ToolCall, ToolCallFunction
@@ -44,6 +44,7 @@ class TurnResult:
     """Outcome of one chat_with_tools iteration."""
     is_done: bool
     finished_without_response: bool
+    length_compressed: bool = False
 
 
 
@@ -582,6 +583,7 @@ async def chat_with_tools(
     tools: list[dict],
     working_directory: str | None,
     extra_tools: dict | None = None,
+    allow_length_compression: bool = True,
 ) -> TurnResult:
     """One iteration of the LLM call + tool execution loop."""
     prepared = backend.prepare_messages(messages)
@@ -595,11 +597,23 @@ async def chat_with_tools(
     print(f"[tokens] prompt_tokens={prompt_eval_count} completion_tokens={generation.eval_count} finish_reason={generation.done_reason}")
 
     if generation.done_reason == "length":
+        if not allow_length_compression:
+            await session.emit({
+                "type": "error",
+                "message": f"Context limit reached during generation: {prompt_eval_count + generation.eval_count}/{CTX_LIMIT} tokens. The response was cut off.",
+            })
+            return TurnResult(is_done=True, finished_without_response=False)
         await session.emit({
-            "type": "error",
-            "message": f"Context limit reached during generation: {prompt_eval_count + generation.eval_count}/{CTX_LIMIT} tokens. The response was cut off.",
+            "type": "compressing",
+            "ctx_tokens": prompt_eval_count + generation.eval_count,
+            "ctx_limit": CTX_LIMIT,
+            "reason": "length",
         })
-        return TurnResult(is_done=True, finished_without_response=False)
+        conv_id = await session.await_compression()
+        if conv_id is not None and session.apply_db_compressions_callback is not None:
+            refreshed = await session.apply_db_compressions_callback(conv_id)
+            messages[:] = refreshed
+        return TurnResult(is_done=False, finished_without_response=False, length_compressed=True)
 
     tool_calls = _parse_tool_calls(generation.tool_calls_acc, generation.message)
 
@@ -640,8 +654,23 @@ async def run_agent(
     """Run the full agent loop until done, emitting events via session."""
     try:
         turn = TurnResult(is_done=False, finished_without_response=False)
+        iteration_count = 0
         while not turn.is_done:
-            turn = await chat_with_tools(messages, session, tools, working_directory, extra_tools)
+            if (
+                WORKING_MEMORY_ENABLED
+                and not turn.length_compressed
+                and iteration_count >= WORKING_MEMORY_ITERATION_THRESHOLD
+            ):
+                logger.info("run_agent: iteration threshold reached (%d) — triggering compression", iteration_count)
+                await session.emit({"type": "compressing", "ctx_tokens": 0, "ctx_limit": CTX_LIMIT, "reason": "iteration_threshold"})
+                conv_id = await session.await_compression()
+                if conv_id is not None and session.apply_db_compressions_callback is not None:
+                    refreshed = await session.apply_db_compressions_callback(conv_id)
+                    messages[:] = refreshed
+                iteration_count = 0
+            allow_length_compression = not turn.length_compressed
+            turn = await chat_with_tools(messages, session, tools, working_directory, extra_tools, allow_length_compression=allow_length_compression)
+            iteration_count += 1
         await session.emit({"type": "done", "finished_without_response": turn.finished_without_response})
     except asyncio.CancelledError:
         await session.emit({"type": "error", "message": "Agent was aborted"})

@@ -990,6 +990,14 @@ export class ChatService {
           context_excluded: m.context_excluded,
           ...siblingMeta,
         })
+      } else if (m.role === 'context_summary') {
+        result.push({
+          kind: 'context_summary',
+          id: m.id,
+          content: m.content,
+          context_excluded: m.context_excluded,
+          ...siblingMeta,
+        })
       }
     }
     return result

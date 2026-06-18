@@ -22,7 +22,13 @@ from agent.agent import AgentSession, run_agent, _find_superseded_read_file_indi
 from agent.pipeline import PipelineOrchestrator
 from agent.workflow_loader import load_workflow
 from agent.custom_workflow import CustomWorkflowOrchestrator
-from agent.compress import compress_messages
+from agent.compress import (
+    compress_messages,
+    build_digest,
+    write_working_memory,
+    MessageSnapshot,
+    WORKING_MEMORY_ENABLED,
+)
 from message_types import LLMMessage, TrackedMessage
 from tool_result_types import ToolResult
 from agent.tools import TOOL_REGISTRY, PLAN_MODE_TOOLS, CONVERSATIONAL_TOOLS, get_ollama_tool_list
@@ -179,6 +185,10 @@ async def _build_inference_context(
                 })
             continue
         if m.content is None or m.content.strip() == "":
+            continue
+        if m.role == "context_summary":
+            # Working memory message — render as a user message so the LLM understands it
+            messages.append({"role": "user", "content": m.content})
             continue
         imgs = images_by_msg.get(m.id, [])
         if imgs:
@@ -1087,6 +1097,102 @@ async def get_conversation_ctx_tokens(
     return {"ctx_tokens": ctx_tokens}
 
 
+async def _apply_working_memory(
+    conv: db.Conversation,
+    branch: list[db.Message],
+    conversation_id: str,
+    sess: AsyncSession,
+) -> None:
+    """Synthesize or update the working memory message for a conversation.
+
+    Covers all messages before the last user message with a structured summary.
+    Inserts the working memory message into the tree between the last covered message
+    and the first live message (the last user message). Marks covered messages excluded.
+    """
+    # Live window starts at the last user message — everything before it is covered
+    last_user_index: int | None = None
+    for i, m in enumerate(branch):
+        if m.role == "user":
+            last_user_index = i
+
+    if last_user_index is None or last_user_index == 0:
+        logger.debug("_apply_working_memory: nothing to cover (no preceding messages)")
+        return
+
+    first_live = branch[last_user_index]
+
+    # Find the previous working memory message (non-excluded context_summary on the branch)
+    previous_working_memory: db.Message | None = None
+    digest_start_index = 0
+    for i, m in enumerate(branch):
+        if m.role == "context_summary" and not m.context_excluded:
+            previous_working_memory = m
+            digest_start_index = i + 1
+            break
+
+    # Messages to digest = between previous working memory (exclusive) and live window (exclusive)
+    messages_to_cover = branch[digest_start_index:last_user_index]
+    if not messages_to_cover:
+        logger.debug("_apply_working_memory: no new messages to cover since last working memory")
+        return
+
+    snapshots = [
+        MessageSnapshot(
+            role=m.role,
+            content=m.content,
+            thinking=m.thinking,
+            compressed_summary=m.compressed_summary,
+        )
+        for m in messages_to_cover
+    ]
+    digest = build_digest(snapshots)
+
+    previous_json: dict | None = None
+    if previous_working_memory is not None:
+        try:
+            previous_json = json.loads(previous_working_memory.working_memory_json or "{}")
+        except (json.JSONDecodeError, ValueError):
+            previous_json = None
+
+    working_memory_result = await write_working_memory(previous_json, digest, backend)
+
+    # Insert new working memory message into the tree
+    last_covered = branch[last_user_index - 1]
+    new_working_memory_message = db.Message(
+        id=str(uuid.uuid4()),
+        conversation_id=conversation_id,
+        parent_id=last_covered.id,
+        role="context_summary",
+        content=working_memory_result.rendered,
+        working_memory_json=json.dumps(working_memory_result.working_memory_json, ensure_ascii=False),
+        created_at=_now(),
+        context_excluded=False,
+        is_degenerate=False,
+    )
+    sess.add(new_working_memory_message)
+
+    # Re-wire: the first live message now hangs off the new working memory message
+    first_live.parent_id = new_working_memory_message.id
+
+    # Exclude all messages that working memory now covers
+    for m in messages_to_cover:
+        m.context_excluded = True
+        if m.exclusion_reason is None or m.exclusion_reason == "":
+            m.exclusion_reason = "working_memory"
+
+    # Retire the previous working memory (it has been folded into the new one)
+    if previous_working_memory is not None:
+        previous_working_memory.context_excluded = True
+        previous_working_memory.exclusion_reason = "working_memory_superseded"
+
+    await sess.flush()
+    logger.info(
+        "_apply_working_memory: covered %d messages, working memory id=%s",
+        len(messages_to_cover),
+        new_working_memory_message.id,
+    )
+
+
 @app.post("/api/conversations/{id}/compress")
 async def compress_conversation(
     id: str,
@@ -1103,59 +1209,72 @@ async def compress_conversation(
 
     # Candidates: uncompressed tool messages on the active branch
     candidates = [m for m in branch if m.role == "tool" and not m.context_excluded]
-    if not candidates:
+    if not candidates and not WORKING_MEMORY_ENABLED:
         return {"compressions": [], "new_summary": ""}
 
-    # Use the last 3 user messages as goal context (more context when mid-run)
-    user_messages = [m.content for m in reversed(branch) if m.role == "user"][:3]
-    user_message = "\n---\n".join(reversed(user_messages)) if user_messages else ""
+    compressions: list = []
+    new_summary: str = ""
 
-    all_dicts: list[TrackedMessage] = [{"id": m.id, "role": m.role, "content": m.content, "thinking": m.thinking} for m in branch]
-    candidate_dicts: list[TrackedMessage] = [{"id": m.id, "role": m.role, "content": m.content, "thinking": m.thinking} for m in candidates]
+    # Stage 1/2: classify and summarize tool messages
+    if candidates:
+        user_messages_goal = [m.content for m in reversed(branch) if m.role == "user"][:3]
+        user_message = "\n---\n".join(reversed(user_messages_goal)) if user_messages_goal else ""
 
-    compression_result = await compress_messages(
-        candidate_dicts,
-        all_dicts,
-        user_message,
-        conversation_summary=None,
-        backend=backend,
-        protect_last=protect_last,
-        is_mid_run=is_mid_run,
-    )
+        all_dicts: list[TrackedMessage] = [{"id": m.id, "role": m.role, "content": m.content, "thinking": m.thinking} for m in branch]
+        candidate_dicts: list[TrackedMessage] = [{"id": m.id, "role": m.role, "content": m.content, "thinking": m.thinking} for m in candidates]
 
-    for c in compression_result.compressions:
-        msg = next((m for m in candidates if m.id == c.message_id), None)
-        if msg is not None:
-            msg.context_excluded = True
-            msg.exclusion_reason = "compressed"
-            msg.compressed_summary = c.compressed_summary
-            msg.compression_label = c.compression_label
-            try:
-                original: ToolResult = json.loads(msg.content)
-            except (json.JSONDecodeError, ValueError, TypeError):
-                original = {"tool": "tool", "status": "unknown"}
-            compressed_content = json.dumps({
-                "tool": original.get("tool", "tool"),
-                "status": "compressed",
-                "summary": c.compressed_summary,
-                "tool_call_id": original.get("tool_call_id", ""),
-            })
-            msg.compressed_token_count = await backend.count_text_tokens(compressed_content)
+        compression_result = await compress_messages(
+            candidate_dicts,
+            all_dicts,
+            user_message,
+            conversation_summary=None,
+            backend=backend,
+            protect_last=protect_last,
+            is_mid_run=is_mid_run,
+        )
 
-    await sess.flush()
+        for c in compression_result.compressions:
+            msg = next((m for m in candidates if m.id == c.message_id), None)
+            if msg is not None:
+                msg.context_excluded = True
+                msg.exclusion_reason = "compressed"
+                msg.compressed_summary = c.compressed_summary
+                msg.compression_label = c.compression_label
+                try:
+                    original: ToolResult = json.loads(msg.content)
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    original = {"tool": "tool", "status": "unknown"}
+                compressed_content = json.dumps({
+                    "tool": original.get("tool", "tool"),
+                    "status": "compressed",
+                    "summary": c.compressed_summary,
+                    "tool_call_id": original.get("tool_call_id", ""),
+                })
+                msg.compressed_token_count = await backend.count_text_tokens(compressed_content)
 
-    compressed_branch = _build_active_branch_path(
-        list((await sess.scalars(select(db.Message).where(db.Message.conversation_id == id))).all()),
-        conv.active_message_id,
-    )
-    compressed_dicts: list[LLMMessage] = [{"role": m.role, "content": m.compressed_summary if m.compressed_summary else m.content, "thinking": m.thinking} for m in compressed_branch]
+        compressions = compression_result.compressions
+        new_summary = compression_result.new_summary
+        await sess.flush()
+
+    # Stage 3: working memory synthesis — squashes covered messages into a structured summary
+    if WORKING_MEMORY_ENABLED:
+        try:
+            await _apply_working_memory(conv, branch, id, sess)
+        except Exception:
+            logger.exception("Working memory synthesis failed — skipping")
+
+    # Re-fetch for accurate ctx_tokens (includes new working memory message if created)
+    final_all_msgs = list((await sess.scalars(select(db.Message).where(db.Message.conversation_id == id))).all())
+    final_branch = _build_active_branch_path(final_all_msgs, conv.active_message_id)
+    settings = _parse_conv_settings(conv)
+    inference_messages = await _build_inference_context(final_branch, settings.active_prompt_id, sess)
     tools_list = get_ollama_tool_list([tool.name for tool in TOOL_REGISTRY.values()])
-    ctx_tokens = await backend.count_tokens(backend.prepare_messages(compressed_dicts), tools_list)
+    ctx_tokens = await backend.count_tokens(backend.prepare_messages(inference_messages), tools_list)
 
     return {
-      "compressions": compression_result.compressions,
-      "new_summary": compression_result.new_summary,
-      "ctx_tokens": ctx_tokens,
+        "compressions": compressions,
+        "new_summary": new_summary,
+        "ctx_tokens": ctx_tokens,
     }
 
 
