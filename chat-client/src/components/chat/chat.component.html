@@ -110,6 +110,13 @@
         🔍
       </button>
       <button
+        class="text-gray-400 hover:text-indigo-600 text-sm leading-none transition-colors cursor-pointer px-1"
+        title="Log inference context to backend console"
+        (click)="chatSvc.debugContext()"
+      >
+        📋
+      </button>
+      <button
         class="text-gray-500 hover:text-indigo-600 text-2xl leading-none transition-colors cursor-pointer p-1"
         title="Conversation settings"
         (click)="drawerOpen.set(!drawerOpen())"
@@ -234,7 +241,7 @@
               <div class="grouped-bubble rounded-xl overflow-hidden shadow-sm w-full bg-thinking-bubble p-relative">
                 @if (msg.thinking) {
                   <app-collapsible-bubble [flat]="true" [streaming]="!!(msg.streaming && !msg.content)">
-                    <span header>Thinking...</span>
+                    <span header>Thinking...@if (msg.is_degenerate) { <span class="ml-2 text-xs text-red-400 font-normal">(stopped without response)</span>}</span>
                     <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-700 opacity-80">{{ msg.thinking }}</pre>
                   </app-collapsible-bubble>
                 }
@@ -274,30 +281,6 @@
                   ></ng-container>
                 </div>
               }
-            </div>
-          }
-
-          <!-- Live streaming thinking block (agent run only) -->
-          @if (msg.kind === 'thinking') {
-            <div class="max-w-3xl w-full min-w-0">
-              <div class="grouped-bubble rounded-xl overflow-hidden shadow-sm w-full bg-thinking-bubble p-relative">
-                <app-collapsible-bubble [flat]="true" [streaming]="!msg.done">
-                  <span header>Thinking...@if (msg.is_degenerate) { <span class="ml-2 text-xs text-red-400 font-normal">(stopped without response)</span>}</span>
-                  <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-700 opacity-80">{{ msg.content }}</pre>
-                </app-collapsible-bubble>
-                @if (msg.tool_calls && msg.tool_calls.length > 0) {
-                  <app-collapsible-bubble [flat]="true" wrapperClass="bg-card">
-                    <span header>{{ toolCallNames(msg.tool_calls) }}</span>
-                    <div class="tool-calls-list">
-                      @for (tc of msg.tool_calls; track tc.id) {
-                        <div class="tool-call-entry">
-                          <app-tool-call-entry [tc]="tc" />
-                        </div>
-                      }
-                    </div>
-                  </app-collapsible-bubble>
-                }
-              </div>
             </div>
           }
 

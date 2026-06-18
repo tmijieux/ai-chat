@@ -90,7 +90,7 @@ export class ChatService {
     const last = msgs[msgs.length - 1]
     if (!last) {
       return null
-    } else if (last.kind === 'thinking' && !last.done) {
+    } else if (last.kind === 'assistant' && last.streaming && last.content === '') {
       return 'thinking'
     } else if (last.kind === 'assistant' && last.streaming) {
       return 'responding'
@@ -424,8 +424,6 @@ export class ChatService {
 
     const conv = this._conversation!
 
-    let idOfCurrentlyStreamingThinkingMessage: string | null = null
-    let lastThinkingMessageId: string | null = null
     let pendingThinkingContent = ''
 
     let idOfCurrentlyStreamingAssistantMessage: string | null = null
@@ -489,18 +487,6 @@ export class ChatService {
       })
     }
 
-    const markThinkingMessageAsDoneAndClearIt = () => {
-      if (!idOfCurrentlyStreamingThinkingMessage) return
-      this._messages.update((msgs) =>
-        msgs.map((m) =>
-          m.id === idOfCurrentlyStreamingThinkingMessage && m.kind === 'thinking'
-            ? { ...m, done: true }
-            : m,
-        ),
-      )
-      idOfCurrentlyStreamingThinkingMessage = null
-    }
-
     const stopStreamingTheAssistantMessageSaveItAndClearIt = (tokenCount: number | null = null) => {
       if (!idOfCurrentlyStreamingAssistantMessage) return
       this._messages.update((msgs) =>
@@ -533,24 +519,24 @@ export class ChatService {
       }
       if (event.type === 'thinking' && event.content) {
         pendingThinkingContent += event.content
-        if (idOfCurrentlyStreamingThinkingMessage) {
+        if (idOfCurrentlyStreamingAssistantMessage) {
           this._messages.update((msgs) =>
             msgs.map((m) =>
-              m.id === idOfCurrentlyStreamingThinkingMessage && m.kind === 'thinking'
-                ? { ...m, content: m.content + event.content }
+              m.id === idOfCurrentlyStreamingAssistantMessage && m.kind === 'assistant'
+                ? { ...m, thinking: (m.thinking ?? '') + event.content }
                 : m,
             ),
           )
         } else {
-          idOfCurrentlyStreamingThinkingMessage = crypto.randomUUID()
-          lastThinkingMessageId = idOfCurrentlyStreamingThinkingMessage
+          idOfCurrentlyStreamingAssistantMessage = crypto.randomUUID()
           this._messages.update((msgs) => [
             ...msgs,
             {
-              kind: 'thinking',
-              id: idOfCurrentlyStreamingThinkingMessage!,
-              content: event.content!,
-              done: false,
+              kind: 'assistant' as const,
+              id: idOfCurrentlyStreamingAssistantMessage!,
+              content: '',
+              thinking: event.content!,
+              streaming: true,
             },
           ])
         }
@@ -566,7 +552,6 @@ export class ChatService {
           )
         } else {
           idOfCurrentlyStreamingAssistantMessage = crypto.randomUUID()
-          markThinkingMessageAsDoneAndClearIt()
           this._messages.update((msgs) => [
             ...msgs,
             {
@@ -630,10 +615,9 @@ export class ChatService {
       } else if (event.type === 'tool_result') {
         this._callingTool.set(null)
         this._streamingToolCallArgs.set('')
-        // For recovered tool calls (not streamed during generation), streamingToolCallsAcc will
-        // have entries here. Finalize and attach them before adding the result message.
+        // For recovered tool calls (embedded in thinking, not streamed during generation),
+        // streamingToolCallsAcc has entries here. Finalize them before saving the assistant message.
         if (streamingToolCallsAcc.size > 0) {
-          const thinkingIdBeforeResult = idOfCurrentlyStreamingThinkingMessage
           for (const entry of streamingToolCallsAcc.values()) {
             let args: Record<string, unknown> = {}
             try {
@@ -645,30 +629,7 @@ export class ChatService {
           const tokenCount = capturedGenerationCtxTokens
           capturedGenerationCtxTokens = null
           stopStreamingTheAssistantMessageSaveItAndClearIt(tokenCount)
-          if (pendingToolCalls.length > 0) {
-            const orphanedToolCalls = pendingToolCalls
-            pendingToolCalls = []
-            if (thinkingIdBeforeResult !== null) {
-              this._messages.update((msgs) =>
-                msgs.map((m) =>
-                  m.id === thinkingIdBeforeResult && m.kind === 'thinking'
-                    ? { ...m, tool_calls: orphanedToolCalls }
-                    : m,
-                ),
-              )
-            }
-            if (pendingThinkingContent) {
-              const thinking = pendingThinkingContent
-              pendingThinkingContent = ''
-              saveAssistant(crypto.randomUUID(), '', thinking, orphanedToolCalls, tokenCount)
-            }
-          } else if (pendingThinkingContent) {
-            const thinking = pendingThinkingContent
-            pendingThinkingContent = ''
-            saveAssistant(crypto.randomUUID(), '', thinking, [], tokenCount)
-          }
         }
-        markThinkingMessageAsDoneAndClearIt()
         const resultId = `result-${event.tool_id}`
         const resultContent = event.content ?? ''
         const logMessage = event.log_message ?? null
@@ -718,35 +679,14 @@ export class ChatService {
             pendingToolCalls.push({ id: entry.id, name: entry.name, args })
           }
           streamingToolCallsAcc = new Map()
-          // Finalize the assistant message now — all tool calls are known before execution starts.
-          const thinkingIdAtGenEnd = idOfCurrentlyStreamingThinkingMessage
+          // Finalize the assistant message — all tool calls known, token count captured.
           stopStreamingTheAssistantMessageSaveItAndClearIt(event.ctx_tokens)
-          // Handle thinking-only messages (no content) that had tool calls.
-          if (pendingToolCalls.length > 0) {
-            const orphanedToolCalls = pendingToolCalls
-            pendingToolCalls = []
-            if (thinkingIdAtGenEnd !== null) {
-              this._messages.update((msgs) =>
-                msgs.map((m) =>
-                  m.id === thinkingIdAtGenEnd && m.kind === 'thinking'
-                    ? { ...m, tool_calls: orphanedToolCalls }
-                    : m,
-                ),
-              )
-            }
-            if (pendingThinkingContent) {
-              const thinking = pendingThinkingContent
-              pendingThinkingContent = ''
-              saveAssistant(crypto.randomUUID(), '', thinking, orphanedToolCalls, event.ctx_tokens)
-            }
-          }
         } else {
           capturedGenerationCtxTokens = event.ctx_tokens
         }
       } else if (event.type === 'iteration_end') {
         const tokens = event.prompt_tokens ?? 0
         this._promptTokens.set(tokens)
-        markThinkingMessageAsDoneAndClearIt()
         const tokenCountForIteration = capturedGenerationCtxTokens
         capturedGenerationCtxTokens = null
         stopStreamingTheAssistantMessageSaveItAndClearIt(tokenCountForIteration)
@@ -835,18 +775,17 @@ export class ChatService {
           })
         } else {
           if (event.finished_without_response === true) {
-            const degenerateId = lastThinkingMessageId !== null ? lastThinkingMessageId : crypto.randomUUID()
+            const degenerateId = idOfCurrentlyStreamingAssistantMessage ?? crypto.randomUUID()
             const thinkingContent = pendingThinkingContent !== '' ? pendingThinkingContent : undefined
             pendingThinkingContent = ''
-            if (lastThinkingMessageId !== null) {
-              this._messages.update((msgs) =>
-                msgs.map((m) =>
-                  m.id === lastThinkingMessageId && m.kind === 'thinking'
-                    ? { ...m, is_degenerate: true }
-                    : m,
-                ),
-              )
-            }
+            idOfCurrentlyStreamingAssistantMessage = null
+            this._messages.update((msgs) =>
+              msgs.map((m) =>
+                m.id === degenerateId && m.kind === 'assistant'
+                  ? { ...m, streaming: false, is_degenerate: true }
+                  : m,
+              ),
+            )
             enqueue(() =>
               firstValueFrom(
                 this.api.post_message(conv.id, {
@@ -890,6 +829,14 @@ export class ChatService {
     const id = this._conversationId()
     if (!id) { return }
     this.api.debug_tokens(id).subscribe()
+  }
+
+  debugContext(): void {
+    const id = this._conversationId()
+    if (!id) {
+      return
+    }
+    this.api.debug_context(id).subscribe()
   }
 
   private async _reloadFromDb(): Promise<void> {
@@ -953,25 +900,17 @@ export class ChatService {
             context_excluded: m.context_excluded,
             ...siblingMeta,
           })
-        } else if (m.thinking) {
-          // Thinking-only message (no content) — show as a collapsed thinking block
+        } else if (m.thinking || m.is_degenerate) {
           result.push({
-            kind: 'thinking',
-            id: m.id,
-            content: m.thinking,
-            done: true,
-            tool_calls: m.tool_calls ?? undefined,
-            is_degenerate: m.is_degenerate,
-            ...siblingMeta,
-          })
-        } else if (m.is_degenerate) {
-          // Degenerate stop with no thinking — show as an empty collapsed thinking block
-          result.push({
-            kind: 'thinking',
+            kind: 'assistant',
             id: m.id,
             content: '',
-            done: true,
-            is_degenerate: true,
+            thinking: m.thinking ?? undefined,
+            tool_calls: m.tool_calls ?? undefined,
+            is_degenerate: m.is_degenerate,
+            token_count: m.token_count,
+            token_delta: m.token_delta,
+            context_excluded: m.context_excluded,
             ...siblingMeta,
           })
         }

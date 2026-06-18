@@ -231,21 +231,13 @@ export type DisplayMessage =
       content: string
       thinking?: string
       tool_calls?: ToolCallEntry[] | null
-      /** True while the HTTP stream is still open (non-agentic mode). */
+      /** True while the HTTP stream is still open (non-agentic or agentic mode). */
       streaming?: boolean
+      /** True when the agent stopped without producing content or tool calls. */
+      is_degenerate?: boolean
       token_count?: number | null
       token_delta?: number | null
       context_excluded?: boolean
-    } & SiblingMeta)
-  | ({
-      kind: 'thinking'
-      id: string
-      content: string
-      /** False while still streaming; true once the block is complete. */
-      done: boolean
-      tool_calls?: ToolCallEntry[] | null
-      /** True when the agent stopped without producing content or tool calls. */
-      is_degenerate?: boolean
     } & SiblingMeta)
   | ({
       kind: 'tool_confirm'
