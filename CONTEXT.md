@@ -1,7 +1,7 @@
 
 # App Mission
 
-Local AI chat interface backed by llama-server (OpenAI-compatible API, running locally), designed to support agentic coding workflows on low-memory devices with a 16 384-token context window. The central design constraint is that context is scarce — every feature either helps the user *see* where tokens are going or helps the agent *preserve* as many useful tokens as possible.
+Local AI chat interface backed by llama-server (OpenAI-compatible API, running locally), designed to support agentic coding workflows on low-memory devices with a 32 768-token context window. The central design constraint is that context is scarce — every feature either helps the user *see* where tokens are going or helps the agent *preserve* as many useful tokens as possible.
 
 # Domain Glossary
 
@@ -171,9 +171,25 @@ The current date (`YYYY-MM-DD` UTC) is prepended to the active system prompt con
 - **`is_default` uniqueness not enforced**: Setting a new prompt as default does not clear the previous default. Backend must clear the flag atomically.
 - **Thinking-only assistant messages** (content = ""): Saved to DB — correctly filtered from LLM context but add noise to the message list.
 
+## Working Memory
+
+A structured synthetic message (`role = "context_summary"`) inserted into the conversation message tree by the compression pipeline to replace a long sequence of accumulated assistant thinking blocks, tool stubs, and user messages with a compact `[Context:]` summary. Only the most recent non-excluded working memory message appears in the LLM context; earlier ones are marked `context_excluded` as they are folded forward.
+
+**Stored as:** `Message.content` holds the rendered markdown; `Message.working_memory_json` holds the raw JSON for folding into the next write.
+
+**JSON sections:** `goal`, `learned`, `done`, `rejected`, `dead_ends` (all optional). Rendered as markdown with `**Goal:**`, `**Learned:**` etc. headers, injected into the inference context as a `user`-role message.
+
+**Tree insertion:** the working memory message is inserted between the last covered message and the last user message (the live window start). The first live message's `parent_id` is updated to point to the new working memory message. All covered messages are marked `context_excluded = True`.
+
+**Folding:** when compression runs again, the live working memory's `working_memory_json` is passed as context to the new write call alongside a fresh digest of messages since the last working memory. The old working memory message is then excluded.
+
+**Feature flag:** `WORKING_MEMORY_ENABLED = False` in `backend/agent/compress.py`. Stage 1/2 (tool compression) runs independently of this flag. Flip to `True` to activate Stage 3.
+
+**UI:** rendered as a purple dashed card labeled "Working Memory" in the message list. Superseded (excluded) working memory messages show a `[superseded]` badge and reduced opacity.
+
 ## Strategic Direction: Context Management
 
-Context management is a primary improvement area. The current compression pipeline does not do enough: working on large codebases with large files fills the 32k context window quickly and current summarization is insufficient to keep meaningful context over long agent runs. This needs significant improvement.
+Context management is a primary improvement area. Stage 1/2 compresses individual tool-role messages. Stage 3 (working memory, feature-flagged) squashes entire exploration sequences into structured summaries — see [[Working Memory]].
 
 ## Open Questions
 - **`summarize_subtask` tool**: whether the agent calls it autonomously or it is framework-triggered is TBD.
@@ -186,16 +202,23 @@ Framework-level compression pipeline that runs after each completed agent run. T
 
 **Stage 2 — Reference file summarization** ✅: for each `keep` `read_file` result exceeding ~2 000 chars, an LLM call produces an API surface summary (module purpose, function signatures, key constants, imports). Stored as `compressed_summary` with a `[compressed: N lines → ~M tokens]` header. Target: 400–800 tokens. `search_web` results with total body content exceeding ~2 000 chars are also LLM-summarized in Stage 2, producing a concise summary of the search findings.
 
+**Stage 3 — Working memory synthesis** (feature-flagged, `WORKING_MEMORY_ENABLED = False`): after Stages 1/2, the `_apply_working_memory` helper in `main.py` collects all messages before the last user message into a digest (`build_digest` in `compress.py`), calls `write_working_memory` for one LLM pass that produces structured JSON, inserts the `context_summary` message into the tree, and marks all covered messages excluded. See [[Working Memory]] for full design.
+
+**Compression triggers:**
+- Post-run: frontend calls `POST /api/conversations/{id}/compress` after every agent run.
+- Mid-run overflow ✅: when `ctx_after > CTX_LIMIT` after a tool result, the agent emits `tool_result` first, then `compressing`. The frontend compresses and sends `compression_done`. If still over limit after compression, emits an error.
+- Length stop ✅: when `done_reason == "length"` (LLM output cut off mid-generation), the agent emits `compressing` and awaits compression, then retries the iteration. The `TurnResult.length_compressed` flag prevents infinite retry if compression doesn't help.
+- Iteration threshold (feature-flagged): `run_agent` counts iterations and emits `compressing` when `iteration_count >= WORKING_MEMORY_ITERATION_THRESHOLD` (default 10), then resets the counter.
+
 **Not yet implemented:**
-- **Active file tracking**: the file currently being written/edited should never be summarized in Stage 2. Currently all `read_file` results are eligible. Design open: "last file touched" only protects the most recent edit in a multi-file run; "all files edited in the run" protects more but prevents compression even when edits are complete. Prompt engineering (instruct agent to re-read before editing) may reduce the problem.
-- **Conversation title update**: after the first agent run, generate a short goal-framed title from the first user message via a small LLM call (not from the compression summary, which is agent-centric). Only update once — subsequent runs preserve the title. Update only if the title is still the auto-generated default (first 20 chars of first message), so manual renames are never overwritten.
-- **Mid-loop context compression** ✅: when `ctx_after > CTX_LIMIT` after a tool result, the agent emits the `tool_result` event first (so the frontend saves it to DB), then emits a `compressing` event. The frontend compresses the conversation via `POST /api/conversations/{id}/compress?protect_last=true` (preventing the overflowing result from being compacted itself), then sends `compression_done` over WebSocket. The backend resumes by patching in-memory tool messages with their compressed summaries, matched by `tool_call_id` — preserving assistant messages with `tool_calls` that are not persisted to DB. If still over limit after compression, emits an error.
+- **Active file tracking**: the file currently being written/edited should never be summarized in Stage 2. Currently all `read_file` results are eligible.
+- **Conversation title update**: after the first agent run, generate a short goal-framed title from the first user message. Only update once; preserve manual renames.
 - **Oversized output summarization** for non-`read_file` tools (e.g. `run_shell` with large stdout).
 
 Never compressed by Stage 2: `write_file`, `edit_file`, `run_shell` results; thinking messages.
 
 ## Status Bar
-Always-visible top bar in the chat area. Shows token info: `Context Tokens: N / 16,384 (%)`. The value is the last measured token count — always from a real API call, never estimated. Shows 0 on a new chat. When the conversation mode is not Standard, a colored badge showing the active mode name (`PLAN`, `AUTO`, `YOLO`) is displayed next to the token count. The ⚙ button opens the [[Conversation Settings Drawer]].
+Always-visible top bar in the chat area. Shows token info: `Context Tokens: N / 32,768 (%)`. The value is the last measured token count — always from a real API call, never estimated. On conversation load, the count is refreshed immediately via `GET /api/conversations/{id}/ctx-tokens` so it reflects the current context even without a new inference. Shows 0 on a new chat. When the conversation mode is not Standard, a colored badge showing the active mode name (`PLAN`, `AUTO`, `YOLO`) is displayed next to the token count. The ⚙ button opens the [[Conversation Settings Drawer]]. A 🔍 button logs a per-message token breakdown to the backend console for debugging.
 
 ## Conversation Turn
 The unit of visual grouping in the chat. One top-level bubble per speaker per iteration:
