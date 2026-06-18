@@ -503,7 +503,7 @@ async def _stream_llm(
     eval_count: int = 0
     done_reason: str = ""
 
-    async for event in backend.stream_completion(prepared, tools, temperature=0.3, max_tokens=max_tokens):
+    async for event in backend.stream_completion(prepared, tools, temperature=1.0, max_tokens=max_tokens):
         etype = event["type"]
 
         if etype == "thinking":
@@ -644,6 +644,28 @@ async def chat_with_tools(
     )
 
 
+async def _maybe_compress_on_iteration_threshold(
+    session: AgentSession,
+    messages: list[LLMMessage],
+    iteration_count: int,
+    turn: TurnResult,
+) -> bool:
+    """Trigger working memory compression when the iteration threshold is reached.
+
+    Returns True if compression was triggered (caller should reset iteration_count).
+    Mutates messages in place with the refreshed context.
+    """
+    if not WORKING_MEMORY_ENABLED or turn.length_compressed or iteration_count < WORKING_MEMORY_ITERATION_THRESHOLD:
+        return False
+    logger.info("Iteration threshold reached (%d) — triggering compression", iteration_count)
+    await session.emit({"type": "compressing", "ctx_tokens": 0, "ctx_limit": CTX_LIMIT, "reason": "iteration_threshold"})
+    conv_id = await session.await_compression()
+    if conv_id is not None and session.apply_db_compressions_callback is not None:
+        refreshed = await session.apply_db_compressions_callback(conv_id)
+        messages[:] = refreshed
+    return True
+
+
 async def run_agent(
     session: AgentSession,
     messages: list[LLMMessage],
@@ -656,20 +678,13 @@ async def run_agent(
         turn = TurnResult(is_done=False, finished_without_response=False)
         iteration_count = 0
         while not turn.is_done:
-            if (
-                WORKING_MEMORY_ENABLED
-                and not turn.length_compressed
-                and iteration_count >= WORKING_MEMORY_ITERATION_THRESHOLD
-            ):
-                logger.info("run_agent: iteration threshold reached (%d) — triggering compression", iteration_count)
-                await session.emit({"type": "compressing", "ctx_tokens": 0, "ctx_limit": CTX_LIMIT, "reason": "iteration_threshold"})
-                conv_id = await session.await_compression()
-                if conv_id is not None and session.apply_db_compressions_callback is not None:
-                    refreshed = await session.apply_db_compressions_callback(conv_id)
-                    messages[:] = refreshed
+            if await _maybe_compress_on_iteration_threshold(session, messages, iteration_count, turn):
                 iteration_count = 0
             allow_length_compression = not turn.length_compressed
-            turn = await chat_with_tools(messages, session, tools, working_directory, extra_tools, allow_length_compression=allow_length_compression)
+            turn = await chat_with_tools(
+                messages, session, tools, working_directory,
+                extra_tools, allow_length_compression=allow_length_compression
+            )
             iteration_count += 1
         await session.emit({"type": "done", "finished_without_response": turn.finished_without_response})
     except asyncio.CancelledError:

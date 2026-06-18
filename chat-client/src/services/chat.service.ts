@@ -689,6 +689,7 @@ export class ChatService {
         this._promptTokens.set(tokens)
         const tokenCountForIteration = capturedGenerationCtxTokens
         capturedGenerationCtxTokens = null
+        streamingToolCallsAcc = new Map()
         stopStreamingTheAssistantMessageSaveItAndClearIt(tokenCountForIteration)
         if (pendingThinkingContent) {
           const thinking = pendingThinkingContent

@@ -2,7 +2,7 @@
   <app-collapsible-bubble wrapperClass="bg-tool-result border-tool-result">
     <span header>
       @if (msg().log_message) {
-        <code class="tool-result-label">{{ msg().log_message }}{{ grepHeaderSuffix(msg().content, msg().compressed_summary) }}</code>
+        <code class="tool-result-label">{{ msg().log_message }}</code>
       } @else {
         Tool result
         @if (msg().tool_name) {

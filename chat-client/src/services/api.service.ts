@@ -95,6 +95,10 @@ export class ApiService {
     return this.http.post<void>(`${BASE_URL}/conversations/${id}/debug-tokens`, {})
   }
 
+  debug_context(id: string) {
+    return this.http.post<void>(`${BASE_URL}/conversations/${id}/debug-context`, {})
+  }
+
   get_ctx_tokens(id: string) {
     return this.http.get<{ ctx_tokens: number }>(`${BASE_URL}/conversations/${id}/ctx-tokens`)
   }

@@ -21,7 +21,7 @@ LLAMA_CHAT_URL = f"{LLAMA_BASE_URL}/v1/chat/completions"
 LLAMA_TOKENIZE_URL = f"{LLAMA_BASE_URL}/tokenize"
 LLAMA_HEALTH_URL = f"{LLAMA_BASE_URL}/health"
 LLAMA_SERVER_EXE = str(Path.home() / "ai/llama.cpp/build/bin/Release/llama-server.exe")
-GGUF_PATH = str(Path.home() / "ai/models/unsloth/Qwen3.5-9B-UD-Q3_K_XL.gguf")
+GGUF_PATH = str(Path.home() / "ai/models/unsloth/Qwen3.5-9B-Q4_K_M.gguf")
 MMPROJ_PATH = str(Path.home() / "ai/models/unsloth/mmproj-F16.gguf")
 CTX_LIMIT = 2**15 # 14 -> 16K, 15 -> 32K, 16 -> 65k
 
@@ -153,6 +153,9 @@ class LlamaServerBackend(LLMBackend):
             "messages": messages,
             "stream": True,
             "temperature": temperature,
+            "presence_penalty": 1.5,
+            "top_k": 20,
+            "top_p": 0.95,
         }
         if tools:
             body["tools"] = tools
@@ -168,6 +171,7 @@ class LlamaServerBackend(LLMBackend):
         prompt_tokens: int = 0
         completion_tokens: int = 0
 
+        print(json.dumps(body, indent=2, ensure_ascii=False))
         async with aiohttp.ClientSession() as http:
             async with http.post(LLAMA_CHAT_URL, json=body) as response:
                 if response.status != 200:

@@ -258,8 +258,6 @@
                       <markdown [data]="msg.content" />
                     }
                   </div>
-                } @else if (msg.streaming) {
-                  <div class="p-4 bg-assistant-bubble">...</div>
                 }
                 @if (msg.tool_calls && msg.tool_calls.length > 0) {
                   <app-collapsible-bubble [flat]="true" wrapperClass="bg-card">

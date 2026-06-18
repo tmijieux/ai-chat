@@ -28,23 +28,7 @@ export class ToolResultComponent {
     this._tab.set(tab)
   }
 
-  grepHeaderSuffix(content: string, compressed: string | null | undefined): string {
-    if (compressed) {
-      return ''
-    }
-    try {
-      const r = JSON.parse(content)
-      if (r.tool !== 'grep_files' || r.total == null) {
-        return ''
-      }
-      const n: number = r.total
-      return ` → ${n} ${n === 1 ? 'match' : 'matches'}`
-    } catch {
-      return ''
-    }
-  }
-
-  parseGrepResult(content: string): {
+parseGrepResult(content: string): {
     files: { name: string; lines: { no: number; text: string; match: boolean }[] }[]
     pattern: string
     total: number
@@ -100,9 +84,12 @@ export class ToolResultComponent {
       if (r.status === 'rejected') {
         return { icon: '✗ rejected', stdout: r.reason ?? '', stderr: '' }
       }
-      const ok = r.status === 'success'
-      const exitCode = ok ? 0 : (r.exit_code ?? 1)
-      const icon = ok ? '✓ exit 0' : `✗ exit ${exitCode}`
+      if (r.status === 'error') {
+        const msg: string = r.error?.message ?? 'error'
+        return { icon: '✗ tool error', stdout: msg, stderr: '' }
+      }
+      const exitCode: number = r.exit_code ?? 0
+      const icon = exitCode === 0 ? '✓ exit 0' : `✗ exit ${exitCode}`
       return { icon, stdout: r.output ?? '', stderr: r.stderr ?? '' }
     } catch {
       return null

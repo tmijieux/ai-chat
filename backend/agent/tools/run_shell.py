@@ -93,23 +93,13 @@ class RunShellTool(BaseTool):
                 )
 
             stdout, stderr = await proc.communicate()
-            if proc.returncode == 0:
-                return RunShellResult(
-                    tool=self.name,
-                    status="success",
-                    command=command,
-                    output=stdout.decode(),
-                    stderr=stderr.decode(),
-                )
-            else:
-                return RunShellResult(
-                    tool=self.name,
-                    status="error",
-                    command=command,
-                    exit_code=proc.returncode,
-                    output=stdout.decode(),
-                    stderr=stderr.decode(),
-                    error={"message": f"exit code {proc.returncode}"},
-                )
+            return RunShellResult(
+                tool=self.name,
+                status="success",
+                command=command,
+                exit_code=proc.returncode,
+                output=stdout.decode(),
+                stderr=stderr.decode(),
+            )
         except Exception as e:
             return tool_error(self.name, f"Unexpected error: {e}")

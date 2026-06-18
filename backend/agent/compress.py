@@ -98,7 +98,7 @@ def _result_metadata(result: ToolResult) -> dict[str, Any]:
         meta["line_count"] = len(content.splitlines())
     elif tool == "run_shell":
         meta["exit_code"] = result.get("exit_code", 0)
-        output = result.get("output") or result.get("stderr") or ""
+        output = (result.get("output")or "")+ (result.get("stderr") or "")
         meta["line_count"] = len(output.splitlines())
     elif tool == "search_web":
         results_list = result.get("results") or []
@@ -268,7 +268,10 @@ Assign exactly one label per tool call:
 
   drop            — result is fully consumed; nothing useful remains.
                     Use for: navigation globs/greps, directory listings used to pick a file,
-                    files read then immediately edited, failed/retried attempts.
+                    files read then immediately edited, commands that succeeded and the agent
+                    already acted on them.
+                    Never drop a run_shell with non-zero exit code — the error output is
+                    diagnostic and must be summarized or kept.
                     The orchestrator keeps only a metadata stub (tool + status).
 
   1-line-summary  — result is consumed but one factual line is worth preserving.
@@ -643,11 +646,15 @@ async def _apply_compression_label(
     """Produce a compressed_summary for one tool message given its classifier label.
     Returns None for keep items that don't exceed any size threshold (full content is preserved)."""
     if label == "drop":
-        summary = _compact_summary(result)
-        if reasoning != "":
-            summary += f"\nReason: {reasoning}"
-        logger.info("drop → compact: %s", summary)
-        return summary
+        # Never silently drop a shell command that exited non-zero — the error output is diagnostic.
+        if tool == "run_shell" and result.get("exit_code", 0) != 0:
+            label = "summarize"
+        else:
+            summary = _compact_summary(result)
+            if reasoning != "":
+                summary += f"\nReason: {reasoning}"
+            logger.info("drop → compact: %s", summary)
+            return summary
 
     if label == "1-line-summary":
         provided = line_summary.strip()

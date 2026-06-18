@@ -16,7 +16,7 @@ class ReadFileRangeTool(BaseTool):
         "Read a specific line range from a file. "
         "You MUST call glob_files or grep_files first and pass its result_id here — "
         "this enforces that you have located the file before reading. "
-        f"Maximum {MAX_LINES} lines per call. Read tight ranges (10-20 lines) — do not read the maximum unless truly needed."
+        f"Maximum {MAX_LINES} lines per call(HARD REQUIREMENTS overflow will error). Read tight ranges (10-20 lines) — do not read the maximum unless truly needed."
     )
     parameters = {
         "type": "object",
@@ -67,7 +67,9 @@ class ReadFileRangeTool(BaseTool):
         if start_line < 1 or end_line < start_line:
             return tool_error(self.name, "start_line must be >= 1 and end_line must be >= start_line.")
 
-        if (end_line - start_line + 1) > MAX_LINES:
+        if (end_line - start_line + 1) > MAX_LINES+1:
+            # we allow +1 because model will often specify round ranges 20-40
+            # this avoid useless errors
             return tool_error(self.name, f"Range too large: max {MAX_LINES} lines, requested {end_line - start_line + 1}.")
 
         absolute_path = resolve_workspace_path(file_path, working_directory)

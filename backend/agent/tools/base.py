@@ -10,8 +10,10 @@ if TYPE_CHECKING:
 def tool_rejected(tool_name: str, reason: str | None = None) -> ToolResult:
     """Return a result indicating the user declined to run this tool."""
     result: ToolResult = {"tool": tool_name, "status": "rejected"}
-    if reason is not None:
-        result["reason"] = reason
+    if reason is not None and reason != "":
+        result["reason"] = f"[The USER rejected this tool call and said]: {reason}"
+    else:
+        result["reason"] = "[The USER rejected this tool call without providing a reason]"
     return result
 
 

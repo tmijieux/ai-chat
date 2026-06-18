@@ -167,6 +167,12 @@ async def _build_inference_context(
     for att, img in img_rows:
         images_by_msg.setdefault(att.message_id, []).append(img)
 
+    # Restore tool_calls on the last assistant message so the model can see
+    # what it was working on (interrupted run, or resuming after "carry on").
+    non_excluded = [m for m in branch if not m.context_excluded]
+    last_assistant = next((m for m in reversed(non_excluded) if m.role == "assistant"), None)
+    interrupted_id = last_assistant.id if (last_assistant is not None and last_assistant.tool_calls is not None) else None
+
     for m in branch:
         if m.context_excluded:
             if m.compressed_summary:
@@ -190,14 +196,36 @@ async def _build_inference_context(
             # Working memory message — render as a user message so the LLM understands it
             messages.append({"role": "user", "content": m.content})
             continue
+        content = m.content or ""
+        if m.id == interrupted_id:
+            # Restore thinking if stored separately (not already wrapped in <think>)
+            if m.thinking is not None and not content.startswith("<think>"):
+                content = f"<think>{m.thinking}</think>{content}"
+            try:
+                stored_calls = json.loads(m.tool_calls)
+                tool_calls_for_context = [
+                    {
+                        "id": tc.get("id", f"tc-{i}"),
+                        "type": "function",
+                        "function": {"name": tc["name"], "arguments": tc.get("args", {})},
+                    }
+                    for i, tc in enumerate(stored_calls)
+                ]
+            except (json.JSONDecodeError, ValueError, KeyError):
+                tool_calls_for_context = []
+        else:
+            tool_calls_for_context = []
+
+        msg: LLMMessage = {"role": m.role, "content": content}
+        if len(tool_calls_for_context) > 0:
+            msg["tool_calls"] = tool_calls_for_context
         imgs = images_by_msg.get(m.id, [])
         if imgs:
-            multipart_content: list[dict] = [{"type": "text", "text": m.content}]
+            multipart_content: list[dict] = [{"type": "text", "text": content}]
             for img in imgs:
                 multipart_content.append({"type": "image_url", "image_url": {"url": f"data:{img.mime_type};base64,{img.data}"}})
-            messages.append({"role": m.role, "content": multipart_content})
-        else:
-            messages.append({"role": m.role, "content": m.content})
+            msg["content"] = multipart_content
+        messages.append(msg)
     return messages
 
 
@@ -1078,6 +1106,76 @@ async def debug_conversation_tokens(
     logger.info("=== TOTAL raw=%d  in-context=%d (+ system/tools overhead not counted) ===", raw_total, in_context_total)
 
 
+@app.post("/api/conversations/{id}/debug-context")
+async def debug_conversation_context(
+    id: str,
+    sess: AsyncSession = Depends(get_db_session),
+):
+    """Log the exact message list the LLM would see for this conversation (prepared wire format)."""
+    conv = (await sess.scalars(select(db.Conversation).where(db.Conversation.id == id))).first()
+    if conv is None:
+        raise HTTPException(404)
+
+    settings = _parse_conv_settings(conv)
+    all_msgs = list((await sess.scalars(select(db.Message).where(db.Message.conversation_id == id))).all())
+    branch = _build_active_branch_path(all_msgs, conv.active_message_id)
+    _deduplicate_branch_file_reads(branch)
+    messages = await _build_inference_context(branch, settings.active_prompt_id, sess)
+    prepared = backend.prepare_messages(messages)
+
+    logger.info("=== DEBUG CONTEXT conv=%s (%d prepared messages) ===", id, len(prepared))
+    total_tokens = 0
+    for m in prepared:
+        role = m.get("role", "?")
+        raw_content = m.get("content") or ""
+        if isinstance(raw_content, list):
+            text_parts = [p.get("text", "") for p in raw_content if isinstance(p, dict) and p.get("type") == "text"]
+            image_count = sum(1 for p in raw_content if isinstance(p, dict) and p.get("type") == "image_url")
+            display_content = " ".join(text_parts) + (f" [+{image_count} image(s)]" if image_count else "")
+            count_text = " ".join(text_parts)
+        else:
+            display_content = raw_content
+            count_text = raw_content
+
+        tokens = await backend.count_text_tokens(count_text) if count_text else 0
+        total_tokens += tokens
+
+        if role == "system":
+            logger.info("  [system] %dt  %s", tokens, display_content[:200].replace("\n", " "))
+        elif role == "user":
+            logger.info("  [user] %dt  %s", tokens, display_content[:300].replace("\n", " "))
+        elif role == "tool":
+            try:
+                tool_data: ToolResult = json.loads(raw_content)
+                tool_name = tool_data.get("tool", "?")
+                status = tool_data.get("status", "?")
+                path = tool_data.get("path", "")
+                if status == "evicted":
+                    logger.info("  [tool] %dt  %s %s [evicted]", tokens, tool_name, path)
+                elif status == "compressed":
+                    summary = (tool_data.get("summary") or "")[:120]
+                    logger.info("  [tool] %dt  %s %s [compressed] %s", tokens, tool_name, path, summary.replace("\n", " "))
+                elif tool_name == "read_file":
+                    logger.info("  [tool] %dt  read_file %s [%s]", tokens, path, status)
+                elif tool_name in ("list_directory", "glob_files", "grep_files"):
+                    pattern = tool_data.get("pattern") or tool_data.get("glob_pattern") or ""
+                    logger.info("  [tool] %dt  %s %s %s", tokens, tool_name, path, pattern)
+                else:
+                    logger.info("  [tool] %dt  %s [%s]", tokens, tool_name, status)
+            except (json.JSONDecodeError, ValueError):
+                logger.info("  [tool] %dt  %s", tokens, display_content[:120].replace("\n", " "))
+        elif role == "assistant":
+            tool_calls = m.get("tool_calls") or []
+            if tool_calls:
+                names = ", ".join(tc.get("function", {}).get("name", "?") for tc in tool_calls)
+                logger.info("  [assistant] %dt  %d tool call(s): %s", tokens, len(tool_calls), names)
+            else:
+                logger.info("  [assistant] %dt  %s", tokens, display_content[:200].replace("\n", " "))
+        else:
+            logger.info("  [%s] %dt  %s", role, tokens, display_content[:120].replace("\n", " "))
+    logger.info("=== END DEBUG CONTEXT  total=%dt (+ system/tools overhead not counted) ===", total_tokens)
+
+
 @app.get("/api/conversations/{id}/ctx-tokens")
 async def get_conversation_ctx_tokens(
     id: str,
@@ -1475,9 +1573,11 @@ def _build_tool_set(mode: str, active_tool_names: list[str]) -> ToolSet:
         return ToolSet(tools=tools, extra_tools=injected)
     elif mode == "standard":
         tools = get_ollama_tool_list(active_tool_names)
-        for injected_tool in CONVERSATIONAL_TOOLS.values():
-            tools.append({"type": "function", "function": injected_tool.to_ollama_schema()})
-        return ToolSet(tools=tools, extra_tools=dict(CONVERSATIONAL_TOOLS))
+        if len(tools) > 0:
+            for injected_tool in CONVERSATIONAL_TOOLS.values():
+                tools.append({"type": "function", "function": injected_tool.to_ollama_schema()})
+            return ToolSet(tools=tools, extra_tools=dict(CONVERSATIONAL_TOOLS))
+        return ToolSet(tools=tools, extra_tools=None)
     else:
         tools = get_ollama_tool_list(active_tool_names)
         return ToolSet(tools=tools, extra_tools=None)
