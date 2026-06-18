@@ -34,16 +34,15 @@ Active entry is tracked by **path identity**: filtering keeps the current select
 | Escape (empty filter) | Close picker |
 
 ## SystemPromptTemplate
-A named, versioned system prompt stored in the DB (`system_prompt_templates` table). Has a `name`, `category`, `content`, `token_count` (computed on create/edit), and `is_default` flag. The `token_count` is evaluated by calling `count_token` with `[{"role": "system", "content": content}]`.
+A named system prompt stored as a YAML file in `backend/prompts/`. Fields: `name`, `category`, `content`, `token_count` (computed on create/edit), and `is_default`. The file's stem (slug derived from the name) is its identity — this slug is what `active_prompt_id` stores.
 
 ## is_default
-Flag on `SystemPromptTemplate`. Rules:
-- **At most one** prompt may have `is_default = true` at any time. Setting a prompt as default must clear the flag on the previously-default prompt (backend must enforce this atomically). Uniqueness may not yet be implemented — treat as a known gap.
-- **Visual indicator**: the prompt list on the settings page shows a "default" badge on the default prompt.
-- **New-chat pre-selection**: when starting a new chat, the default prompt is automatically set as `active_prompt_id` in the pending `ConversationSettings`.
+Flag on [[SystemPromptTemplate]]. At most one prompt should have this set at any time; the backend does not yet enforce this atomically — treat as a known gap. Effects:
+- **Visual indicator**: the prompt list on the settings page shows a "default" badge.
+- **New-chat pre-selection**: when starting a new chat, the default prompt's slug is automatically set as `active_prompt_id` in the pending `ConversationSettings`.
 
 ## active_prompt_id
-Per-conversation setting (`ConversationSettings.active_prompt_id: string | null`). Points to the active `SystemPromptTemplate` for that conversation. `null` means no system prompt is active.
+Per-conversation setting (`ConversationSettings.active_prompt_id: string | null`). Stores the slug of the active [[SystemPromptTemplate]] for that conversation. `null` means no system prompt is active.
 
 ## ConversationSettings
 Per-conversation configuration stored as JSON in `Conversation.settings`. Fields: `active_prompt_id`, `active_tool_names`, `working_directory`. `active_tool_names` is the sole authority for tool availability — empty list means no tools, full list means all tools.

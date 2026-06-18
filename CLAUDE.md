@@ -2,7 +2,7 @@
 
 ## Context
 
-The  app in this workspace is an AI agent. Do not be surprised if I speak about tools/agent stuff up front and read `CONTEXT.md`. I always speaking about my app and not about Claude unless i mention your name. If i did not explicitely talked about you by mentioning your name, then Starts investigating the code about the mentionned problem.
+The  app in this workspace is an AI agent. Do not be surprised if I speak about tools/agent stuff up front and read `CONTEXT.md`. I always speaking about my app and not about Claude unless I mention your name. If I did not explicitely talked about you by mentioning your name, then Starts investigating the code about the mentionned problem.
 
 Always read `CONTEXT.md` at the start of every conversation. It contains the app mission, domain glossary, feature intent, known bugs, and planned changes. Features documented there must not be removed or broken when implementing other features.
 
