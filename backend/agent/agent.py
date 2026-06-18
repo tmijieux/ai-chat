@@ -71,7 +71,7 @@ async def _maybe_preshrink_tool_output(
 
     if tool_name == "run_shell":
         stdout = result_dict.get("output") or ""
-        stderr = result_dict.get("error") or ""
+        stderr = result_dict.get("stderr") or ""
         combined = stdout + stderr
         if len(combined) <= _LARGE_OUTPUT_CHARS:
             return result_dict
@@ -83,7 +83,7 @@ async def _maybe_preshrink_tool_output(
             f"Full output saved to {temp_path}; use grep_files or read_file_range on it for details.]\n\n"
             + summary
         )
-        modified["error"] = ""
+        modified["stderr"] = ""
         logger.info(
             "preshrink run_shell: %d chars → saved to %s, summary %d chars",
             len(combined), temp_path, len(summary),
