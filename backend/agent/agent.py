@@ -3,11 +3,17 @@ import asyncio
 import logging
 import os
 import re
+import typing
 import uuid
 import aiofiles
 import aiohttp
 from dataclasses import dataclass
 from typing import Any, Callable, Awaitable, Sequence, TypedDict
+
+from agent.tools.base import ToolDict
+
+if typing.TYPE_CHECKING:
+    from main import ToolSet
 
 from .tools import TOOL_REGISTRY, get_ollama_tool_list
 from .auto_safety import evaluate_tool_safety, _ALWAYS_SAFE_TOOLS, _FILE_WRITE_TOOLS, is_path_inside_workspace
@@ -62,9 +68,9 @@ async def _save_temp_output(content: str, prefix: str, working_directory: str) -
 
 async def _maybe_preshrink_tool_output(
     tool_name: str,
-    result_dict: dict,
+    result_dict: ToolResult,
     working_directory: str | None,
-) -> dict:
+) -> ToolResult:
     """If a tool output exceeds _LARGE_OUTPUT_CHARS, save raw to a temp file and replace with a summary."""
     if working_directory is None:
         return result_dict
@@ -262,7 +268,7 @@ def _extract_tool_calls_from_thinking(thinking: str) -> list[ToolCall]:
     Recover tool calls that the model emitted inside the thinking block without closing </think>.
     Qwen3 uses <tool_call><function=NAME><parameter=K>V</parameter>…</function></tool_call>.
     Returns tool call dicts in the same shape as the normal stream-assembled list,
-    marked with _recovered=True so the caller can emit tool_call_start manually.
+    marked with _recovered=True so the caller can emit streaming events before generation_end.
     """
     result = []
     for index, block_match in enumerate(_TOOL_CALL_BLOCK_RE.finditer(thinking)):
@@ -375,7 +381,7 @@ def _log_context(messages: Sequence[LLMMessage]) -> None:
 
 async def _track_tokens(
     messages: list[LLMMessage],
-    tools: list[dict],
+    tools: list[ToolDict],
     session: "AgentSession",
     label: str,
     prepared: Sequence[LLMMessage] | None = None,
@@ -416,32 +422,26 @@ async def _execute_tool_calls(
     tool_calls: list[ToolCall],
     messages: list[LLMMessage],
     session: AgentSession,
-    tools: list[dict],
+    toolset: "ToolSet",
     working_directory: str | None,
-    extra_tools: dict | None,
 ) -> bool:
     """Execute each tool call, append results to messages, and handle mid-run compression.
 
     Returns True when context overflows even after compression (caller should abort).
     Mutates messages in place.
     """
-    ctx_before = await _track_tokens(messages, tools, session, "context before tool execution")
+    ctx_before = await _track_tokens(messages, toolset.tools, session, "context before tool execution")
 
-    effective_registry = {**TOOL_REGISTRY, **(extra_tools if extra_tools is not None else {})}
+    effective_registry = {**TOOL_REGISTRY, **(toolset.extra_tools if toolset.extra_tools is not None else {})}
 
     for tool_call in tool_calls:
         tool_name: str = tool_call.get("function", {}).get("name", "")
-        tool_args: dict = tool_call.get("function", {}).get("arguments", {})
+        tool_args: dict[str, Any] = tool_call.get("function", {}).get("arguments", {})
         call_id: str = tool_call.get("id", f"tc-{id(tool_call)}")
 
-        # Recovered tool calls never got a tool_call_start during streaming — emit it now.
-        if tool_call.get("_recovered"):
-            await session.emit({"type": "tool_call_start", "tool_id": call_id, "tool_name": tool_name})
-
-        await session.emit({"type": "tool_call", "tool_id": call_id, "tool_name": tool_name, "arguments": tool_args})
 
         if tool_name not in effective_registry:
-            result_dict: dict = {"tool": tool_name, "status": "error", "error": {"message": f"Unknown tool: {tool_name}"}}
+            result_dict: ToolResult = {"tool": tool_name, "status": "error", "error": {"message": f"Unknown tool: {tool_name}"}}
             log_msg = None
         else:
             tool_instance = effective_registry[tool_name]
@@ -453,7 +453,7 @@ async def _execute_tool_calls(
         tool_output = json.dumps(result_dict)
         messages.append({"role": "tool", "name": tool_name, "content": tool_output})
 
-        ctx_after = await _track_tokens(messages, tools, session, f"context after tool result '{tool_name}'")
+        ctx_after = await _track_tokens(messages, toolset.tools, session, f"context after tool result '{tool_name}'")
 
         if ctx_after > CTX_LIMIT:
             # Emit tool_result first so frontend saves it to DB before compressing.
@@ -470,7 +470,7 @@ async def _execute_tool_calls(
             if conv_id is not None and session.apply_db_compressions_callback is not None:
                 refreshed = await session.apply_db_compressions_callback(conv_id)
                 messages[:] = refreshed
-            ctx_after_compress = await _track_tokens(messages, tools, session, "context after compression")
+            ctx_after_compress = await _track_tokens(messages, toolset.tools, session, "context after compression")
             if ctx_after_compress > CTX_LIMIT:
                 await session.emit({
                    "type": "error",
@@ -493,7 +493,7 @@ async def _execute_tool_calls(
 
 async def _stream_llm(
     prepared: Sequence[LLMMessage],
-    tools: list[dict],
+    tools: list[ToolDict],
     max_tokens: int,
     session: AgentSession,
 ) -> GenerationResult:
@@ -541,7 +541,7 @@ async def _append_assistant_message(
     message: LLMMessage,
     tool_calls: list[ToolCall],
     messages: list[LLMMessage],
-    tools: list[dict],
+    tools: list[ToolDict],
     session: AgentSession,
 ) -> bool:
     """Append the assistant turn to messages. Returns True if a message was appended."""
@@ -571,6 +571,13 @@ async def _append_assistant_message(
         appended = False
 
     if appended:
+        for tool_call in tool_calls:
+            if tool_call.get("_recovered"):
+                call_id = tool_call["id"]
+                call_name = tool_call["function"]["name"]
+                args_str = json.dumps(tool_call["function"]["arguments"])
+                await session.emit({"type": "tool_call_start", "tool_id": call_id, "tool_name": call_name})
+                await session.emit({"type": "tool_call_chunk", "tool_id": call_id, "chunk": args_str})
         ctx_after_gen = await _track_tokens(messages, tools, session, "context after generation")
         await session.emit({"type": "generation_end", "ctx_tokens": ctx_after_gen})
 
@@ -580,19 +587,19 @@ async def _append_assistant_message(
 async def chat_with_tools(
     messages: list[LLMMessage],
     session: AgentSession,
-    tools: list[dict],
+    toolset: "ToolSet",
     working_directory: str | None,
-    extra_tools: dict | None = None,
+    
     allow_length_compression: bool = True,
 ) -> TurnResult:
     """One iteration of the LLM call + tool execution loop."""
     prepared = backend.prepare_messages(messages)
     _log_context(prepared)
 
-    prompt_eval_count = await _track_tokens(messages, tools, session, "context before generation", prepared=prepared)
+    prompt_eval_count = await _track_tokens(messages, toolset.tools, session, "context before generation", prepared=prepared)
     max_tokens = CTX_LIMIT - prompt_eval_count
 
-    generation = await _stream_llm(prepared, tools, max_tokens, session)
+    generation = await _stream_llm(prepared, toolset.tools, max_tokens, session)
 
     print(f"[tokens] prompt_tokens={prompt_eval_count} completion_tokens={generation.eval_count} finish_reason={generation.done_reason}")
 
@@ -621,10 +628,10 @@ async def chat_with_tools(
     if finished_without_response:
         logger.warning("Agent finished without response: no content, no tool calls")
 
-    await _append_assistant_message(generation.message, tool_calls, messages, tools, session)
+    await _append_assistant_message(generation.message, tool_calls, messages, toolset.tools, session)
 
     if len(tool_calls) > 0:
-        overflow = await _execute_tool_calls(tool_calls, messages, session, tools, working_directory, extra_tools)
+        overflow = await _execute_tool_calls(tool_calls, messages, session, toolset, working_directory)
         if overflow:
             return TurnResult(is_done=True, finished_without_response=False)
 
@@ -669,7 +676,7 @@ async def _maybe_compress_on_iteration_threshold(
 async def run_agent(
     session: AgentSession,
     messages: list[LLMMessage],
-    tools: list[dict],
+    toolset: "ToolSet",
     working_directory: str | None,
     extra_tools: dict | None = None,
 ) -> None:
@@ -682,8 +689,8 @@ async def run_agent(
                 iteration_count = 0
             allow_length_compression = not turn.length_compressed
             turn = await chat_with_tools(
-                messages, session, tools, working_directory,
-                extra_tools, allow_length_compression=allow_length_compression
+                messages, session, toolset, working_directory,
+                allow_length_compression=allow_length_compression
             )
             iteration_count += 1
         await session.emit({"type": "done", "finished_without_response": turn.finished_without_response})

@@ -572,14 +572,6 @@ export class ChatService {
         if (accEntry !== undefined) {
           accEntry.argsStr += event.chunk
         }
-      } else if (event.type === 'tool_call') {
-        // Update with finalized parsed args (for streamed calls) or add new entry (for recovered calls).
-        const existingEntry = streamingToolCallsAcc.get(event.tool_id)
-        if (existingEntry !== undefined) {
-          existingEntry.argsStr = JSON.stringify(event.arguments)
-        } else {
-          streamingToolCallsAcc.set(event.tool_id, { id: event.tool_id, name: event.tool_name, argsStr: JSON.stringify(event.arguments) })
-        }
       } else if (event.type === 'tool_confirm') {
         this._messages.update((msgs) => {
           const updated = event.evaluator_reason
@@ -615,21 +607,6 @@ export class ChatService {
       } else if (event.type === 'tool_result') {
         this._callingTool.set(null)
         this._streamingToolCallArgs.set('')
-        // For recovered tool calls (embedded in thinking, not streamed during generation),
-        // streamingToolCallsAcc has entries here. Finalize them before saving the assistant message.
-        if (streamingToolCallsAcc.size > 0) {
-          for (const entry of streamingToolCallsAcc.values()) {
-            let args: Record<string, unknown> = {}
-            try {
-              args = JSON.parse(entry.argsStr)
-            } catch { /* leave args empty */ }
-            pendingToolCalls.push({ id: entry.id, name: entry.name, args })
-          }
-          streamingToolCallsAcc = new Map()
-          const tokenCount = capturedGenerationCtxTokens
-          capturedGenerationCtxTokens = null
-          stopStreamingTheAssistantMessageSaveItAndClearIt(tokenCount)
-        }
         const resultId = `result-${event.tool_id}`
         const resultContent = event.content ?? ''
         const logMessage = event.log_message ?? null
