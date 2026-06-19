@@ -76,12 +76,12 @@ export class FileMentionPickerComponent {
   selectActive(): void {
     const item = this._results()[this._activeIndex()]
     if (item !== undefined) {
-      this.fileSelected.emit(item.path)
+      this.fileSelected.emit(item.relative_path)
     }
   }
 
   selectItem(item: FileSearchResult): void {
-    this.fileSelected.emit(item.path)
+    this.fileSelected.emit(item.relative_path)
   }
 
   isActive(index: number): boolean {

@@ -955,10 +955,10 @@ async def search_files(workspace: str, query: str = ""):
         for filename in files:
             if filename.startswith("."):
                 continue
-            if query_lower and query_lower not in filename.lower():
-                continue
             abs_path = Path(root) / filename
             relative_path = "/".join(abs_path.relative_to(workspace_path).parts)
+            if query_lower and query_lower not in relative_path.lower():
+                continue
             results.append({"name": filename, "path": str(abs_path), "relative_path": relative_path})
             if len(results) >= 50:
                 break
