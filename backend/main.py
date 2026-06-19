@@ -939,12 +939,16 @@ async def list_finish_tools():
 # Utils
 # ---------------------------------------------------------------------------
 
+def _fuzzy_match(query: str, text: str) -> bool:
+    """Returns True if every character of query appears in text in order (case-insensitive)."""
+    it = iter(text)
+    return all(c in it for c in query)
+
+
 @app.get("/api/utils/search-files")
 async def search_files(workspace: str, query: str = ""):
     """Recursively search for files in a workspace directory by filename. Skips common ignored directories."""
-    print(f"[search_files] workspace={workspace!r} query={query!r}")
     workspace_path = Path(workspace).resolve()
-    print(f"[search_files] resolved path={workspace_path}, is_dir={workspace_path.is_dir()}")
     if not workspace_path.is_dir():
         raise HTTPException(400, detail=f"Not a directory: {workspace_path}")
     SKIP_DIRS = {".git", "node_modules", "__pycache__", "venv", ".venv", "dist", "build", ".angular", ".next", ".cache"}
@@ -957,7 +961,7 @@ async def search_files(workspace: str, query: str = ""):
                 continue
             abs_path = Path(root) / filename
             relative_path = "/".join(abs_path.relative_to(workspace_path).parts)
-            if query_lower and query_lower not in relative_path.lower():
+            if query_lower and not _fuzzy_match(query_lower, relative_path.lower()):
                 continue
             results.append({"name": filename, "path": str(abs_path), "relative_path": relative_path})
             if len(results) >= 50:
