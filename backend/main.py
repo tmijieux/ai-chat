@@ -940,9 +940,25 @@ async def list_finish_tools():
 # ---------------------------------------------------------------------------
 
 def _fuzzy_match(query: str, text: str) -> bool:
-    """Returns True if every character of query appears in text in order (case-insensitive)."""
+    """Returns True if every character of query appears in text in order."""
     it = iter(text)
     return all(c in it for c in query)
+
+
+def _fuzzy_score(query: str, relative_path: str) -> tuple:
+    """Lower score = better match. Prefers matches in the filename, then tighter character spans."""
+    filename = relative_path.split("/")[-1]
+    filename_match = 0 if _fuzzy_match(query, filename) else 1
+    # Compute span of matched characters (greedy left-to-right).
+    positions = []
+    idx = 0
+    for c in query:
+        while idx < len(relative_path) and relative_path[idx] != c:
+            idx += 1
+        positions.append(idx)
+        idx += 1
+    span = positions[-1] - positions[0] if len(positions) > 1 else 0
+    return (filename_match, span)
 
 
 @app.get("/api/utils/search-files")
@@ -969,6 +985,8 @@ async def search_files(workspace: str, query: str = ""):
         if len(results) >= 50:
             break
     results.sort(key=lambda r: r["relative_path"].lower())
+    if query_lower:
+        results.sort(key=lambda r: _fuzzy_score(query_lower, r["relative_path"].lower()))
     return {"results": results}
 
 
