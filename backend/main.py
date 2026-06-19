@@ -940,18 +940,11 @@ async def list_finish_tools():
 # ---------------------------------------------------------------------------
 
 def _fuzzy_match(query: str, text: str) -> bool:
-    """Match using non-overlapping 2-char tokens. A single-char query never matches."""
+    """Returns True if every character of query appears in text in order. Requires at least 2 characters."""
     if len(query) < 2:
         return False
-    # Split into 2-char chunks; a trailing 1-char remainder is ignored.
-    tokens = [query[i:i + 2] for i in range(0, len(query) - 1, 2)]
-    idx = 0
-    for token in tokens:
-        pos = text.find(token, idx)
-        if pos == -1:
-            return False
-        idx = pos + len(token)
-    return True
+    it = iter(text)
+    return all(c in it for c in query)
 
 
 def _fuzzy_score(query: str, relative_path: str) -> tuple:
