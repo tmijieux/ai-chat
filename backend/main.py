@@ -964,7 +964,7 @@ async def search_files(workspace: str, query: str = ""):
                 break
         if len(results) >= 50:
             break
-    results.sort(key=lambda r: (r["relative_path"].count("/"), r["relative_path"]))
+    results.sort(key=lambda r: r["relative_path"].lower())
     return {"results": results}
 
 
