@@ -15,14 +15,25 @@ class ToolCall(TypedDict):
 
 
 class LLMMessage(TypedDict):
-    """A message in the conversation format exchanged with the LLM backend."""
+    """A message in the conversation history / wire format sent to the LLM.
+    thinking is NotRequired because user/tool/system messages don't have it;
+    assistant messages that were appended from a generation may carry it,
+    but prepare_messages strips it before sending to the server."""
     role: str
     content: str | list[dict]
     thinking: NotRequired[str]
-    name: NotRequired[str]
+    tool_calls: NotRequired[list[ToolCall]]
+
+
+class AssistantMessage(TypedDict):
+    """Accumulated output from one LLM generation stream.
+    Both content and thinking are always present (initialized to empty string)."""
+    role: str
+    content: str
+    thinking: str
     tool_calls: NotRequired[list[ToolCall]]
 
 
 class TrackedMessage(LLMMessage):
     """An LLMMessage augmented with an id field for tracking inside the compression pipeline."""
-    id: NotRequired[str]
+    id: str

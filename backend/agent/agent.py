@@ -11,16 +11,14 @@ from dataclasses import dataclass
 from typing import Any, Callable, Awaitable, Sequence, TypedDict
 
 from agent.tools.base import ToolDict
-
-if typing.TYPE_CHECKING:
-    from main import ToolSet
+from conv_helpers import ToolSet, _find_superseded_read_file_indices
 
 from .tools import TOOL_REGISTRY, get_ollama_tool_list
 from .auto_safety import evaluate_tool_safety, _ALWAYS_SAFE_TOOLS, _FILE_WRITE_TOOLS, is_path_inside_workspace
 from .compress import _summarize_shell_output, _summarize_search_results, WORKING_MEMORY_ENABLED, WORKING_MEMORY_ITERATION_THRESHOLD
 from llm import backend
 from llm.base import ToolCallStartEvent, ToolCallArgEvent
-from message_types import LLMMessage, ToolCall, ToolCallFunction
+from message_types import LLMMessage, AssistantMessage, ToolCall, ToolCallFunction
 from tool_result_types import ToolResult
 
 CTX_LIMIT = 2**15
@@ -39,7 +37,7 @@ class ToolCallAccEntry(TypedDict):
 @dataclass
 class GenerationResult:
     """Accumulated output from one LLM stream."""
-    message: LLMMessage
+    message: AssistantMessage
     tool_calls_acc: dict[int, ToolCallAccEntry]
     eval_count: int
     done_reason: str
@@ -288,21 +286,6 @@ def _strip_tool_call_blocks(thinking: str) -> str:
     return _TOOL_CALL_BLOCK_RE.sub("", thinking).strip()
 
 
-def _find_superseded_read_file_indices(pairs: list[tuple[str, str]]) -> list[int]:
-    """Given (role, content_json) pairs, return indices of superseded read_file results."""
-    path_indices: dict[str, list[int]] = {}
-    for i, (role, content_str) in enumerate(pairs):
-        if role != "tool":
-            continue
-        try:
-            content: ToolResult = json.loads(content_str or "")
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if content.get("tool") != "read_file" or content.get("status") != "success":
-            continue
-        path_indices.setdefault(content.get("path", ""), []).append(i)
-    return [i for indices in path_indices.values() for i in indices[:-1]]
-
 
 def _deduplicate_file_reads(messages: list[LLMMessage]) -> None:
     """modifies messages to remove file read that were superseded"""
@@ -395,7 +378,7 @@ async def _track_tokens(
     return tokens
 
 
-def _parse_tool_calls(tool_calls_acc: dict[int, ToolCallAccEntry], message: LLMMessage) -> list[ToolCall]:
+def _parse_tool_calls(tool_calls_acc: dict[int, ToolCallAccEntry], message: AssistantMessage) -> list[ToolCall]:
     """Build the tool_calls list from streamed fragments, with thinking-block recovery fallback."""
 
     tool_calls: list[ToolCall] = []
@@ -409,7 +392,7 @@ def _parse_tool_calls(tool_calls_acc: dict[int, ToolCallAccEntry], message: LLMM
 
     # Recover tool calls embedded in thinking when the model forgot to close </think> first.
     # Only attempt recovery when both regular content and stream-parsed tool calls are absent.
-    if len(tool_calls) == 0 and len(message["content"]) == 0 and len(message["thinking"]) > 0:
+    if len(tool_calls) == 0 and message["content"] == "" and message["thinking"] != "":
         recovered = _extract_tool_calls_from_thinking(message["thinking"])
         if recovered:
             logger.warning("Recovering %d tool call(s) embedded in thinking block", len(recovered))
@@ -451,7 +434,7 @@ async def _execute_tool_calls(
 
         result_dict["tool_call_id"] = call_id
         tool_output = json.dumps(result_dict)
-        messages.append({"role": "tool", "name": tool_name, "content": tool_output})
+        messages.append({"role": "tool", "content": tool_output})
 
         ctx_after = await _track_tokens(messages, toolset.tools, session, f"context after tool result '{tool_name}'")
 
@@ -498,7 +481,7 @@ async def _stream_llm(
     session: AgentSession,
 ) -> GenerationResult:
     """Stream one LLM completion, emit events to session, and return accumulated result."""
-    message: LLMMessage = {"role": "assistant", "content": "", "thinking": ""}
+    message: AssistantMessage = {"role": "assistant", "content": "", "thinking": ""}
     tool_calls_acc: dict[int, ToolCallAccEntry] = {}
     eval_count: int = 0
     done_reason: str = ""
@@ -507,11 +490,11 @@ async def _stream_llm(
         etype = event["type"]
 
         if etype == "thinking":
-            message["thinking"] = (message.get("thinking") or "") + event["content"]
+            message["thinking"] += event["content"]
             await session.emit({"type": "thinking", "content": event["content"]})
 
         elif etype == "content":
-            message["content"] = (message.get("content") or "") + event["content"]
+            message["content"] += event["content"]
             await session.emit({"type": "content", "content": event["content"]})
 
         elif etype == "tool_call_start":
@@ -538,7 +521,7 @@ async def _stream_llm(
 
 
 async def _append_assistant_message(
-    message: LLMMessage,
+    message: AssistantMessage,
     tool_calls: list[ToolCall],
     messages: list[LLMMessage],
     tools: list[ToolDict],
@@ -546,16 +529,16 @@ async def _append_assistant_message(
 ) -> bool:
     """Append the assistant turn to messages. Returns True if a message was appended."""
 
-    content = message.get("content") or ""
-    thinking = message.get("thinking") or ""
+    content = message["content"]
+    thinking = message["thinking"]
 
-    if len(content) > 0:
+    if content != "":
         messages[:] = [m for m in messages if not m.get("_transient")]
         if len(tool_calls) > 0:
             message["tool_calls"] = tool_calls
         messages.append(message)
         appended = True
-    elif len(thinking) > 0 or len(tool_calls) > 0:
+    elif thinking != "" or len(tool_calls) > 0:
         thinking_for_context = (
             _strip_tool_call_blocks(thinking)
             if tool_calls and tool_calls[0].get("_recovered")
@@ -624,7 +607,7 @@ async def chat_with_tools(
 
     tool_calls = _parse_tool_calls(generation.tool_calls_acc, generation.message)
 
-    finished_without_response = len(generation.message.get("content") or "") == 0 and len(tool_calls) == 0
+    finished_without_response = generation.message["content"] == "" and len(tool_calls) == 0
     if finished_without_response:
         logger.warning("Agent finished without response: no content, no tool calls")
 
