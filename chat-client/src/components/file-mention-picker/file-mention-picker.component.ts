@@ -1,4 +1,4 @@
-import { Component, computed, effect, inject, input, output, signal, untracked } from '@angular/core'
+import { Component, computed, effect, ElementRef, inject, input, output, signal, untracked } from '@angular/core'
 import { CommonModule } from '@angular/common'
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop'
 import { toObservable } from '@angular/core/rxjs-interop'
@@ -14,6 +14,7 @@ import { FileSearchResult } from '../../types/message-types'
 })
 export class FileMentionPickerComponent {
   private api = inject(ApiService)
+  private el = inject(ElementRef)
 
   /** Text typed after '@' — used as the search query. */
   readonly filter = input.required<string>()
@@ -35,6 +36,14 @@ export class FileMentionPickerComponent {
   readonly hasResults = computed(() => this._results().length > 0)
 
   constructor() {
+    effect(() => {
+      const index = this._activeIndex()
+      queueMicrotask(() => {
+        const buttons = (this.el.nativeElement as HTMLElement).querySelectorAll('.slash-palette-item')
+        ;(buttons[index] as HTMLElement | undefined)?.scrollIntoView({ block: 'nearest' })
+      })
+    })
+
     toObservable(this.filter)
       .pipe(
         debounceTime(150),
