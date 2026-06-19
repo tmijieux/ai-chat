@@ -35,6 +35,14 @@
           (dismissed)="paletteOpen.set(false)"
         />
       }
+      @if (fileMentionOpen()) {
+        <app-file-mention-picker
+          [filter]="fileMentionContext()!.filterText"
+          [workspacePath]="_workspacePath()!"
+          (fileSelected)="onFileMentionSelected($event)"
+          (dismissed)="currentInput.set(currentInput().slice(0, fileMentionContext()!.atIndex))"
+        />
+      }
       <textarea
         #textarea
         [(ngModel)]="currentInput"
@@ -43,7 +51,7 @@
         (paste)="onPaste($event)"
         (dragover)="onDragOver($event)"
         (drop)="onDrop($event)"
-        placeholder="Message the AI... (Shift+Enter for newline, paste or drop images, / for commands)"
+        placeholder="Message the AI... (Shift+Enter for newline, paste or drop images, / for commands, @ to mention a file)"
         rows="1"
         class="w-full resize-none p-3 border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
       ></textarea>

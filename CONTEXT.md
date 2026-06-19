@@ -293,6 +293,16 @@ Per-conversation setting that controls how the agent runs. Persisted in `Convers
 - **Auto** — tool confirmations are auto-evaluated: read-only tools and file edits inside the workspace are always safe; other tools (shell, web search, out-of-workspace writes) are evaluated by an LLM sub-agent (`auto_safety.py`) and auto-approved if deemed safe, or escalated to the user if deemed dangerous. A `tool_evaluating` spinner appears while the LLM evaluates. ✅ Implemented.
 - **YOLO** — autonomous loop with broad auto-approval. The safety evaluator is used to classify tools but the agent does not pause for confirmation — rejections are returned as tool errors so the agent can adapt. Verification script generation (`.yolo_verify/`), `finish_yolo` tool, and post-execution test running are **not yet implemented**.
 
+## File Mention Picker
+
+Triggered by typing `@` anywhere in the chat input when a workspace is set. Opens a floating popup above the textarea (same visual style as the [[Slash Command Palette]]). The text after `@` is used as a live search query against all files in the workspace (recursive, skipping `.git`, `node_modules`, `__pycache__`, `venv`, etc.). Results are shown as `filename — relative/path` pairs, sorted by depth then alphabetically. Max 50 results. Search is debounced (~150ms).
+
+Keyboard: ArrowUp/Down to navigate, Enter to select, Escape to dismiss and remove the `@` token from the input.
+
+On selection, the `@filter` in the textarea is replaced with `@/absolute/path/to/file ` (trailing space closes the picker). The absolute path is visible in the message so the agent can call `read_file` on it without ambiguity.
+
+Only available when a workspace directory is configured for the conversation.
+
 ## Slash Command Palette
 Triggered by typing `/` at the start of the chat input. Opens a floating popup above the textarea with two sections:
 

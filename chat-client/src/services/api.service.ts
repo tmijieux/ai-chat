@@ -7,6 +7,7 @@ import {
   AppStatus,
   Conversation,
   ConversationSettings,
+  FileSearchResult,
   Message,
   MessageForQuery,
   Workflow,
@@ -200,6 +201,12 @@ export class ApiService {
 
   get_workflows() {
     return this.http.get<Workflow[]>(`${BASE_URL}/workflows`)
+  }
+
+  search_files(workspace: string, query: string) {
+    return this.http.get<{ results: FileSearchResult[] }>(`${BASE_URL}/utils/search-files`, {
+      params: { workspace, query },
+    })
   }
 
   browse_directory(path?: string | null) {

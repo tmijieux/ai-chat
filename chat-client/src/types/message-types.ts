@@ -80,6 +80,12 @@ export type Workflow = {
   description: string
 }
 
+export type FileSearchResult = {
+  name: string
+  path: string
+  relative_path: string
+}
+
 export type SlashCommand =
   | { type: 'mode'; value: ConversationMode; label: string; description: string }
   | { type: 'workflow'; value: string; label: string; description: string }

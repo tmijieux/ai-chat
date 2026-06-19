@@ -9,11 +9,12 @@ import { VoiceDictationService } from '../../services/voice-dictation.service'
 import { AppStatusService } from '../../services/app-status.service'
 import { ConversationMode, PendingImage, SlashCommand, Workflow } from '../../types/message-types'
 import { SlashCommandPaletteComponent } from '../slash-command-palette/slash-command-palette.component'
+import { FileMentionPickerComponent } from '../file-mention-picker/file-mention-picker.component'
 
 @Component({
   selector: 'app-chat-input',
   standalone: true,
-  imports: [CommonModule, FormsModule, SlashCommandPaletteComponent],
+  imports: [CommonModule, FormsModule, SlashCommandPaletteComponent, FileMentionPickerComponent],
   templateUrl: './chat-input.component.html',
   styleUrls: ['./chat-input.component.scss'],
 })
@@ -25,6 +26,7 @@ export class ChatInputComponent implements AfterViewInit {
 
   @ViewChild('textarea') private _textareaRef!: ElementRef<HTMLTextAreaElement>
   @ViewChild(SlashCommandPaletteComponent) private _palette?: SlashCommandPaletteComponent
+  @ViewChild(FileMentionPickerComponent) private _filePicker?: FileMentionPickerComponent
 
   // True when the outer context is processing a response and sending is blocked.
   // While busy, the send button is replaced by a stop button.
@@ -56,6 +58,28 @@ export class ChatInputComponent implements AfterViewInit {
     const spaceIndex = input.indexOf(' ')
     return spaceIndex === -1 ? input.slice(1) : input.slice(1, spaceIndex)
   })
+
+  // File mention picker — triggered by '@' anywhere in the input.
+  readonly _workspacePath = computed(() => this.chatSvc.currentConversationSettings().working_directory)
+
+  /** When a bare '@…' (no whitespace after '@') exists at the end of the input, returns its position and filter text. */
+  readonly fileMentionContext = computed<{ atIndex: number; filterText: string } | null>(() => {
+    if (this._workspacePath() === null) {
+      return null
+    }
+    const input = this.currentInput()
+    const lastAt = input.lastIndexOf('@')
+    if (lastAt === -1) {
+      return null
+    }
+    const afterAt = input.slice(lastAt + 1)
+    if (/\s/.test(afterAt)) {
+      return null
+    }
+    return { atIndex: lastAt, filterText: afterAt }
+  })
+
+  readonly fileMentionOpen = computed(() => this.fileMentionContext() !== null)
 
   // Text that was in the input before recording started; partials/final are appended to it.
   private _startPrefix = ''
@@ -182,6 +206,16 @@ export class ChatInputComponent implements AfterViewInit {
     this.voiceSvc.stopRecording()
   }
 
+  onFileMentionSelected(absolutePath: string): void {
+    const context = this.fileMentionContext()
+    if (context === null) {
+      return
+    }
+    const input = this.currentInput()
+    this.currentInput.set(input.slice(0, context.atIndex) + '@' + absolutePath + ' ')
+    this._textareaRef?.nativeElement.focus()
+  }
+
   onSlashCommandSelected(command: SlashCommand): void {
     this.paletteOpen.set(false)
     // Strip the command token from the input, keep any trailing text as the message body.
@@ -209,6 +243,11 @@ export class ChatInputComponent implements AfterViewInit {
     if (this.paletteOpen()) {
       event?.preventDefault()
       this._palette?.selectActive()
+      return
+    }
+    if (this.fileMentionOpen()) {
+      event?.preventDefault()
+      this._filePicker?.selectActive()
       return
     }
     event?.preventDefault()
@@ -278,34 +317,52 @@ export class ChatInputComponent implements AfterViewInit {
   }
 
   onTextareaKeydown(event: KeyboardEvent): void {
-    if (!this.paletteOpen()) {
+    if (this.paletteOpen()) {
+      if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        this._palette?.navigateUp()
+      } else if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        this._palette?.navigateDown()
+      } else if (event.key === 'Tab') {
+        event.preventDefault()
+        const item = this._palette?.getActiveItem()
+        if (item !== undefined) {
+          // Fill in the command token with a trailing space so the user can type the prompt.
+          // The palette closes automatically because the space is detected by the effect.
+          // The command itself is parsed at send time.
+          this.currentInput.set('/' + item.label + ' ')
+          queueMicrotask(() => {
+            const el = this._textareaRef?.nativeElement
+            if (el) {
+              el.selectionStart = el.selectionEnd = el.value.length
+            }
+          })
+        }
+      } else if (event.key === 'Escape') {
+        event.preventDefault()
+        this.paletteOpen.set(false)
+        this.currentInput.set('')
+      }
       return
     }
-    if (event.key === 'ArrowUp') {
-      event.preventDefault()
-      this._palette?.navigateUp()
-    } else if (event.key === 'ArrowDown') {
-      event.preventDefault()
-      this._palette?.navigateDown()
-    } else if (event.key === 'Tab') {
-      event.preventDefault()
-      const item = this._palette?.getActiveItem()
-      if (item !== undefined) {
-        // Fill in the command token with a trailing space so the user can type the prompt.
-        // The palette closes automatically because the space is detected by the effect.
-        // The command itself is parsed at send time.
-        this.currentInput.set('/' + item.label + ' ')
-        queueMicrotask(() => {
-          const el = this._textareaRef?.nativeElement
-          if (el) {
-            el.selectionStart = el.selectionEnd = el.value.length
-          }
-        })
+
+    if (this.fileMentionOpen()) {
+      if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        this._filePicker?.navigateUp()
+      } else if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        this._filePicker?.navigateDown()
+      } else if (event.key === 'Escape') {
+        event.preventDefault()
+        // Remove the '@' and filter text, leaving the rest of the message intact.
+        const context = this.fileMentionContext()
+        if (context !== null) {
+          this.currentInput.set(this.currentInput().slice(0, context.atIndex))
+        }
       }
-    } else if (event.key === 'Escape') {
-      event.preventDefault()
-      this.paletteOpen.set(false)
-      this.currentInput.set('')
+      return
     }
   }
 

@@ -1,0 +1,23 @@
+<div class="slash-palette">
+  @if (loading()) {
+    <div class="slash-palette-empty">Searching…</div>
+  } @else if (!filter()) {
+    <div class="slash-palette-empty">Type to search files in workspace</div>
+  } @else if (!hasResults()) {
+    <div class="slash-palette-empty">No files match "{{ filter() }}"</div>
+  } @else {
+    <div class="slash-palette-group">
+      @for (item of results(); track item.path; let i = $index) {
+        <button
+          class="slash-palette-item"
+          [class.active]="isActive(i)"
+          (mousedown)="$event.preventDefault()"
+          (click)="selectItem(item)"
+        >
+          <span class="slash-palette-item-label">{{ item.name }}</span>
+          <span class="slash-palette-item-desc">{{ item.relative_path }}</span>
+        </button>
+      }
+    </div>
+  }
+</div>

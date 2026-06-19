@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, Depends, HTTPException, Response, WebSocket, WebSocketDisconnect, UploadFile, Form
 from sqlalchemy import select, delete
+from agent.tools.base import BaseTool, ToolDict
 from database import init_db, get_db_session, AsyncSession
 import loaders as ld
 import tables as db
@@ -23,6 +24,7 @@ from agent.pipeline import PipelineOrchestrator
 from agent.workflow_loader import load_workflow
 from agent.custom_workflow import CustomWorkflowOrchestrator
 from agent.compress import (
+    Compression,
     compress_messages,
     build_digest,
     write_working_memory,
@@ -936,6 +938,31 @@ async def list_finish_tools():
 # Utils
 # ---------------------------------------------------------------------------
 
+@app.get("/api/utils/search-files")
+async def search_files(workspace: str, query: str = ""):
+    """Recursively search for files in a workspace directory by filename. Skips common ignored directories."""
+    workspace_path = Path(workspace).resolve()
+    if not workspace_path.is_dir():
+        raise HTTPException(400, detail=f"Not a directory: {workspace_path}")
+    SKIP_DIRS = {".git", "node_modules", "__pycache__", "venv", ".venv", "dist", "build", ".angular", ".next", ".cache"}
+    query_lower = query.lower()
+    results = []
+    for entry in workspace_path.rglob("*"):
+        if not entry.is_file():
+            continue
+        parts = entry.relative_to(workspace_path).parts
+        if any(p.startswith(".") or p in SKIP_DIRS for p in parts):
+            continue
+        if query_lower and query_lower not in entry.name.lower():
+            continue
+        relative_path = "/".join(parts)
+        results.append({"name": entry.name, "path": str(entry), "relative_path": relative_path})
+        if len(results) >= 50:
+            break
+    results.sort(key=lambda r: (r["relative_path"].count("/"), r["relative_path"]))
+    return {"results": results}
+
+
 @app.get("/api/utils/browse-directory")
 async def browse_directory(path: str | None = None):
     current = Path(path).resolve() if path else Path.cwd()
@@ -1310,7 +1337,7 @@ async def compress_conversation(
     if not candidates and not WORKING_MEMORY_ENABLED:
         return {"compressions": [], "new_summary": ""}
 
-    compressions: list = []
+    compressions: list[Compression] = []
     new_summary: str = ""
 
     # Stage 1/2: classify and summarize tool messages
@@ -1535,8 +1562,8 @@ class ConvBranch:
 @dataclass
 class ToolSet:
     """Tool list and optional injected extras assembled for a given conversation mode."""
-    tools: list[dict]
-    extra_tools: dict[str, Any] | None
+    tools: list[ToolDict]
+    extra_tools: dict[str, BaseTool] | None
 
 
 async def _load_conversation_branch(
@@ -1635,8 +1662,7 @@ def _create_agent_task(
     working_directory: str | None,
     user_message: str,
     messages: list[LLMMessage],
-    tools: list[dict],
-    extra_tools: dict[str, Any] | None,
+    toolset: ToolSet
 ) -> asyncio.Task:
     """Dispatch either a named workflow or the standard agentic loop as an asyncio task."""
     if workflow_name is not None:
@@ -1645,10 +1671,10 @@ def _create_agent_task(
         dir_path = workflows_dir / workflow_name
         workflow_path = flat_path if flat_path.exists() else dir_path
         workflow_def = load_workflow(workflow_path)
-        orchestrator = CustomWorkflowOrchestrator(workflow_def, working_directory, tools)
+        orchestrator = CustomWorkflowOrchestrator(workflow_def, working_directory, toolset.tools)
         return asyncio.create_task(orchestrator.run(session, user_message, messages))
     else:
-        return asyncio.create_task(run_agent(session, messages, tools, working_directory, extra_tools))
+        return asyncio.create_task(run_agent(session, messages, toolset, working_directory))
 
 
 async def _run_agent_event_loop(
@@ -1704,7 +1730,7 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
 
         agent_task = _create_agent_task(
             session, workflow_name, settings.working_directory,
-            user_message, messages, tool_set.tools, tool_set.extra_tools,
+            user_message, messages, tool_set
         )
         await _run_agent_event_loop(websocket, session, agent_task)
 
