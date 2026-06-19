@@ -3,6 +3,7 @@ import base64
 import datetime
 import functools
 import io
+import os
 import math
 import re
 import uuid
@@ -941,22 +942,26 @@ async def list_finish_tools():
 @app.get("/api/utils/search-files")
 async def search_files(workspace: str, query: str = ""):
     """Recursively search for files in a workspace directory by filename. Skips common ignored directories."""
+    print(f"[search_files] workspace={workspace!r} query={query!r}")
     workspace_path = Path(workspace).resolve()
+    print(f"[search_files] resolved path={workspace_path}, is_dir={workspace_path.is_dir()}")
     if not workspace_path.is_dir():
         raise HTTPException(400, detail=f"Not a directory: {workspace_path}")
     SKIP_DIRS = {".git", "node_modules", "__pycache__", "venv", ".venv", "dist", "build", ".angular", ".next", ".cache"}
     query_lower = query.lower()
     results = []
-    for entry in workspace_path.rglob("*"):
-        if not entry.is_file():
-            continue
-        parts = entry.relative_to(workspace_path).parts
-        if any(p.startswith(".") or p in SKIP_DIRS for p in parts):
-            continue
-        if query_lower and query_lower not in entry.name.lower():
-            continue
-        relative_path = "/".join(parts)
-        results.append({"name": entry.name, "path": str(entry), "relative_path": relative_path})
+    for root, dirs, files in os.walk(workspace_path):
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in SKIP_DIRS]
+        for filename in files:
+            if filename.startswith("."):
+                continue
+            if query_lower and query_lower not in filename.lower():
+                continue
+            abs_path = Path(root) / filename
+            relative_path = "/".join(abs_path.relative_to(workspace_path).parts)
+            results.append({"name": filename, "path": str(abs_path), "relative_path": relative_path})
+            if len(results) >= 50:
+                break
         if len(results) >= 50:
             break
     results.sort(key=lambda r: (r["relative_path"].count("/"), r["relative_path"]))
