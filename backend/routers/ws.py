@@ -15,11 +15,11 @@ from agent.pipeline import PipelineOrchestrator
 from agent.workflow_loader import load_workflow
 from agent.custom_workflow import CustomWorkflowOrchestrator
 from agent.tools import TOOL_REGISTRY, PLAN_MODE_TOOLS, CONVERSATIONAL_TOOLS, get_ollama_tool_list
+from agent.compress import build_inference_context
 from conv_helpers import (
     ConvBranch,
     ToolSet,
     _build_active_branch_path,
-    _build_inference_context,
     _deduplicate_branch_file_reads,
     _parse_conv_settings,
 )
@@ -166,7 +166,7 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
         )
         tool_set = _build_tool_set(settings.mode, active_tool_names)
 
-        messages = await _build_inference_context(conv_branch.branch, settings.active_prompt_id, sess)
+        messages = await build_inference_context(conv_branch.branch, settings.active_prompt_id, sess)
         if user_message_id is None:
             messages.append({"role": "user", "content": user_message})
 
@@ -224,7 +224,7 @@ async def pipeline_websocket(websocket: WebSocket, sess: AsyncSession = Depends(
         working_directory = settings.working_directory
 
         tools = get_ollama_tool_list(list(TOOL_REGISTRY.keys()))
-        messages = await _build_inference_context(branch, settings.active_prompt_id, sess)
+        messages = await build_inference_context(branch, settings.active_prompt_id, sess)
         if user_message_id is None:
             messages.append({"role": "user", "content": user_message})
 

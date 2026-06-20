@@ -1,8 +1,10 @@
+import datetime
 import json
 import logging
 import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -19,7 +21,7 @@ from tool_result_types import (
     SearchWebResult,
     ToolResult
 )
-from conv_helpers import _now, _build_active_branch_path, _build_inference_context, _parse_conv_settings
+from conv_helpers import _now, _build_active_branch_path, _parse_conv_settings
 from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
 
 logger = logging.getLogger(__name__)
@@ -979,6 +981,105 @@ async def write_working_memory(
 
 
 # ---------------------------------------------------------------------------
+# Compression-aware inference context assembly
+# ---------------------------------------------------------------------------
+
+_PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
+
+
+async def build_inference_context(
+    branch: list[db.Message],
+    prompt_id: str | None,
+    sess: AsyncSession,
+) -> list[LLMMessage]:
+    """Build the LLM message list for a branch, applying the compression view.
+
+    Excluded messages with a compressed_summary are injected as compact stubs.
+    Excluded messages without a summary are dropped entirely.
+    context_summary messages (working memory) are injected as user-role messages.
+    """
+    import yaml as _yaml
+
+    messages: list[LLMMessage] = []
+    if prompt_id is not None:
+        prompt_path = _PROMPTS_DIR / f"{prompt_id}.yaml"
+        if prompt_path.exists():
+            data = _yaml.safe_load(prompt_path.read_text(encoding="utf-8"))
+            today = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")
+            content = f"Today's date: {today}\n\n{data.get('content') or ''}"
+            messages.append({"role": "system", "content": content})
+
+    branch_ids = [m.id for m in branch]
+    img_rows = (await sess.execute(
+        select(db.MessageImageAttachment, db.Image)
+        .join(db.Image, db.MessageImageAttachment.image_id == db.Image.id)
+        .where(db.MessageImageAttachment.message_id.in_(branch_ids))
+        .order_by(db.MessageImageAttachment.position)
+    )).all() if branch_ids else []
+
+    images_by_msg: dict[str, list] = {}
+    for att, img in img_rows:
+        images_by_msg.setdefault(att.message_id, []).append(img)
+
+    non_excluded = [m for m in branch if not m.context_excluded]
+    last_assistant = next((m for m in reversed(non_excluded) if m.role == "assistant"), None)
+    interrupted_id = last_assistant.id if (last_assistant is not None and last_assistant.tool_calls is not None) else None
+
+    for m in branch:
+        if m.context_excluded:
+            if m.compressed_summary is not None:
+                try:
+                    original: ToolResult = json.loads(m.content)
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    original = {"tool": "tool", "status": "unknown"}
+                messages.append({
+                    "role": "tool",
+                    "content": json.dumps({
+                        "tool": original.get("tool", "tool"),
+                        "status": "compressed",
+                        "summary": m.compressed_summary,
+                        "tool_call_id": original.get("tool_call_id", ""),
+                    })
+                })
+            continue
+        if m.content is None or m.content.strip() == "":
+            continue
+        if m.role == "context_summary":
+            messages.append({"role": "user", "content": m.content})
+            continue
+        content = m.content or ""
+        if m.id == interrupted_id:
+            if m.thinking is not None and not content.startswith("<think>"):
+                content = f"<think>{m.thinking}</think>{content}"
+            try:
+                stored_calls = json.loads(m.tool_calls)
+                tool_calls_for_context = [
+                    {
+                        "id": tc.get("id", f"tc-{i}"),
+                        "type": "function",
+                        "function": {"name": tc["name"], "arguments": tc.get("args", {})},
+                    }
+                    for i, tc in enumerate(stored_calls)
+                ]
+            except (json.JSONDecodeError, ValueError, KeyError):
+                tool_calls_for_context = []
+        else:
+            tool_calls_for_context = []
+
+        msg: LLMMessage = {"role": m.role, "content": content}
+        if len(tool_calls_for_context) > 0:
+            msg["tool_calls"] = tool_calls_for_context
+        imgs = images_by_msg.get(m.id, [])
+        if imgs:
+            multipart_content: list[dict] = [{"type": "text", "text": content}]
+            for img in imgs:
+                multipart_content.append({"type": "image_url", "image_url": {"url": f"data:{img.mime_type};base64,{img.data}"}})
+            msg["content"] = multipart_content
+        messages.append(msg)
+    return messages
+
+
+# ---------------------------------------------------------------------------
 # DB-level compression application (mid-run patch and working memory insertion)
 # ---------------------------------------------------------------------------
 
@@ -1202,7 +1303,7 @@ async def run_compression(
     )).scalars().all())
     final_branch = _build_active_branch_path(final_all_msgs, conv.active_message_id)
     settings = _parse_conv_settings(conv)
-    inference_messages = await _build_inference_context(final_branch, settings.active_prompt_id, sess)
+    inference_messages = await build_inference_context(final_branch, settings.active_prompt_id, sess)
     tools_list = get_ollama_tool_list([tool.name for tool in TOOL_REGISTRY.values()])
     ctx_tokens = await backend.count_tokens(backend.prepare_messages(inference_messages), tools_list)
 

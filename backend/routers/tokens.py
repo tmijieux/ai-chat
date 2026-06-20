@@ -8,11 +8,10 @@ from sqlalchemy import select
 
 from database import get_db_session, AsyncSession
 import tables as db
-from agent.compress import run_compression
+from agent.compress import run_compression, build_inference_context
 from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
 from conv_helpers import (
     _build_active_branch_path,
-    _build_inference_context,
     _deduplicate_branch_file_reads,
     _parse_conv_settings,
 )
@@ -43,7 +42,7 @@ async def count_conversation_tokens(id: str, sess: AsyncSession = Depends(get_db
     branch = _build_active_branch_path(all_msgs, conv.active_message_id)
 
     settings = _parse_conv_settings(conv)
-    messages = await _build_inference_context(branch, settings.active_prompt_id, sess)
+    messages = await build_inference_context(branch, settings.active_prompt_id, sess)
     tool_names = settings.active_tool_names if conv.settings is not None else list(TOOL_REGISTRY.keys())
     tools = get_ollama_tool_list(tool_names)
     token_count_value = await backend.count_tokens(messages, tools)
@@ -126,7 +125,7 @@ async def debug_conversation_context(
     all_msgs = list((await sess.scalars(select(db.Message).where(db.Message.conversation_id == id))).all())
     branch = _build_active_branch_path(all_msgs, conv.active_message_id)
     _deduplicate_branch_file_reads(branch)
-    messages = await _build_inference_context(branch, settings.active_prompt_id, sess)
+    messages = await build_inference_context(branch, settings.active_prompt_id, sess)
     prepared = backend.prepare_messages(messages)
 
     logger.info("=== DEBUG CONTEXT conv=%s (%d prepared messages) ===", id, len(prepared))
@@ -195,7 +194,7 @@ async def get_conversation_ctx_tokens(
     all_msgs = list((await sess.scalars(select(db.Message).where(db.Message.conversation_id == id))).all())
     branch = _build_active_branch_path(all_msgs, conv.active_message_id)
     _deduplicate_branch_file_reads(branch)
-    messages = await _build_inference_context(branch, settings.active_prompt_id, sess)
+    messages = await build_inference_context(branch, settings.active_prompt_id, sess)
     tools_list = get_ollama_tool_list(list(TOOL_REGISTRY.keys()))
     ctx_tokens = await backend.count_tokens(backend.prepare_messages(messages), tools_list)
     return {"ctx_tokens": ctx_tokens}
