@@ -105,7 +105,7 @@
       >{{ mode ?? 'standard' }}</span>
       <button
         class="text-sm leading-none transition-colors cursor-pointer px-1 font-mono"
-        [class]="contextViewOpen() ? 'text-indigo-400 hover:text-indigo-300' : 'text-gray-400 hover:text-indigo-600'"
+        [class]="contextViewOpen() ? 'text-indigo-400' : 'text-gray-400'"
         title="Toggle inference context view"
         (click)="contextViewOpen.set(!contextViewOpen())"
       >

@@ -519,6 +519,35 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-bottom-color: #6366f1;
 }
 
+/* --- CONTEXT VIEW --- */
+.ctx-bg-system    { background-color: #1a0d2e; }
+.ctx-bg-user      { background-color: #0d1827; }
+.ctx-bg-assistant { background-color: #111827; }
+.ctx-bg-tool      { background-color: #1a120d; }
+.ctx-badge-system    { background: #3b0764; color: #c084fc; }
+.ctx-badge-user      { background: #1e3a5f; color: #93c5fd; }
+.ctx-badge-assistant { background: #14532d; color: #86efac; }
+.ctx-badge-tool      { background: #451a03; color: #fcd34d; }
+
+/* --- MISSING UTILITIES --- */
+.border-b      { border-bottom: 1px solid #334155; }
+.border-y      { border-top: 1px solid #334155; border-bottom: 1px solid #334155; }
+.text-gray-300 { color: #d1d5db; }
+.text-gray-400 { color: #9ca3af; }
+.text-gray-500 { color: #6b7280; }
+.text-gray-600 { color: #4b5563; }
+.text-indigo-400 { color: #818cf8; }
+.text-10       { font-size: 0.625rem; }
+.text-11       { font-size: 0.6875rem; }
+.leading-snug  { line-height: 1.375; }
+.select-none   { user-select: none; }
+.italic        { font-style: italic; }
+.uppercase     { text-transform: uppercase; }
+.tracking-wide { letter-spacing: 0.05em; }
+.py-0-5        { padding-top: 0.125rem; padding-bottom: 0.125rem; }
+.py-1          { padding-top: 0.25rem; padding-bottom: 0.25rem; }
+.gap-1-5       { gap: 0.375rem; }
+
 /* --- SLASH COMMAND PALETTE --- */
 .slash-palette {
   position: absolute;

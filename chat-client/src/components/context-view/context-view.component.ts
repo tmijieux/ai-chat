@@ -50,18 +50,18 @@ export class ContextViewComponent {
   }
 
   roleBadgeClass(role: string): string {
-    if (role === 'system') { return 'bg-purple-900 text-purple-300' }
-    if (role === 'user') { return 'bg-blue-900 text-blue-300' }
-    if (role === 'assistant') { return 'bg-green-900 text-green-300' }
-    if (role === 'tool') { return 'bg-amber-900 text-amber-300' }
-    return 'bg-gray-800 text-gray-400'
+    if (role === 'system') { return 'ctx-badge-system' }
+    if (role === 'user') { return 'ctx-badge-user' }
+    if (role === 'assistant') { return 'ctx-badge-assistant' }
+    if (role === 'tool') { return 'ctx-badge-tool' }
+    return 'badge-neutral'
   }
 
   entryContentClass(role: string): string {
-    if (role === 'system') { return 'bg-purple-950' }
-    if (role === 'user') { return 'bg-blue-950' }
-    if (role === 'assistant') { return 'bg-gray-900' }
-    if (role === 'tool') { return 'bg-amber-950' }
-    return 'bg-gray-900'
+    if (role === 'system') { return 'ctx-bg-system' }
+    if (role === 'user') { return 'ctx-bg-user' }
+    if (role === 'assistant') { return 'ctx-bg-assistant' }
+    if (role === 'tool') { return 'ctx-bg-tool' }
+    return 'ctx-bg-assistant'
   }
 }
