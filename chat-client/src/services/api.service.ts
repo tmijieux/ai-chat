@@ -5,6 +5,7 @@ import {
   AgentToolsResponse,
   AppSetting,
   AppStatus,
+  ContextEntry,
   Conversation,
   ConversationSettings,
   FileSearchResult,
@@ -102,6 +103,10 @@ export class ApiService {
 
   get_ctx_tokens(id: string) {
     return this.http.get<{ ctx_tokens: number }>(`${BASE_URL}/conversations/${id}/ctx-tokens`)
+  }
+
+  get_inference_context(id: string) {
+    return this.http.get<{ entries: ContextEntry[] }>(`${BASE_URL}/conversations/${id}/inference-context`)
   }
 
   compress_conversation(id: string, protect_last = false, is_mid_run = false) {

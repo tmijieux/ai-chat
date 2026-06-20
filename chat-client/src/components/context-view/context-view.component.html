@@ -1,0 +1,40 @@
+<div class="flex flex-col h-full border-l border-gray-700 bg-gray-950">
+  <!-- header -->
+  <div class="flex items-center justify-between px-3 py-2 border-b border-gray-700 bg-gray-900 shrink-0">
+    <span class="text-xs font-semibold text-gray-300">Inference Context</span>
+    @if (!loading()) {
+      <span class="text-xs text-indigo-400">{{ entries().length }} msgs · ~{{ totalTokens() | number }} tokens</span>
+    } @else {
+      <span class="text-xs text-gray-500 animate-pulse">Loading…</span>
+    }
+  </div>
+
+  <!-- entries list -->
+  <div class="flex-1 overflow-y-auto p-2 flex flex-col gap-1.5">
+    @for (entry of entries(); track $index) {
+      <div class="rounded px-2 py-1.5 text-xs" [class]="entryBgClass(entry.role)">
+        <!-- entry header: role badge + status + token count -->
+        <div class="flex items-center gap-1.5 mb-1 flex-wrap">
+          <span class="font-mono font-bold uppercase tracking-wide text-[10px] px-1.5 py-0.5 rounded" [class]="roleBadgeClass(entry.role)">
+            {{ entry.tool_name ?? entry.role }}
+          </span>
+          @if (entry.status && entry.status !== 'success') {
+            <span class="text-[10px] text-gray-500 italic">[{{ entry.status }}]</span>
+          }
+          @if (entry.image_count > 0) {
+            <span class="text-[10px] text-gray-500">+{{ entry.image_count }} img</span>
+          }
+          <span class="ml-auto text-[10px] text-gray-600">~{{ entry.token_count }}t</span>
+        </div>
+        <!-- content preview -->
+        <pre class="text-gray-400 whitespace-pre-wrap break-words leading-snug text-[11px] m-0 font-sans">{{ entry.content }}</pre>
+      </div>
+    }
+
+    @if (!loading() && entries().length === 0) {
+      <div class="flex items-center justify-center flex-1 text-gray-600 text-xs italic mt-8">
+        No context yet
+      </div>
+    }
+  </div>
+</div>

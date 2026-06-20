@@ -200,6 +200,64 @@ async def get_conversation_ctx_tokens(
     return {"ctx_tokens": ctx_tokens}
 
 
+@router.get("/api/conversations/{id}/inference-context")
+async def get_inference_context(
+    id: str,
+    sess: AsyncSession = Depends(get_db_session),
+):
+    """Return the exact inference context as a structured list for the frontend context viewer."""
+    conv = (await sess.scalars(select(db.Conversation).where(db.Conversation.id == id))).first()
+    if conv is None:
+        raise HTTPException(404)
+
+    settings = _parse_conv_settings(conv)
+    all_msgs = list((await sess.scalars(select(db.Message).where(db.Message.conversation_id == id))).all())
+    branch = _build_active_branch_path(all_msgs, conv.active_message_id)
+    _deduplicate_branch_file_reads(branch)
+    messages = await build_inference_context(branch, settings.active_prompt_id, sess)
+    prepared = backend.prepare_messages(messages)
+
+    entries = []
+    for m in prepared:
+        role = m.get("role", "?")
+        raw_content = m.get("content") or ""
+
+        if isinstance(raw_content, list):
+            text_parts = [p.get("text", "") for p in raw_content if isinstance(p, dict) and p.get("type") == "text"]
+            image_count = sum(1 for p in raw_content if isinstance(p, dict) and p.get("type") == "image_url")
+            display_content = " ".join(text_parts)
+        else:
+            display_content = raw_content
+            image_count = 0
+
+        token_count = await backend.count_text_tokens(display_content) if display_content else 0
+
+        tool_name = None
+        status = None
+        if role == "tool":
+            try:
+                tool_data: ToolResult = json.loads(raw_content)
+                tool_name = tool_data.get("tool")
+                status = tool_data.get("status")
+                if status == "compressed":
+                    display_content = tool_data.get("summary", display_content)
+                elif status == "evicted":
+                    display_content = f"{tool_name} [evicted]"
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        entries.append({
+            "role": role,
+            "token_count": token_count,
+            "content": display_content[:800],
+            "tool_name": tool_name,
+            "status": status,
+            "image_count": image_count,
+        })
+
+    return {"entries": entries}
+
+
 @router.post("/api/conversations/{id}/compress")
 async def compress_conversation(
     id: str,

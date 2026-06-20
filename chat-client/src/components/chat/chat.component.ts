@@ -22,6 +22,7 @@ import { DirectoryPickerComponent } from '../directory-picker/directory-picker.c
 import { PlanCardComponent, PlanAcceptPayload } from '../plan-card/plan-card.component'
 import { AgentQuestionCardComponent } from '../agent-question-card/agent-question-card.component'
 import { ToolEvaluatingComponent } from '../tool-evaluating/tool-evaluating.component'
+import { ContextViewComponent } from '../context-view/context-view.component'
 
 @Component({
   selector: 'app-chat',
@@ -41,6 +42,7 @@ import { ToolEvaluatingComponent } from '../tool-evaluating/tool-evaluating.comp
     PlanCardComponent,
     AgentQuestionCardComponent,
     ToolEvaluatingComponent,
+    ContextViewComponent,
   ],
   templateUrl: './chat.component.html',
   styleUrls: ['./chat.component.scss'],
@@ -54,6 +56,7 @@ export class ChatComponent implements OnDestroy {
 
   readonly drawerOpen = signal(false)
   readonly sidebarPickerOpen = signal(false)
+  readonly contextViewOpen = signal(false)
 
   readonly workspaceName = computed(() => {
     const dir = this.chatSvc.currentConversationSettings().working_directory

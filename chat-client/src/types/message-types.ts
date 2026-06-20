@@ -130,6 +130,15 @@ export type AppSetting = {
   value: string | null
 }
 
+export type ContextEntry = {
+  role: string
+  token_count: number
+  content: string
+  tool_name?: string | null
+  status?: string | null
+  image_count: number
+}
+
 export type AgentToolMeta = {
   name: string
   description: string
