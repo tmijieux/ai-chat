@@ -203,7 +203,8 @@ button {
 }
 
 .w-800px {
-  width: 800px;
+  width: 100%;
+  max-width: 800px;
 }
 .min-w-0 {
   min-width: 0;
