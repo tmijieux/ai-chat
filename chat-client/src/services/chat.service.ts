@@ -669,6 +669,7 @@ export class ChatService {
       } else if (event.type === 'iteration_end') {
         const tokens = event.prompt_tokens ?? 0
         this._promptTokens.set(tokens)
+        this._contextRevision.update((n) => n + 1)
         const tokenCountForIteration = capturedGenerationCtxTokens
         capturedGenerationCtxTokens = null
         streamingToolCallsAcc = new Map()
@@ -707,6 +708,7 @@ export class ChatService {
       } else if (event.type === 'ctx_update') {
         lastKnownCtxTokens = event.ctx_tokens ?? 0
         this._promptTokens.set(event.ctx_tokens ?? 0)
+        this._contextRevision.update((n) => n + 1)
         if (!patchedUserMessage) {
           patchedUserMessage = true
           const capturedTokens = lastKnownCtxTokens
