@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
 from agent.agent import AgentSession, run_agent
+from agent.compress import apply_db_compressions
 from agent.pipeline import PipelineOrchestrator
 from agent.workflow_loader import load_workflow
 from agent.custom_workflow import CustomWorkflowOrchestrator
@@ -26,7 +27,6 @@ from database import get_db_session, AsyncSession
 import loaders as ld
 import tables as db
 from message_types import LLMMessage
-from tool_result_types import ToolResult
 
 router = APIRouter()
 
@@ -106,50 +106,6 @@ def _build_tool_set(mode: str, active_tool_names: list[str]) -> ToolSet:
         return ToolSet(tools=tools, extra_tools=None)
 
 
-async def _apply_db_compressions(
-    sess: AsyncSession, messages: list[LLMMessage], conv_id: str
-) -> list[LLMMessage]:
-    """Patch in-memory tool messages with their compressed summaries after mid-run compression.
-    Matches by tool_call_id so assistant messages (not persisted to DB) are preserved."""
-    compressed_rows = (await sess.execute(
-        select(db.Message)
-        .where(db.Message.conversation_id == conv_id)
-        .where(db.Message.context_excluded == True)
-        .where(db.Message.compressed_summary.isnot(None))
-    )).scalars().all()
-
-    call_id_to_summary: dict[str, str] = {}
-    for m in compressed_rows:
-        try:
-            content: ToolResult = json.loads(m.content)
-            call_id = content.get("tool_call_id")
-            if call_id is not None and m.compressed_summary is not None:
-                call_id_to_summary[call_id] = m.compressed_summary
-        except (json.JSONDecodeError, ValueError, TypeError):
-            logger.warning("continue despite error")
-
-    for msg in messages:
-        if msg.get("role") != "tool":
-            continue
-        raw_content = msg.get("content")
-        if not isinstance(raw_content, str):
-            continue
-        try:
-            content_dict: ToolResult = json.loads(raw_content)
-        except (json.JSONDecodeError, ValueError, TypeError):
-            logger.warning("continue despite error")
-            continue
-        call_id = content_dict.get("tool_call_id")
-        if call_id is not None and call_id in call_id_to_summary:
-            msg["content"] = json.dumps({
-                "tool": content_dict.get("tool", "tool"),
-                "status": "compressed",
-                "summary": call_id_to_summary[call_id],
-                "tool_call_id": call_id,
-            })
-
-    return messages
-
 
 def _create_agent_task(
     session: AgentSession,
@@ -219,7 +175,7 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
         session.working_directory = settings.working_directory
         session.last_user_message = user_message
         if conversation_id is not None:
-            session.apply_db_compressions_callback = functools.partial(_apply_db_compressions, sess, messages)
+            session.apply_db_compressions_callback = functools.partial(apply_db_compressions, sess, messages)
 
         agent_task = _create_agent_task(
             session, workflow_name, settings.working_directory,

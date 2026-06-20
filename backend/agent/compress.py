@@ -1,17 +1,18 @@
 import json
 import logging
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
 from llm.base import LLMBackend
-from message_types import TrackedMessage
+from message_types import LLMMessage, TrackedMessage
 from tool_result_types import (
-    GlobFilesResult, 
-    GrepFilesResult, 
-    ReadFileResult, 
-    RunShellResult, 
-    SearchWebResult, 
+    GlobFilesResult,
+    GrepFilesResult,
+    ReadFileResult,
+    RunShellResult,
+    SearchWebResult,
     ToolResult
 )
 
@@ -806,7 +807,6 @@ async def compress_messages(
 # Working memory
 # ---------------------------------------------------------------------------
 
-WORKING_MEMORY_ENABLED = True
 DIGEST_TOKEN_BUDGET = 6000
 _DIGEST_PIECE_MAX_CHARS = 1600    # ~400 tokens cap per piece before budget truncation
 _THINKING_EXCERPT_MAX_CHARS = 300
@@ -970,3 +970,151 @@ async def write_working_memory(
         list(working_memory_json.keys()),
     )
     return WorkingMemoryResult(working_memory_json=working_memory_json, rendered=rendered)
+
+
+# ---------------------------------------------------------------------------
+# DB-level compression application (mid-run patch and working memory insertion)
+# ---------------------------------------------------------------------------
+
+async def apply_db_compressions(
+    sess: "AsyncSession", messages: list[LLMMessage], conv_id: str
+) -> list[LLMMessage]:
+    """Patch in-memory tool messages with their compressed summaries after mid-run compression.
+
+    Matches by tool_call_id so assistant messages (not persisted to DB) are preserved.
+    """
+    from database import AsyncSession  # noqa: F401 — type-only at runtime
+    from sqlalchemy import select
+    import tables as db
+
+    compressed_rows = (await sess.execute(
+        select(db.Message)
+        .where(db.Message.conversation_id == conv_id)
+        .where(db.Message.context_excluded == True)
+        .where(db.Message.compressed_summary.isnot(None))
+    )).scalars().all()
+
+    call_id_to_summary: dict[str, str] = {}
+    for m in compressed_rows:
+        try:
+            content: ToolResult = json.loads(m.content)
+            call_id = content.get("tool_call_id")
+            if call_id is not None and m.compressed_summary is not None:
+                call_id_to_summary[call_id] = m.compressed_summary
+        except (json.JSONDecodeError, ValueError, TypeError):
+            logger.warning("apply_db_compressions: failed to parse message content, skipping")
+
+    for msg in messages:
+        if msg.get("role") != "tool":
+            continue
+        raw_content = msg.get("content")
+        if not isinstance(raw_content, str):
+            continue
+        try:
+            content_dict: ToolResult = json.loads(raw_content)
+        except (json.JSONDecodeError, ValueError, TypeError):
+            logger.warning("apply_db_compressions: failed to parse in-memory message content, skipping")
+            continue
+        call_id = content_dict.get("tool_call_id")
+        if call_id is not None and call_id in call_id_to_summary:
+            msg["content"] = json.dumps({
+                "tool": content_dict.get("tool", "tool"),
+                "status": "compressed",
+                "summary": call_id_to_summary[call_id],
+                "tool_call_id": call_id,
+            })
+
+    return messages
+
+
+async def apply_working_memory(
+    conv: "db.Conversation",
+    branch: "list[db.Message]",
+    conversation_id: str,
+    sess: "AsyncSession",
+) -> None:
+    """Synthesize or update the working memory message for a conversation.
+
+    Covers all messages before the last user message with a structured summary.
+    Inserts the working memory message into the tree between the last covered message
+    and the first live message (the last user message). Marks covered messages excluded.
+    """
+    import tables as db
+    from conv_helpers import _now
+
+    last_user_index: int | None = None
+    for i, m in enumerate(branch):
+        if m.role == "user":
+            last_user_index = i
+
+    if last_user_index is None or last_user_index == 0:
+        logger.debug("apply_working_memory: nothing to cover (no preceding messages)")
+        return
+
+    first_live = branch[last_user_index]
+
+    previous_working_memory: db.Message | None = None
+    digest_start_index = 0
+    for i, m in enumerate(branch):
+        if m.role == "context_summary" and not m.context_excluded:
+            previous_working_memory = m
+            digest_start_index = i + 1
+            break
+
+    messages_to_cover = branch[digest_start_index:last_user_index]
+    if not messages_to_cover:
+        logger.debug("apply_working_memory: no new messages to cover since last working memory")
+        return
+
+    snapshots = [
+        MessageSnapshot(
+            role=m.role,
+            content=m.content,
+            thinking=m.thinking,
+            compressed_summary=m.compressed_summary,
+        )
+        for m in messages_to_cover
+    ]
+    digest = build_digest(snapshots)
+
+    previous_json: dict | None = None
+    if previous_working_memory is not None:
+        try:
+            previous_json = json.loads(previous_working_memory.working_memory_json or "{}")
+        except (json.JSONDecodeError, ValueError):
+            previous_json = None
+
+    from llm import backend
+    working_memory_result = await write_working_memory(previous_json, digest, backend)
+
+    last_covered = branch[last_user_index - 1]
+    new_working_memory_message = db.Message(
+        id=str(uuid.uuid4()),
+        conversation_id=conversation_id,
+        parent_id=last_covered.id,
+        role="context_summary",
+        content=working_memory_result.rendered,
+        working_memory_json=json.dumps(working_memory_result.working_memory_json, ensure_ascii=False),
+        created_at=_now(),
+        context_excluded=False,
+        is_degenerate=False,
+    )
+    sess.add(new_working_memory_message)
+
+    first_live.parent_id = new_working_memory_message.id
+
+    for m in messages_to_cover:
+        m.context_excluded = True
+        if m.exclusion_reason is None or m.exclusion_reason == "":
+            m.exclusion_reason = "working_memory"
+
+    if previous_working_memory is not None:
+        previous_working_memory.context_excluded = True
+        previous_working_memory.exclusion_reason = "working_memory_superseded"
+
+    await sess.flush()
+    logger.info(
+        "apply_working_memory: covered %d messages, working memory id=%s",
+        len(messages_to_cover),
+        new_working_memory_message.id,
+    )
