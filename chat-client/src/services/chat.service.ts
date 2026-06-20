@@ -489,6 +489,7 @@ export class ChatService {
             token_delta: tokenDelta ?? undefined,
           }),
         )
+        this._contextRevision.update((n) => n + 1)
       })
     }
 
@@ -649,6 +650,7 @@ export class ChatService {
               token_delta: tokenDelta ?? undefined,
             }),
           )
+          this._contextRevision.update((n) => n + 1)
         })
       } else if (event.type === 'generation_end') {
         if (streamingToolCallsAcc.size > 0) {
@@ -669,7 +671,6 @@ export class ChatService {
       } else if (event.type === 'iteration_end') {
         const tokens = event.prompt_tokens ?? 0
         this._promptTokens.set(tokens)
-        this._contextRevision.update((n) => n + 1)
         const tokenCountForIteration = capturedGenerationCtxTokens
         capturedGenerationCtxTokens = null
         streamingToolCallsAcc = new Map()
@@ -708,7 +709,6 @@ export class ChatService {
       } else if (event.type === 'ctx_update') {
         lastKnownCtxTokens = event.ctx_tokens ?? 0
         this._promptTokens.set(event.ctx_tokens ?? 0)
-        this._contextRevision.update((n) => n + 1)
         if (!patchedUserMessage) {
           patchedUserMessage = true
           const capturedTokens = lastKnownCtxTokens
@@ -740,6 +740,7 @@ export class ChatService {
               await this._reloadFromDb()
             } finally {
               this._isCompressing.set(false)
+              this._contextRevision.update((n) => n + 1)
             }
             this.agentSvc.compressionDone(convId)
           })
