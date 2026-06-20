@@ -15,7 +15,7 @@ from conv_helpers import ToolSet, _find_superseded_read_file_indices
 
 from .tools import TOOL_REGISTRY, get_ollama_tool_list
 from .auto_safety import evaluate_tool_safety, _ALWAYS_SAFE_TOOLS, _FILE_WRITE_TOOLS, is_path_inside_workspace
-from .compress import _summarize_shell_output, _summarize_search_results, WORKING_MEMORY_ENABLED, WORKING_MEMORY_ITERATION_THRESHOLD
+from .compress import _summarize_shell_output, _summarize_search_results, WORKING_MEMORY_ITERATION_THRESHOLD
 from llm import backend
 from llm.base import ToolCallStartEvent, ToolCallArgEvent
 from message_types import LLMMessage, AssistantMessage, ToolCall, ToolCallFunction
@@ -645,7 +645,7 @@ async def _maybe_compress_on_iteration_threshold(
     Returns True if compression was triggered (caller should reset iteration_count).
     Mutates messages in place with the refreshed context.
     """
-    if not WORKING_MEMORY_ENABLED or turn.length_compressed or iteration_count < WORKING_MEMORY_ITERATION_THRESHOLD:
+    if turn.length_compressed or iteration_count < WORKING_MEMORY_ITERATION_THRESHOLD:
         return False
     logger.info("Iteration threshold reached (%d) — triggering compression", iteration_count)
     await session.emit({"type": "compressing", "ctx_tokens": 0, "ctx_limit": CTX_LIMIT, "reason": "iteration_threshold"})

@@ -5,6 +5,10 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy import select
+
+from database import AsyncSession
+import tables as db
 from llm.base import LLMBackend
 from message_types import LLMMessage, TrackedMessage
 from tool_result_types import (
@@ -15,6 +19,8 @@ from tool_result_types import (
     SearchWebResult,
     ToolResult
 )
+from conv_helpers import _now, _build_active_branch_path, _build_inference_context, _parse_conv_settings
+from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
 
 logger = logging.getLogger(__name__)
 
@@ -977,16 +983,12 @@ async def write_working_memory(
 # ---------------------------------------------------------------------------
 
 async def apply_db_compressions(
-    sess: "AsyncSession", messages: list[LLMMessage], conv_id: str
+    sess: AsyncSession, messages: list[LLMMessage], conv_id: str
 ) -> list[LLMMessage]:
     """Patch in-memory tool messages with their compressed summaries after mid-run compression.
 
     Matches by tool_call_id so assistant messages (not persisted to DB) are preserved.
     """
-    from database import AsyncSession  # noqa: F401 — type-only at runtime
-    from sqlalchemy import select
-    import tables as db
-
     compressed_rows = (await sess.execute(
         select(db.Message)
         .where(db.Message.conversation_id == conv_id)
@@ -1028,10 +1030,11 @@ async def apply_db_compressions(
 
 
 async def apply_working_memory(
-    conv: "db.Conversation",
-    branch: "list[db.Message]",
+    conv: db.Conversation,
+    branch: list[db.Message],
     conversation_id: str,
-    sess: "AsyncSession",
+    sess: AsyncSession,
+    backend: LLMBackend,
 ) -> None:
     """Synthesize or update the working memory message for a conversation.
 
@@ -1039,8 +1042,6 @@ async def apply_working_memory(
     Inserts the working memory message into the tree between the last covered message
     and the first live message (the last user message). Marks covered messages excluded.
     """
-    import tables as db
-    from conv_helpers import _now
 
     last_user_index: int | None = None
     for i, m in enumerate(branch):
@@ -1084,7 +1085,6 @@ async def apply_working_memory(
         except (json.JSONDecodeError, ValueError):
             previous_json = None
 
-    from llm import backend
     working_memory_result = await write_working_memory(previous_json, digest, backend)
 
     last_covered = branch[last_user_index - 1]
@@ -1118,3 +1118,92 @@ async def apply_working_memory(
         len(messages_to_cover),
         new_working_memory_message.id,
     )
+
+
+# ---------------------------------------------------------------------------
+# Top-level compression entry point
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RunCompressionResult:
+    """Result of run_compression: per-message compressions, updated summary, and new context token count."""
+    compressions: list[Compression]
+    new_summary: str
+    ctx_tokens: int
+
+
+async def run_compression(
+    conv: db.Conversation,
+    branch: list[db.Message],
+    conversation_id: str,
+    sess: AsyncSession,
+    backend: LLMBackend,
+    protect_last: bool = False,
+    is_mid_run: bool = False,
+) -> RunCompressionResult:
+    """Run the full compression pipeline on a conversation branch.
+
+    Stage 1/2: classify and summarize tool results, writing compressed_summary to DB rows.
+    Stage 3: synthesize a working memory message covering all messages before the last user message.
+    Always runs Stage 3 regardless of whether there are tool candidates.
+    """
+    compressions: list[Compression] = []
+    new_summary: str = ""
+
+    candidates = [m for m in branch if m.role == "tool" and not m.context_excluded]
+
+    if candidates:
+        user_messages_goal = [m.content for m in reversed(branch) if m.role == "user"][:3]
+        user_message = "\n---\n".join(reversed(user_messages_goal)) if user_messages_goal else ""
+
+        all_dicts: list[TrackedMessage] = [{"id": m.id, "role": m.role, "content": m.content, "thinking": m.thinking} for m in branch]
+        candidate_dicts: list[TrackedMessage] = [{"id": m.id, "role": m.role, "content": m.content, "thinking": m.thinking} for m in candidates]
+
+        compression_result = await compress_messages(
+            candidate_dicts,
+            all_dicts,
+            user_message,
+            conversation_summary=None,
+            backend=backend,
+            protect_last=protect_last,
+            is_mid_run=is_mid_run,
+        )
+
+        for c in compression_result.compressions:
+            msg = next((m for m in candidates if m.id == c.message_id), None)
+            if msg is not None:
+                msg.context_excluded = True
+                msg.exclusion_reason = "compressed"
+                msg.compressed_summary = c.compressed_summary
+                msg.compression_label = c.compression_label
+                try:
+                    original: ToolResult = json.loads(msg.content)
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    original = {"tool": "tool", "status": "unknown"}
+                compressed_content = json.dumps({
+                    "tool": original.get("tool", "tool"),
+                    "status": "compressed",
+                    "summary": c.compressed_summary,
+                    "tool_call_id": original.get("tool_call_id", ""),
+                })
+                msg.compressed_token_count = await backend.count_text_tokens(compressed_content)
+
+        compressions = compression_result.compressions
+        new_summary = compression_result.new_summary
+        await sess.flush()
+
+    try:
+        await apply_working_memory(conv, branch, conversation_id, sess, backend)
+    except Exception:
+        logger.exception("Working memory synthesis failed — skipping")
+
+    final_all_msgs = list((await sess.execute(
+        select(db.Message).where(db.Message.conversation_id == conversation_id)
+    )).scalars().all())
+    final_branch = _build_active_branch_path(final_all_msgs, conv.active_message_id)
+    settings = _parse_conv_settings(conv)
+    inference_messages = await _build_inference_context(final_branch, settings.active_prompt_id, sess)
+    tools_list = get_ollama_tool_list([tool.name for tool in TOOL_REGISTRY.values()])
+    ctx_tokens = await backend.count_tokens(backend.prepare_messages(inference_messages), tools_list)
+
+    return RunCompressionResult(compressions=compressions, new_summary=new_summary, ctx_tokens=ctx_tokens)

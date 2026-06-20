@@ -8,11 +8,7 @@ from sqlalchemy import select
 
 from database import get_db_session, AsyncSession
 import tables as db
-from agent.compress import (
-    Compression,
-    compress_messages,
-    apply_working_memory,
-)
+from agent.compress import run_compression
 from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
 from conv_helpers import (
     _build_active_branch_path,
@@ -21,7 +17,6 @@ from conv_helpers import (
     _parse_conv_settings,
 )
 from llm import backend
-from message_types import TrackedMessage
 from tool_result_types import ToolResult
 
 router = APIRouter()
@@ -220,67 +215,5 @@ async def compress_conversation(
     all_msgs = list((await sess.scalars(select(db.Message).where(db.Message.conversation_id == id))).all())
     branch = _build_active_branch_path(all_msgs, conv.active_message_id)
 
-    candidates = [m for m in branch if m.role == "tool" and not m.context_excluded]
-    if not candidates:
-        return {"compressions": [], "new_summary": ""}
-
-    compressions: list[Compression] = []
-    new_summary: str = ""
-
-    if candidates:
-        user_messages_goal = [m.content for m in reversed(branch) if m.role == "user"][:3]
-        user_message = "\n---\n".join(reversed(user_messages_goal)) if user_messages_goal else ""
-
-        all_dicts: list[TrackedMessage] = [{"id": m.id, "role": m.role, "content": m.content, "thinking": m.thinking} for m in branch]
-        candidate_dicts: list[TrackedMessage] = [{"id": m.id, "role": m.role, "content": m.content, "thinking": m.thinking} for m in candidates]
-
-        compression_result = await compress_messages(
-            candidate_dicts,
-            all_dicts,
-            user_message,
-            conversation_summary=None,
-            backend=backend,
-            protect_last=protect_last,
-            is_mid_run=is_mid_run,
-        )
-
-        for c in compression_result.compressions:
-            msg = next((m for m in candidates if m.id == c.message_id), None)
-            if msg is not None:
-                msg.context_excluded = True
-                msg.exclusion_reason = "compressed"
-                msg.compressed_summary = c.compressed_summary
-                msg.compression_label = c.compression_label
-                try:
-                    original: ToolResult = json.loads(msg.content)
-                except (json.JSONDecodeError, ValueError, TypeError):
-                    original = {"tool": "tool", "status": "unknown"}
-                compressed_content = json.dumps({
-                    "tool": original.get("tool", "tool"),
-                    "status": "compressed",
-                    "summary": c.compressed_summary,
-                    "tool_call_id": original.get("tool_call_id", ""),
-                })
-                msg.compressed_token_count = await backend.count_text_tokens(compressed_content)
-
-        compressions = compression_result.compressions
-        new_summary = compression_result.new_summary
-        await sess.flush()
-
-    try:
-        await apply_working_memory(conv, branch, id, sess)
-    except Exception:
-        logger.exception("Working memory synthesis failed — skipping")
-
-    final_all_msgs = list((await sess.scalars(select(db.Message).where(db.Message.conversation_id == id))).all())
-    final_branch = _build_active_branch_path(final_all_msgs, conv.active_message_id)
-    settings = _parse_conv_settings(conv)
-    inference_messages = await _build_inference_context(final_branch, settings.active_prompt_id, sess)
-    tools_list = get_ollama_tool_list([tool.name for tool in TOOL_REGISTRY.values()])
-    ctx_tokens = await backend.count_tokens(backend.prepare_messages(inference_messages), tools_list)
-
-    return {
-        "compressions": compressions,
-        "new_summary": new_summary,
-        "ctx_tokens": ctx_tokens,
-    }
+    result = await run_compression(conv, branch, id, sess, backend, protect_last=protect_last, is_mid_run=is_mid_run)
+    return {"compressions": result.compressions, "new_summary": result.new_summary, "ctx_tokens": result.ctx_tokens}
