@@ -987,6 +987,79 @@ async def write_working_memory(
 _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 
+async def load_system_prompt(prompt_id: str, sess: AsyncSession) -> LLMMessage | None:
+    """Load a system prompt by slug, prepend today's date, return as a system LLMMessage.
+
+    Returns None if the prompt file does not exist.
+    """
+    import yaml as _yaml
+    prompt_path = _PROMPTS_DIR / f"{prompt_id}.yaml"
+    if not prompt_path.exists():
+        return None
+    data = _yaml.safe_load(prompt_path.read_text(encoding="utf-8"))
+    today = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")
+    content = f"Today's date: {today}\n\n{data.get('content') or ''}"
+    return {"role": "system", "content": content}
+
+
+async def fetch_images_by_message(branch: list[db.Message], sess: AsyncSession) -> dict[str, list]:
+    """Fetch image attachments for all messages in the branch, grouped by message_id."""
+    branch_ids = [m.id for m in branch]
+    if not branch_ids:
+        return {}
+    img_rows = (await sess.execute(
+        select(db.MessageImageAttachment, db.Image)
+        .join(db.Image, db.MessageImageAttachment.image_id == db.Image.id)
+        .where(db.MessageImageAttachment.message_id.in_(branch_ids))
+        .order_by(db.MessageImageAttachment.position)
+    )).all()
+    images_by_msg: dict[str, list] = {}
+    for att, img in img_rows:
+        images_by_msg.setdefault(att.message_id, []).append(img)
+    return images_by_msg
+
+
+def assemble_message(
+    m: db.Message,
+    images_by_msg: dict[str, list],
+    interrupted_id: str | None,
+) -> LLMMessage:
+    """Assemble one non-excluded, non-summary DB message into an LLMMessage.
+
+    Handles thinking prepend for interrupted tool-calling turns, tool_calls reconstruction,
+    and multipart image content.
+    """
+    content = m.content or ""
+    if m.id == interrupted_id:
+        if m.thinking is not None and not content.startswith("<think>"):
+            content = f"<think>{m.thinking}</think>{content}"
+        try:
+            stored_calls = json.loads(m.tool_calls)
+            tool_calls_for_context = [
+                {
+                    "id": tc.get("id", f"tc-{i}"),
+                    "type": "function",
+                    "function": {"name": tc["name"], "arguments": tc.get("args", {})},
+                }
+                for i, tc in enumerate(stored_calls)
+            ]
+        except (json.JSONDecodeError, ValueError, KeyError):
+            tool_calls_for_context = []
+    else:
+        tool_calls_for_context = []
+
+    msg: LLMMessage = {"role": m.role, "content": content}
+    if len(tool_calls_for_context) > 0:
+        msg["tool_calls"] = tool_calls_for_context
+    imgs = images_by_msg.get(m.id, [])
+    if imgs:
+        multipart_content: list[dict] = [{"type": "text", "text": content}]
+        for img in imgs:
+            multipart_content.append({"type": "image_url", "image_url": {"url": f"data:{img.mime_type};base64,{img.data}"}})
+        msg["content"] = multipart_content
+    return msg
+
+
 async def build_inference_context(
     branch: list[db.Message],
     prompt_id: str | None,
@@ -998,28 +1071,14 @@ async def build_inference_context(
     Excluded messages without a summary are dropped entirely.
     context_summary messages (working memory) are injected as user-role messages.
     """
-    import yaml as _yaml
-
     messages: list[LLMMessage] = []
+
     if prompt_id is not None:
-        prompt_path = _PROMPTS_DIR / f"{prompt_id}.yaml"
-        if prompt_path.exists():
-            data = _yaml.safe_load(prompt_path.read_text(encoding="utf-8"))
-            today = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")
-            content = f"Today's date: {today}\n\n{data.get('content') or ''}"
-            messages.append({"role": "system", "content": content})
+        system_msg = await load_system_prompt(prompt_id, sess)
+        if system_msg is not None:
+            messages.append(system_msg)
 
-    branch_ids = [m.id for m in branch]
-    img_rows = (await sess.execute(
-        select(db.MessageImageAttachment, db.Image)
-        .join(db.Image, db.MessageImageAttachment.image_id == db.Image.id)
-        .where(db.MessageImageAttachment.message_id.in_(branch_ids))
-        .order_by(db.MessageImageAttachment.position)
-    )).all() if branch_ids else []
-
-    images_by_msg: dict[str, list] = {}
-    for att, img in img_rows:
-        images_by_msg.setdefault(att.message_id, []).append(img)
+    images_by_msg = await fetch_images_by_message(branch, sess)
 
     non_excluded = [m for m in branch if not m.context_excluded]
     last_assistant = next((m for m in reversed(non_excluded) if m.role == "assistant"), None)
@@ -1047,35 +1106,7 @@ async def build_inference_context(
         if m.role == "context_summary":
             messages.append({"role": "user", "content": m.content})
             continue
-        content = m.content or ""
-        if m.id == interrupted_id:
-            if m.thinking is not None and not content.startswith("<think>"):
-                content = f"<think>{m.thinking}</think>{content}"
-            try:
-                stored_calls = json.loads(m.tool_calls)
-                tool_calls_for_context = [
-                    {
-                        "id": tc.get("id", f"tc-{i}"),
-                        "type": "function",
-                        "function": {"name": tc["name"], "arguments": tc.get("args", {})},
-                    }
-                    for i, tc in enumerate(stored_calls)
-                ]
-            except (json.JSONDecodeError, ValueError, KeyError):
-                tool_calls_for_context = []
-        else:
-            tool_calls_for_context = []
-
-        msg: LLMMessage = {"role": m.role, "content": content}
-        if len(tool_calls_for_context) > 0:
-            msg["tool_calls"] = tool_calls_for_context
-        imgs = images_by_msg.get(m.id, [])
-        if imgs:
-            multipart_content: list[dict] = [{"type": "text", "text": content}]
-            for img in imgs:
-                multipart_content.append({"type": "image_url", "image_url": {"url": f"data:{img.mime_type};base64,{img.data}"}})
-            msg["content"] = multipart_content
-        messages.append(msg)
+        messages.append(assemble_message(m, images_by_msg, interrupted_id))
     return messages
 
 

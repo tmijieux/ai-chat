@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from database import get_db_session, AsyncSession
 import tables as db
-from agent.compress import run_compression, build_inference_context
+from agent.compress import run_compression, build_inference_context, fetch_images_by_message
 from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
 from conv_helpers import (
     _build_active_branch_path,
@@ -47,12 +47,12 @@ async def count_conversation_tokens(id: str, sess: AsyncSession = Depends(get_db
     tools = get_ollama_tool_list(tool_names)
     token_count_value = await backend.count_tokens(messages, tools)
 
-    img_rows = (await sess.execute(
-        select(db.Image.width, db.Image.height)
-        .join(db.MessageImageAttachment, db.MessageImageAttachment.image_id == db.Image.id)
-        .where(db.MessageImageAttachment.message_id.in_([m.id for m in branch]))
-    )).all()
-    image_tokens = sum(_image_token_count(w or 0, h or 0) for w, h in img_rows)
+    images_by_msg = await fetch_images_by_message(branch, sess)
+    image_tokens = sum(
+        _image_token_count(img.width or 0, img.height or 0)
+        for imgs in images_by_msg.values()
+        for img in imgs
+    )
     token_count_value += image_tokens
 
     last_id: str | None = None
