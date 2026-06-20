@@ -249,7 +249,7 @@ async def get_inference_context(
         entries.append({
             "role": role,
             "token_count": token_count,
-            "content": display_content[:800],
+            "content": display_content,
             "tool_name": tool_name,
             "status": status,
             "image_count": image_count,
