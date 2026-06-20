@@ -1,3 +1,4 @@
+"""FastAPI application entry point: app creation, lifespan startup, and /api/status."""
 import logging
 import threading
 from contextlib import asynccontextmanager
@@ -7,7 +8,7 @@ from fastapi import FastAPI
 from database import init_db
 from llm import backend
 import whisper_pipeline
-from routers import conversations, prompts, agents, utils, tokens, ws
+from routers import conversations, prompts, agents, utils, tokens, ws, stt
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ app.include_router(agents.router)
 app.include_router(utils.router)
 app.include_router(tokens.router)
 app.include_router(ws.router)
+app.include_router(stt.router)
 
 
 @app.get("/api/status")
