@@ -497,7 +497,7 @@
   <app-context-view
     class="flex-1 min-w-0 h-full"
     [conversationId]="chatSvc.currentConversationId()"
-    [refreshTrigger]="chatSvc.promptTokens()"
+    [refreshTrigger]="chatSvc.contextRevision()"
   />
 }
 </main>

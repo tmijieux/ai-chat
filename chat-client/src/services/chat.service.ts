@@ -73,6 +73,10 @@ export class ChatService {
   /** Latest prompt_tokens from the most recent agent iteration_end. */
   public readonly promptTokens = this._promptTokens.asReadonly()
 
+  private _contextRevision = signal(0)
+  /** Increments after every agent run and after compression — use as a refresh trigger. */
+  public readonly contextRevision = this._contextRevision.asReadonly()
+
   private _callingTool = signal<string | null>(null)
   /** Name of the tool whose arguments are currently being streamed; null when idle. */
   public readonly callingTool = this._callingTool.asReadonly()
@@ -252,6 +256,7 @@ export class ChatService {
       this._promptTokens.set(lastWithTokens?.token_count ?? 0)
       this.api.get_ctx_tokens(conversation.id).subscribe((r) => {
         this._promptTokens.set(r.ctx_tokens)
+        this._contextRevision.update((n) => n + 1)
       })
     })
   }
@@ -800,6 +805,7 @@ export class ChatService {
       }
     } finally {
       this._isCompressing.set(false)
+      this._contextRevision.update((n) => n + 1)
     }
   }
 
