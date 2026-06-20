@@ -10,25 +10,24 @@
   </div>
 
   <!-- entries list -->
-  <div class="flex-1 overflow-y-auto p-2 flex flex-col gap-1.5">
-    @for (entry of entries(); track $index) {
-      <div class="rounded px-2 py-1.5 text-xs" [class]="entryBgClass(entry.role)">
-        <!-- entry header: role badge + status + token count -->
-        <div class="flex items-center gap-1.5 mb-1 flex-wrap">
-          <span class="font-mono font-bold uppercase tracking-wide text-[10px] px-1.5 py-0.5 rounded" [class]="roleBadgeClass(entry.role)">
-            {{ entry.tool_name ?? entry.role }}
-          </span>
-          @if (entry.status && entry.status !== 'success') {
-            <span class="text-[10px] text-gray-500 italic">[{{ entry.status }}]</span>
-          }
-          @if (entry.image_count > 0) {
-            <span class="text-[10px] text-gray-500">+{{ entry.image_count }} img</span>
-          }
-          <span class="ml-auto text-[10px] text-gray-600">~{{ entry.token_count }}t</span>
-        </div>
-        <!-- content preview -->
-        <pre class="text-gray-400 whitespace-pre-wrap break-words leading-snug text-[11px] m-0 font-sans">{{ entry.content }}</pre>
+  <div class="flex-1 overflow-y-auto flex flex-col">
+    @for (entry of entries(); track $index; let index = $index) {
+      <!-- index label -->
+      <div class="flex items-center gap-2 px-3 py-0.5 bg-gray-900 border-y border-gray-700 shrink-0">
+        <span class="text-[10px] text-gray-600 font-mono select-none">{{ index + 1 }}</span>
+        <span class="font-mono font-bold uppercase tracking-wide text-[10px] px-1.5 py-0.5 rounded" [class]="roleBadgeClass(entry.role)">
+          {{ entry.tool_name ?? entry.role }}
+        </span>
+        @if (entry.status && entry.status !== 'success') {
+          <span class="text-[10px] text-gray-500 italic">[{{ entry.status }}]</span>
+        }
+        @if (entry.image_count > 0) {
+          <span class="text-[10px] text-gray-500">+{{ entry.image_count }} img</span>
+        }
+        <span class="ml-auto text-[10px] text-gray-500 font-mono">~{{ entry.token_count }}t</span>
       </div>
+      <!-- content -->
+      <pre class="text-gray-300 whitespace-pre-wrap break-words leading-snug text-[11px] m-0 font-sans px-3 py-2 shrink-0" [class]="entryContentClass(entry.role)">{{ entry.content }}</pre>
     }
 
     @if (!loading() && entries().length === 0) {

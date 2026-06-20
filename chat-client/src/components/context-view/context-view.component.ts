@@ -57,11 +57,11 @@ export class ContextViewComponent {
     return 'bg-gray-800 text-gray-400'
   }
 
-  entryBgClass(role: string): string {
-    if (role === 'system') { return 'bg-purple-950 border border-purple-800' }
-    if (role === 'user') { return 'bg-blue-950 border border-blue-800' }
-    if (role === 'assistant') { return 'bg-gray-900 border border-gray-700' }
-    if (role === 'tool') { return 'bg-amber-950 border border-amber-800' }
-    return 'bg-gray-900 border border-gray-700'
+  entryContentClass(role: string): string {
+    if (role === 'system') { return 'bg-purple-950' }
+    if (role === 'user') { return 'bg-blue-950' }
+    if (role === 'assistant') { return 'bg-gray-900' }
+    if (role === 'tool') { return 'bg-amber-950' }
+    return 'bg-gray-900'
   }
 }
