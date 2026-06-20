@@ -1,16 +1,21 @@
 import json
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from llm.base import LLMBackend
-from message_types import LLMMessage, TrackedMessage
-from tool_result_types import ToolResult
+from message_types import TrackedMessage
+from tool_result_types import (
+    GlobFilesResult, 
+    GrepFilesResult, 
+    ReadFileResult, 
+    RunShellResult, 
+    SearchWebResult, 
+    ToolResult
+)
 
 logger = logging.getLogger(__name__)
-
-
 
 
 @dataclass
@@ -53,16 +58,19 @@ def _following_thinking(all_messages: list[TrackedMessage], tool_id: str) -> str
     found = False
     for m in all_messages:
         if not found:
-            if m.get("role") == "tool":
+            if m["role"] == "tool":
+                assert isinstance(m["content"], str)
                 try:
-                    c = json.loads(m.get("content") or "{}")
+                    c = json.loads(m["content"])
                     if c.get("tool_call_id") == tool_id:
                         found = True
-                except (json.JSONDecodeError, ValueError):
+                except (json.JSONDecodeError, ValueError, TypeError):
                     pass
             continue
+
         if m.get("role") == "assistant":
-            text = m.get("thinking") or m.get("content") or ""
+            assert isinstance(m["content"], str)
+            text: str = m["thinking"] or m["content"] or ""
             return text[:600]
     return ""
 
@@ -84,7 +92,7 @@ def _key_args(result: ToolResult) -> str:
 
 def _result_metadata(result: ToolResult) -> dict[str, Any]:
     tool = result.get("tool", "")
-    meta: dict = {"status": result.get("status", "unknown")}
+    meta: dict[str,str|int] = {"status": result.get("status", "unknown")}
     if tool == "glob_files":
         meta["file_count"] = result.get("file_count", 0)
     elif tool == "grep_files":
@@ -98,7 +106,7 @@ def _result_metadata(result: ToolResult) -> dict[str, Any]:
         meta["line_count"] = len(content.splitlines())
     elif tool == "run_shell":
         meta["exit_code"] = result.get("exit_code", 0)
-        output = (result.get("output")or "")+ (result.get("stderr") or "")
+        output = (result.get("output") or "") + (result.get("stderr") or "")
         meta["line_count"] = len(output.splitlines())
     elif tool == "search_web":
         results_list = result.get("results") or []
@@ -468,7 +476,7 @@ def _split_by_lines(text: str, max_chars: int) -> list[str]:
     return chunks
 
 
-def _compact_glob_result(result: dict) -> str:
+def _compact_glob_result(result: GlobFilesResult) -> str:
     """Truncate a glob result to _GLOB_MAX_FILES paths, sorted shallowest-first."""
     files: list[str] = result.get("files") or []
     total = len(files)
@@ -480,7 +488,7 @@ def _compact_glob_result(result: dict) -> str:
     return f"[truncated: glob_files({repr(pattern)}) → {total} files]\n{lines}{suffix}"
 
 
-def _compact_grep_result(result: dict) -> str:
+def _compact_grep_result(result: GrepFilesResult) -> str:
     """Keep all match lines verbatim; drop context lines until under _GREP_MAX_CHARS."""
     matches: list[dict] = result.get("matches") or []
     pattern = result.get("pattern", "")
@@ -515,7 +523,7 @@ def _compact_grep_result(result: dict) -> str:
     return header + _render(all_kept) + suffix
 
 
-async def _summarize_shell_output(result: dict, backend: LLMBackend) -> str:
+async def _summarize_shell_output(result: RunShellResult, backend: LLMBackend) -> str:
     """Summarize a run_shell tool result, splitting large output into chunks if needed."""
     command_raw = result.get("command")
     command = (command_raw if command_raw is not None else "")[:80]
@@ -551,7 +559,7 @@ async def _summarize_shell_output(result: dict, backend: LLMBackend) -> str:
     )
 
 
-async def _summarize_search_results(result: dict, backend: LLMBackend) -> str:
+async def _summarize_search_results(result: SearchWebResult, backend: LLMBackend) -> str:
     query = result.get("query", "unknown")
     results_list = result.get("results") or []
 
@@ -581,7 +589,7 @@ async def _summarize_search_results(result: dict, backend: LLMBackend) -> str:
     return f"[compressed: search_web({repr(query)}) → {len(results_list)} result(s), {chunk_count} chunk(s) → ~{est_tokens} tokens]\n{combined}"
 
 
-async def _summarize_file(result: dict, backend: LLMBackend) -> str:
+async def _summarize_file(result: ReadFileResult, backend: LLMBackend) -> str:
     path = result.get("path", "unknown")
     content = result.get("file_content") or ""
     line_count = len(content.splitlines())
@@ -609,14 +617,22 @@ def _build_classifiable_pairs(
 ) -> list[ClassifiablePair]:
     """Build the list of classifiable pairs from candidate tool messages.
     Filters out non-tool messages and tools in _SKIP_CLASSIFY, and attaches metadata needed by the classifier."""
-    pairs = []
+
+    pairs: list[ClassifiablePair] = []
     for i, msg in enumerate(candidate_messages):
-        if msg.get("role") != "tool":
+        if msg["role"] != "tool":
             continue
         try:
-            result = json.loads(msg.get("content") or "{}")
-        except (json.JSONDecodeError, ValueError):
+            content = msg["content"]
+            if isinstance(content, str):
+                result = json.loads(content)
+            else:
+                logger.warning("unexpected multipart content in tool message; skipping")
+                continue
+        except (json.JSONDecodeError, ValueError, TypeError) as e:
+            logger.warning("_build_classifiable_pairs() unexpected error=", exc_info=e)
             continue
+
         tool: str = result.get("tool", "")
         if tool in _SKIP_CLASSIFY:
             logger.debug("skipping classify for %s (tool=%s)", msg.get("id"), tool)
@@ -737,9 +753,8 @@ async def compress_messages(
         len(candidate_messages), len(pairs),
     )
 
-    if not pairs:
+    if len(pairs) == 0:
         return CompressionResult(compressions=[], new_summary=conversation_summary or "")
-
 
     classify = await _classify_and_summarize(pairs, user_message, conversation_summary, backend, is_mid_run=is_mid_run)
     labels = classify.labels
@@ -781,14 +796,17 @@ async def compress_messages(
 
     elapsed_total = time.perf_counter() - t_total
     logger.info("compress_messages done: %d compressions in %.1fs", len(compressions), elapsed_total)
-    return CompressionResult(compressions=compressions, new_summary=new_summary or conversation_summary or "")
+    return CompressionResult(
+        compressions=compressions, 
+        new_summary=new_summary or conversation_summary or "",
+    )
 
 
 # ---------------------------------------------------------------------------
 # Working memory
 # ---------------------------------------------------------------------------
 
-WORKING_MEMORY_ENABLED = False
+WORKING_MEMORY_ENABLED = True
 DIGEST_TOKEN_BUDGET = 6000
 _DIGEST_PIECE_MAX_CHARS = 1600    # ~400 tokens cap per piece before budget truncation
 _THINKING_EXCERPT_MAX_CHARS = 300
