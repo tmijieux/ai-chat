@@ -1086,6 +1086,8 @@ async def build_inference_context(
 
     for m in branch:
         if m.context_excluded:
+            if m.exclusion_reason in ("working_memory", "working_memory_superseded"):
+                continue
             if m.compressed_summary is not None:
                 try:
                     original: ToolResult = json.loads(m.content)
