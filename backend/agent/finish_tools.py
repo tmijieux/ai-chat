@@ -1,6 +1,8 @@
 from agent.tools.base import BaseTool, tool_error
 from typing import TYPE_CHECKING
 
+from tool_result_types import ToolResult
+
 if TYPE_CHECKING:
     from agent.agent import AgentSession
 
@@ -145,7 +147,7 @@ class FinishPlan(BaseFinishTool):
         "required": ["tasks"],
     }
 
-    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
+    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> ToolResult:
         """Reject if too few tasks or if any description contains multiple actions."""
         tasks = args.get("tasks") or []
         if len(tasks) < MIN_PLAN_TASKS:

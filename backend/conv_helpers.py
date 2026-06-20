@@ -1,3 +1,7 @@
+"""Shared helpers for conversation branch traversal, inference context building, and session types.
+
+Used by all routers that need to read or manipulate the conversation tree.
+"""
 import datetime
 import json
 from dataclasses import dataclass

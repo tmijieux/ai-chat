@@ -9,6 +9,7 @@ from typing import Any
 import aiohttp
 
 from agent.agent import AgentSession, run_agent
+from agent.tools.base import ToolDict
 from message_types import LLMMessage
 from agent.finish_tools import BaseFinishTool
 from agent.pipeline import run_stage
@@ -104,7 +105,7 @@ class CustomWorkflowOrchestrator:
     stages can reference earlier ones via {{slot.field}} in prompts and conditions.
     """
 
-    def __init__(self, workflow: WorkflowDefinition, working_directory: str | None, tools: list[dict] | None = None):
+    def __init__(self, workflow: WorkflowDefinition, working_directory: str | None, tools: list[ToolDict] | None = None):
         self._workflow = workflow
         self._working_directory = working_directory
         self._tools = tools or []

@@ -1,3 +1,4 @@
+"""Agent definition file-based CRUD endpoints (backend/agents/*.yaml)."""
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException

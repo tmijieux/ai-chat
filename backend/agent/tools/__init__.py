@@ -1,6 +1,6 @@
 from typing import Any
 
-from .base import BaseTool
+from .base import BaseTool, ToolDict, ToolFunction
 from .list_directory import ListDirectoryTool
 from .glob_files import GlobFilesTool
 from .grep_files import GrepFilesTool
@@ -43,7 +43,7 @@ PLAN_MODE_TOOLS: dict[str, BaseTool] = {
 }
 
 
-def get_ollama_tool_list(names: list[str]) -> list[dict[str,Any]]:
+def get_ollama_tool_list(names: list[str]) -> list[ToolDict]:
     return [
         {"type": "function", "function": TOOL_REGISTRY[n].to_ollama_schema()}
         for n in names

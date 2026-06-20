@@ -9,6 +9,7 @@ import os
 import struct
 from pathlib import Path
 from typing import Any, Sequence
+from agent.tools.base import ToolDict
 from message_types import LLMMessage
 
 import tiktoken
@@ -147,7 +148,7 @@ def warmup() -> None:
     _load()
 
 
-def render_messages(messages: Sequence[LLMMessage], tools: list | None, add_generation_prompt: bool = True) -> str:
+def render_messages(messages: Sequence[LLMMessage], tools: list[ToolDict] | None, add_generation_prompt: bool = True) -> str:
     _, chat_template_str = _load()
 
     def raise_exception(msg):

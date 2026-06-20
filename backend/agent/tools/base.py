@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal
+import typing
 
 from tool_result_types import ToolResult
 
@@ -38,6 +39,15 @@ TOOL_FRAMEWORK_OVERHEAD = 223
 STACKING_OVERHEAD_PER_ADDITIONAL_TOOL = 25
 
 
+class ToolFunction(typing.TypedDict):
+    name: str
+    description: str
+    parameters: dict[str, Any]
+
+class ToolDict(typing.TypedDict):
+    type: Literal["function"]
+    function: ToolFunction
+
 class BaseTool(ABC):
     name: str
     description: str
@@ -49,7 +59,7 @@ class BaseTool(ABC):
     def token_count(self) -> int:
         return self.measured_delta - TOOL_FRAMEWORK_OVERHEAD
 
-    def to_ollama_schema(self) -> dict:
+    def to_ollama_schema(self) -> ToolFunction:
         return {"name": self.name, "description": self.description, "parameters": self.parameters}
 
     def make_validation_text_for_user_confirmation(self, args: dict) -> str:
@@ -64,6 +74,6 @@ class BaseTool(ABC):
         return self.make_validation_text_for_user_confirmation(args)
 
     @abstractmethod
-    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> ToolResult:
+    async def execute(self, args: dict[str, Any], session: "AgentSession", working_directory: str | None) -> ToolResult:
         """Return a ToolResult envelope. Framework serializes to JSON and appends tool_call_id."""
         ...

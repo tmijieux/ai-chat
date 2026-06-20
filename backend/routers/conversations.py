@@ -1,7 +1,7 @@
+"""Conversation, message, and image CRUD endpoints."""
 import base64
 import io
 import json
-import math
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile
@@ -15,11 +15,9 @@ from conv_helpers import (
     _now,
     _build_active_branch_path,
     _find_deepest_leaf,
-    _msg_dict,
     _enrich_branch,
     _fetch_images_by_msg,
     _delete_attachments_and_gc_images,
-    _parse_conv_settings,
 )
 
 router = APIRouter()

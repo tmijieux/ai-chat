@@ -1,3 +1,4 @@
+"""System prompt file-based CRUD endpoints (backend/prompts/*.yaml)."""
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException

@@ -1,3 +1,4 @@
+"""Utility endpoints: fuzzy file search, directory browsing, workflow listing, and agent tools list."""
 import os
 from pathlib import Path
 
