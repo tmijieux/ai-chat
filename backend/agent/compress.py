@@ -1047,7 +1047,7 @@ async def _classify_conversation_messages(
     prepared = backend.prepare_messages(llm_messages)
     tool_args_str = ""
     async for event in backend.stream_completion(
-        prepared, [_CONV_CLASSIFIER_TOOL], temperature=0.1, max_tokens=2048, disable_thinking=True,
+        prepared, [_CONV_CLASSIFIER_TOOL], temperature=0.1, disable_thinking=True,
     ):
         if event["type"] == "tool_call_arg":
             tool_args_str += event["fragment"]
@@ -1075,7 +1075,7 @@ async def _classify_conversation_messages(
         retry_prepared = backend.prepare_messages(retry_llm_messages)
         retry_args_str = ""
         async for event in backend.stream_completion(
-            retry_prepared, [_CONV_CLASSIFIER_TOOL], temperature=0.1, max_tokens=1024, disable_thinking=True,
+            retry_prepared, [_CONV_CLASSIFIER_TOOL], temperature=0.1, disable_thinking=True,
         ):
             if event["type"] == "tool_call_arg":
                 retry_args_str += event["fragment"]
