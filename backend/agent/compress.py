@@ -548,6 +548,8 @@ async def _summarize_shell_output(result: RunShellResult, backend: LLMBackend) -
 
     exit_code = 0 if result.get("status") == "success" else 1
     chunks = _split_by_lines(raw_output, CHUNK_MAX_CHARS)
+    if len(chunks) == 0:
+        return f"[compressed: run_shell({repr(command)}) → exit {exit_code}, no output]"
     chunk_count = len(chunks)
     summaries = []
     for i, chunk in enumerate(chunks):
