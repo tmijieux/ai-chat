@@ -139,7 +139,7 @@ class EditFileTool(BaseTool):
             return EditFileResult(
                 tool=self.name,
                 status="success",
-                path=str(absolute_path),
+                path=absolute_path.relative_to(working_directory).as_posix(),
             )
         except Exception as e:
             return tool_error(self.name, f"Unexpected error: {e}")

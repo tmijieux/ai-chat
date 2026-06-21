@@ -56,7 +56,7 @@ class GlobFilesTool(BaseTool):
             spec = None if include_ignored else load_ignore_spec(working_directory)
             files = await asyncio.to_thread(
                 lambda: [
-                    str(p) for p in absolute_path.glob(pattern)
+                    p.relative_to(working_directory).as_posix() for p in absolute_path.glob(pattern)
                     if p.is_file() and (include_ignored or not is_path_ignored(p, working_directory, spec))
                 ]
             )

@@ -125,7 +125,7 @@ class GrepFilesTool(BaseTool):
                     raw_line = all_lines[idx].rstrip()
                     line_content = raw_line[:500] + f"… [{len(raw_line)} chars, truncated]" if len(raw_line) > 500 else raw_line
                     entry: dict = {
-                        "file": str(rel_path),
+                        "file": rel_path.as_posix(),
                         "line": idx + 1,
                         "content": line_content,
                     }

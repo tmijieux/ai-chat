@@ -51,7 +51,7 @@ class ListDirectoryTool(BaseTool):
         rel_root = absolute_path.relative_to(working_directory)
 
         def _walk(base: Path, max_depth: int) -> str:
-            lines = [str(rel_root)]
+            lines = [rel_root.as_posix()]
             def _recurse(p: Path, depth: int) -> None:
                 if depth > max_depth:
                     return
@@ -60,7 +60,7 @@ class ListDirectoryTool(BaseTool):
                 except PermissionError:
                     return
                 for entry in entries:
-                    lines.append(str(entry.relative_to(Path(working_directory))))
+                    lines.append(entry.relative_to(Path(working_directory)).as_posix())
                     if entry.is_dir() and depth < max_depth:
                         _recurse(entry, depth + 1)
             _recurse(base, 1)
@@ -71,7 +71,7 @@ class ListDirectoryTool(BaseTool):
             return ListDirectoryResult(
                 tool=self.name,
                 status="success",
-                path=str(rel_root),
+                path=rel_root.as_posix(),
                 content=content,
             )
         except Exception as e:
