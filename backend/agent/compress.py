@@ -845,6 +845,20 @@ class WorkingMemoryResult:
     rendered: str
 
 
+@dataclass
+class ConversationMessageTag:
+    """Classification of one user or assistant message in the compression window."""
+    message_id: str
+    label: str  # "data_payload" | "accepted" | "stale" | "drop" | "keep"
+    note: str | None  # for stale: brief description of what was superseded
+
+
+@dataclass
+class ConversationClassifierResult:
+    """Output of _classify_conversation_messages."""
+    tags: list[ConversationMessageTag]
+
+
 def build_digest(snapshots: list[MessageSnapshot]) -> list[DigestEntry]:
     """Build a token-bounded digest from message snapshots for the working memory writer.
 
@@ -912,8 +926,180 @@ Rules:
 - Be concise and factual. No prose.
 - Preserve specific file paths, function names, line numbers.
 - If a previous working memory is provided, incorporate its information and update it.
+- If task_inputs or accepted_outputs are provided, include them verbatim in the output JSON under those keys.
 - Output valid JSON only, no markdown fences or surrounding text.\
 """
+
+
+_CONV_CLASSIFIER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "report_conversation_classification",
+        "description": "Report classification for each user and assistant message in the compression window.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "classifications": {
+                    "type": "array",
+                    "description": "One entry per user or assistant message, in any order.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {
+                                "type": "string",
+                                "description": "The id of the message being classified (copy verbatim from input).",
+                            },
+                            "label": {
+                                "type": "string",
+                                "enum": ["data_payload", "accepted", "stale", "drop", "keep"],
+                                "description": (
+                                    "data_payload — user message containing SQL, code, document, or structured data to act on. "
+                                    "accepted — assistant response that the user explicitly affirmed (e.g. 'nice work', 'great', 'perfect'). "
+                                    "stale — assistant response superseded by a later user refinement. "
+                                    "drop — low-value message (short affirmations, acknowledgments). "
+                                    "keep — other message worth preserving in the digest."
+                                ),
+                            },
+                            "note": {
+                                "type": "string",
+                                "description": "Required for stale: one brief sentence describing what was superseded and why.",
+                            },
+                        },
+                        "required": ["id", "label"],
+                    },
+                },
+            },
+            "required": ["classifications"],
+        },
+    },
+}
+
+_CONV_CLASSIFIER_SYSTEM = """\
+You are classifying user and assistant messages in a compression window to decide what to keep verbatim, \
+what to summarize, and what to drop.
+
+Labels:
+  data_payload  — user message containing SQL, code, a document, config, or other structured data \
+that the agent was asked to act on. The content must survive compression verbatim so the agent \
+can still act on it.
+  accepted      — assistant response that the user explicitly affirmed right after \
+(e.g. "nice", "great", "perfect", "thanks", "nice work"). Extract the response itself, not the affirmation.
+  stale         — assistant response that a later user message asked to refine or change, \
+making the earlier version obsolete. Write a brief note describing what was superseded.
+  drop          — low-value message: short affirmations, acknowledgments, conversational filler \
+("ok", "nice work", "thanks", "got it", "sure").
+  keep          — anything else worth keeping in the digest: task instructions, design decisions, \
+clarifications.
+
+Rules:
+- Use surrounding context to determine labels. A "nice work" message implies the preceding assistant \
+response is accepted.
+- A later refinement request implies earlier versions of the same output are stale.
+- Prefer drop for pure affirmations even if they also accept a response — label the assistant \
+response accepted instead.
+- Output only the tool call. No prose.\
+"""
+
+
+def _parse_classifier_tags(tool_args_str: str) -> list[ConversationMessageTag]:
+    """Parse a report_conversation_classification tool call JSON string into tags."""
+    try:
+        parsed = json.loads(tool_args_str)
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.warning("_parse_classifier_tags: failed to parse tool args: %s", e)
+        return []
+
+    tags: list[ConversationMessageTag] = []
+    for item in parsed.get("classifications") or []:
+        message_id = str(item.get("id", ""))
+        label = str(item.get("label", "keep"))
+        note_raw = item.get("note")
+        note = str(note_raw).strip() if note_raw is not None else None
+        if message_id != "":
+            tags.append(ConversationMessageTag(message_id=message_id, label=label, note=note))
+    return tags
+
+
+async def _classify_conversation_messages(
+    messages: list[tuple[str, str, str]],
+    backend: LLMBackend,
+) -> ConversationClassifierResult:
+    """Classify user and assistant messages in the compression window.
+
+    messages: list of (message_id, role, content) tuples for user and assistant messages only.
+    Retries once (with the full context) for any IDs the LLM skipped the first time.
+    Returns a ConversationClassifierResult with one tag per message.
+    """
+    if not messages:
+        return ConversationClassifierResult(tags=[])
+
+    input_lines = [
+        f'{{"id": {json.dumps(message_id)}, "role": {json.dumps(role)}, "content": {json.dumps(content)}}}'
+        for message_id, role, content in messages
+    ]
+    messages_block = "[\n" + ",\n".join(input_lines) + "\n]"
+    prompt = "Messages to classify:\n" + messages_block
+
+    llm_messages = [
+        {"role": "system", "content": _CONV_CLASSIFIER_SYSTEM},
+        {"role": "user", "content": prompt},
+    ]
+    prepared = backend.prepare_messages(llm_messages)
+    tool_args_str = ""
+    async for event in backend.stream_completion(
+        prepared, [_CONV_CLASSIFIER_TOOL], temperature=0.1, max_tokens=2048, disable_thinking=True,
+    ):
+        if event["type"] == "tool_call_arg":
+            tool_args_str += event["fragment"]
+
+    tags = _parse_classifier_tags(tool_args_str) if tool_args_str else []
+    tagged_ids = {t.message_id for t in tags}
+
+    untagged_ids = [message_id for message_id, _, _ in messages if message_id not in tagged_ids]
+    if untagged_ids:
+        logger.warning(
+            "_classify_conversation_messages: %d message(s) untagged — retrying with full context: %s",
+            len(untagged_ids),
+            untagged_ids,
+        )
+        retry_prompt = (
+            "Messages to classify:\n" + messages_block
+            + "\n\nYou must now classify the following message IDs that were missing from your previous response: "
+            + json.dumps(untagged_ids)
+            + "\nInclude ONLY the missing IDs in your report_conversation_classification call."
+        )
+        retry_llm_messages = [
+            {"role": "system", "content": _CONV_CLASSIFIER_SYSTEM},
+            {"role": "user", "content": retry_prompt},
+        ]
+        retry_prepared = backend.prepare_messages(retry_llm_messages)
+        retry_args_str = ""
+        async for event in backend.stream_completion(
+            retry_prepared, [_CONV_CLASSIFIER_TOOL], temperature=0.1, max_tokens=1024, disable_thinking=True,
+        ):
+            if event["type"] == "tool_call_arg":
+                retry_args_str += event["fragment"]
+
+        retry_tags = _parse_classifier_tags(retry_args_str) if retry_args_str else []
+        tags.extend(retry_tags)
+        tagged_ids = {t.message_id for t in tags}
+
+        still_untagged = [message_id for message_id, _, _ in messages if message_id not in tagged_ids]
+        if still_untagged:
+            logger.warning(
+                "_classify_conversation_messages: %d message(s) still untagged after retry — defaulting to keep: %s",
+                len(still_untagged),
+                still_untagged,
+            )
+            for message_id in still_untagged:
+                tags.append(ConversationMessageTag(message_id=message_id, label="keep", note=None))
+
+    logger.info(
+        "_classify_conversation_messages: %d tags — %s",
+        len(tags),
+        {t.message_id: t.label for t in tags},
+    )
+    return ConversationClassifierResult(tags=tags)
 
 
 def _render_working_memory(working_memory_json: dict) -> str:
@@ -941,10 +1127,13 @@ async def write_working_memory(
     previous_working_memory_json: dict | None,
     digest: list[DigestEntry],
     backend: LLMBackend,
+    conversation_tags: list["ConversationMessageTag"] | None = None,
 ) -> WorkingMemoryResult:
     """Write or update the working memory from a digest of recent agent activity.
 
     previous_working_memory_json folds prior context forward; pass None for the first run.
+    conversation_tags provides Pass 2 classification results so the writer knows which messages
+    are data payloads / accepted outputs (kept verbatim in context) vs stale / dropped.
     Returns new structured JSON and its rendered markdown form.
     """
     parts: list[str] = []
@@ -954,6 +1143,21 @@ async def write_working_memory(
             "Previous working memory:\n"
             + json.dumps(previous_working_memory_json, ensure_ascii=False, indent=2)
         )
+
+    if conversation_tags is not None and len(conversation_tags) > 0:
+        tag_lines: list[str] = []
+        for tag in conversation_tags:
+            if tag.label == "data_payload":
+                tag_lines.append("- [data_payload] a user message containing a data payload (SQL/code/document) — it remains in context verbatim")
+            elif tag.label == "accepted":
+                tag_lines.append("- [accepted] an assistant response that the user accepted — it remains in context verbatim")
+            elif tag.label == "stale":
+                note = tag.note or "superseded by a later refinement"
+                tag_lines.append(f"- [stale] an assistant response was excluded: {note}")
+            elif tag.label == "drop":
+                tag_lines.append("- [drop] a low-value user message was excluded (e.g. affirmation)")
+        if len(tag_lines) > 0:
+            parts.append("Message classifications:\n" + "\n".join(tag_lines))
 
     parts.append("Recent activity (in order):")
     for entry in digest:
@@ -1086,7 +1290,7 @@ async def build_inference_context(
 
     for m in branch:
         if m.context_excluded:
-            if m.exclusion_reason in ("working_memory", "working_memory_superseded"):
+            if m.exclusion_reason in ("working_memory", "working_memory_superseded", "working_memory_stale", "working_memory_drop"):
                 continue
             if m.compressed_summary is not None:
                 try:
@@ -1172,21 +1376,14 @@ async def apply_working_memory(
 ) -> None:
     """Synthesize or update the working memory message for a conversation.
 
-    Covers all messages before the last user message with a structured summary.
-    Inserts the working memory message into the tree between the last covered message
-    and the first live message (the last user message). Marks covered messages excluded.
+    Covers the full branch since the last working memory message.
+    Appends the new working memory message at the end of the branch and updates
+    active_message_id. Marks covered messages excluded except data_payload,
+    accepted, and keep messages which remain verbatim in context.
     """
-
-    last_user_index: int | None = None
-    for i, m in enumerate(branch):
-        if m.role == "user":
-            last_user_index = i
-
-    if last_user_index is None or last_user_index == 0:
-        logger.debug("apply_working_memory: nothing to cover (no preceding messages)")
+    if not branch:
+        logger.debug("apply_working_memory: empty branch")
         return
-
-    first_live = branch[last_user_index]
 
     previous_working_memory: db.Message | None = None
     digest_start_index = 0
@@ -1196,11 +1393,24 @@ async def apply_working_memory(
             digest_start_index = i + 1
             break
 
-    messages_to_cover = branch[digest_start_index:last_user_index]
+    messages_to_cover = branch[digest_start_index:]
     if not messages_to_cover:
         logger.debug("apply_working_memory: no new messages to cover since last working memory")
         return
 
+    # Pass 2: classify user and assistant messages to determine which to keep verbatim vs exclude.
+    conv_messages_for_classifier = [
+        (m.id, m.role, m.content or "")
+        for m in messages_to_cover
+        if m.role in ("user", "assistant")
+    ]
+    classifier_result = await _classify_conversation_messages(conv_messages_for_classifier, backend)
+    tags_by_id: dict[str, ConversationMessageTag] = {t.message_id: t for t in classifier_result.tags}
+
+    # Labels that mean "keep this message verbatim in the inference context".
+    _KEEP_IN_CONTEXT_LABELS = {"data_payload", "accepted", "keep"}
+
+    # Build digest excluding drop/stale user+assistant messages (they'll be excluded from context).
     snapshots = [
         MessageSnapshot(
             role=m.role,
@@ -1209,6 +1419,11 @@ async def apply_working_memory(
             compressed_summary=m.compressed_summary,
         )
         for m in messages_to_cover
+        if not (
+            m.role in ("user", "assistant")
+            and tags_by_id.get(m.id) is not None
+            and tags_by_id[m.id].label not in _KEEP_IN_CONTEXT_LABELS
+        )
     ]
     digest = build_digest(snapshots)
 
@@ -1219,13 +1434,18 @@ async def apply_working_memory(
         except (json.JSONDecodeError, ValueError):
             previous_json = None
 
-    working_memory_result = await write_working_memory(previous_json, digest, backend)
+    working_memory_result = await write_working_memory(
+        previous_json, digest, backend, conversation_tags=classifier_result.tags
+    )
+    goal = working_memory_result.working_memory_json.get("goal")
+    if isinstance(goal, str) and goal != "":
+        conv.title = goal
 
-    last_covered = branch[last_user_index - 1]
+    last_in_branch = branch[-1]
     new_working_memory_message = db.Message(
         id=str(uuid.uuid4()),
         conversation_id=conversation_id,
-        parent_id=last_covered.id,
+        parent_id=last_in_branch.id,
         role="context_summary",
         content=working_memory_result.rendered,
         working_memory_json=json.dumps(working_memory_result.working_memory_json, ensure_ascii=False),
@@ -1234,12 +1454,22 @@ async def apply_working_memory(
         is_degenerate=False,
     )
     sess.add(new_working_memory_message)
-
-    first_live.parent_id = new_working_memory_message.id
+    conv.active_message_id = new_working_memory_message.id
 
     for m in messages_to_cover:
+        tag = tags_by_id.get(m.id)
+        if m.role in ("user", "assistant") and tag is not None and tag.label in _KEEP_IN_CONTEXT_LABELS:
+            # Keep verbatim in context — do not exclude.
+            continue
+        if m.context_excluded:
+            # Already excluded by Stage 1/2 — leave its existing exclusion_reason.
+            continue
         m.context_excluded = True
-        if m.exclusion_reason is None or m.exclusion_reason == "":
+        if m.role in ("user", "assistant") and tag is not None and tag.label == "stale":
+            m.exclusion_reason = "working_memory_stale"
+        elif m.role in ("user", "assistant") and tag is not None and tag.label == "drop":
+            m.exclusion_reason = "working_memory_drop"
+        else:
             m.exclusion_reason = "working_memory"
 
     if previous_working_memory is not None:
