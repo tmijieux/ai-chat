@@ -9,6 +9,7 @@ import {
   ApiResponse,
   Conversation,
   ConversationSettings,
+  ContextEntry,
   DisplayMessage,
   Message,
   MessageForQuery,
@@ -76,6 +77,10 @@ export class ChatService {
   private _contextRevision = signal(0)
   /** Increments after every agent run and after compression — use as a refresh trigger. */
   public readonly contextRevision = this._contextRevision.asReadonly()
+
+  private _liveContextEntries = signal<ContextEntry[] | null>(null)
+  /** Context entries emitted by the agent just before each generation; null between runs. */
+  public readonly liveContextEntries = this._liveContextEntries.asReadonly()
 
   private _callingTool = signal<string | null>(null)
   /** Name of the tool whose arguments are currently being streamed; null when idle. */
@@ -725,6 +730,8 @@ export class ChatService {
             )
           })
         }
+      } else if (event.type === 'context') {
+        this._liveContextEntries.set(_buildContextEntries(event.messages ?? []))
       } else if (event.type === 'compressing') {
         const convId = this._conversationId()
         if (convId) {
@@ -789,6 +796,7 @@ export class ChatService {
           // server-side and are not available on display messages created during the agent run.
           enqueue(() => this._reloadFromDb())
         }
+        this._liveContextEntries.set(null)
         this._agentEventSub?.unsubscribe()
         this._agentEventSub = null
       }
@@ -806,6 +814,7 @@ export class ChatService {
       if (result.ctx_tokens != null) {
         this._promptTokens.set(result.ctx_tokens)
       }
+      this.conversations.refresh()
     } finally {
       this._isCompressing.set(false)
       this._contextRevision.update((n) => n + 1)
@@ -1011,4 +1020,54 @@ export class ChatService {
     const res = await firstValueFrom(this.api.post_transcribe(blob, language))
     return res.text
   }
+}
+
+function _buildContextEntries(messages: any[]): ContextEntry[] {
+  /** Convert raw prepared LLM messages (OpenAI wire format) to ContextEntry for the context viewer. */
+  return messages.map((m) => {
+    const role: string = m.role ?? '?'
+    const rawContent = m.content ?? ''
+
+    let displayContent: string
+    let imageCount = 0
+    if (Array.isArray(rawContent)) {
+      displayContent = rawContent
+        .filter((p: any) => p.type === 'text')
+        .map((p: any) => p.text ?? '')
+        .join(' ')
+      imageCount = rawContent.filter((p: any) => p.type === 'image_url').length
+    } else {
+      displayContent = String(rawContent)
+    }
+
+    if (m.tool_calls != null) {
+      displayContent = (displayContent + '\n\n[tool_calls]\n' + JSON.stringify(m.tool_calls, null, 2)).trim()
+    }
+
+    let toolName: string | null = null
+    let status: string | null = null
+    if (role === 'tool') {
+      try {
+        const toolData = JSON.parse(typeof rawContent === 'string' ? rawContent : '')
+        toolName = toolData.tool ?? null
+        status = toolData.status ?? null
+        if (status === 'compressed') {
+          displayContent = toolData.summary ?? displayContent
+        } else if (status === 'evicted') {
+          displayContent = `${toolName} [evicted]`
+        }
+      } catch {
+        // non-JSON tool content — keep displayContent as-is
+      }
+    }
+
+    return {
+      role,
+      token_count: Math.floor(displayContent.length / 4),
+      content: displayContent,
+      tool_name: toolName,
+      status,
+      image_count: imageCount,
+    }
+  })
 }

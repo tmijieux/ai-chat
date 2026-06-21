@@ -14,12 +14,15 @@ export class ContextViewComponent {
   private api = inject(ApiService)
 
   readonly conversationId = input<string | undefined>(undefined)
-  /** Increment this to force a refresh (e.g. pass promptTokens() from ChatService). */
+  /** Increment this to force a refresh from the API. */
   readonly refreshTrigger = input<number>(0)
+  /** Live entries from the agent's context event — when set, bypass the API. */
+  readonly liveEntries = input<ContextEntry[] | null>(null)
 
-  readonly entries = signal<ContextEntry[]>([])
+  private readonly _loadedEntries = signal<ContextEntry[]>([])
   readonly loading = signal(false)
 
+  readonly entries = computed(() => this.liveEntries() ?? this._loadedEntries())
   readonly totalTokens = computed(() => this.entries().reduce((sum, entry) => sum + entry.token_count, 0))
 
   constructor() {
@@ -28,7 +31,7 @@ export class ContextViewComponent {
       this.refreshTrigger()
       untracked(() => {
         if (conversationId === undefined || conversationId === null) {
-          this.entries.set([])
+          this._loadedEntries.set([])
           return
         }
         this._load(conversationId)
@@ -40,7 +43,7 @@ export class ContextViewComponent {
     this.loading.set(true)
     this.api.get_inference_context(conversationId).subscribe({
       next: (result) => {
-        this.entries.set(result.entries)
+        this._loadedEntries.set(result.entries)
         this.loading.set(false)
       },
       error: () => {

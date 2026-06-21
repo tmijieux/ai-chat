@@ -35,7 +35,7 @@
         class="p-2 cursor-pointer hover:bg-gray-700 rounded transition-all flex row items-center justify-between"
         (click)="selectConversation(conv)"
       >
-        {{ conv.title }}
+        <span class="truncate max-w-40" [title]="conv.title">{{ conv.title }}</span>
         <div class="p-relative">
           <button class="msg-action-btn" (click)="toggleConvMenu(conv.id, $event)">⋮</button>
           @if (openConvMenuId() === conv.id) {
@@ -498,6 +498,7 @@
     class="flex-1 min-w-0 h-full"
     [conversationId]="chatSvc.currentConversationId()"
     [refreshTrigger]="chatSvc.contextRevision()"
+    [liveEntries]="chatSvc.liveContextEntries()"
   />
 }
 </main>

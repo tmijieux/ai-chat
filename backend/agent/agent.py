@@ -22,6 +22,7 @@ from message_types import LLMMessage, AssistantMessage, ToolCall, ToolCallFuncti
 from tool_result_types import ToolResult
 
 CTX_LIMIT = 2**15
+CTX_COMPRESS_THRESHOLD = int(CTX_LIMIT * 0.55)  # ~18k tokens — compress early to leave headroom for compression LLM calls
 
 logger = logging.getLogger(__name__)
 
@@ -438,7 +439,7 @@ async def _execute_tool_calls(
 
         ctx_after = await _track_tokens(messages, toolset.tools, session, f"context after tool result '{tool_name}'")
 
-        if ctx_after > CTX_LIMIT:
+        if ctx_after > CTX_COMPRESS_THRESHOLD:
             # Emit tool_result first so frontend saves it to DB before compressing.
             await session.emit({
                 "type": "tool_result",
@@ -581,6 +582,8 @@ async def chat_with_tools(
 
     prompt_eval_count = await _track_tokens(messages, toolset.tools, session, "context before generation", prepared=prepared)
     max_tokens = CTX_LIMIT - prompt_eval_count
+
+    await session.emit({"type": "context", "ctx_tokens": prompt_eval_count, "messages": list(prepared)})
 
     generation = await _stream_llm(prepared, toolset.tools, max_tokens, session)
 
