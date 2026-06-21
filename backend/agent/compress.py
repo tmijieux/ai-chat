@@ -1464,6 +1464,14 @@ async def apply_working_memory(
         if m.context_excluded:
             # Already excluded by Stage 1/2 — leave its existing exclusion_reason.
             continue
+        if m.role == "tool":
+            try:
+                tool_name = json.loads(m.content or "{}").get("tool", "")
+            except (json.JSONDecodeError, ValueError, TypeError):
+                tool_name = ""
+            if tool_name in _SKIP_CLASSIFY:
+                # Stage 1/2 already decided not to compress these — respect that decision.
+                continue
         m.context_excluded = True
         if m.role in ("user", "assistant") and tag is not None and tag.label == "stale":
             m.exclusion_reason = "working_memory_stale"

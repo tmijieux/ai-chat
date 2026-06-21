@@ -38,7 +38,7 @@ class ReadFileRangeTool(BaseTool):
                 "description": "The result_id returned by a previous grep_files call. Required.",
             },
         },
-        "required": ["file_path", "start_line", "end_line", "search_result_id"],
+        "required": ["file_path", "start_line", "end_line"],
     }
     requires_confirmation = False
     measured_delta = 426
@@ -50,16 +50,18 @@ class ReadFileRangeTool(BaseTool):
         if working_directory is None:
             return tool_error(self.name, "No workspace configured — file tools are disabled.")
 
+        file_path = args.get("file_path", "")
+        start_line = int(args.get("start_line"))
+        end_line = int(args.get("end_line"))
+
         search_result_id = args.get("search_result_id", "")
-        if search_result_id not in session._search_result_ids:
+        range_size = end_line - start_line + 1
+        requires_search_result = start_line <= 1 or range_size > MAX_LINES
+        if requires_search_result and search_result_id not in session._search_result_ids:
             return tool_error(
                 self.name,
                 "Invalid or missing search_result_id. Call glob_files or grep_files first and pass its result_id.",
             )
-
-        file_path = args.get("file_path", "")
-        start_line = int(args.get("start_line"))
-        end_line = int(args.get("end_line"))
 
         if not file_path or start_line is None or end_line is None:
             return tool_error(self.name, "file_path, start_line, and end_line are required.")
