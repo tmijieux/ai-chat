@@ -6,6 +6,7 @@ from typing import Literal
 import aiohttp
 
 from agent.agent import AgentSession, chat_with_tools, run_agent
+from conv_helpers import ToolSet
 from message_types import LLMMessage
 from agent.finish_tools import (
     FinishAugmentation,
@@ -181,42 +182,71 @@ async def _run_stage_loop(
     """Inner loop for a pipeline stage. Stops when the finish tool is called or no more tool calls.
 
     max_iterations=None means unlimited — the loop runs until the finish tool is called or
-    the model stops generating tool calls.
+    the model stops generating tool calls. This runs as a bare asyncio task with nobody awaiting
+    it until the very end (run_stage awaits sub_session.outbound events instead) — an uncaught
+    exception here would otherwise vanish silently and hang run_stage's consumer loop forever.
+    The try/except/finally makes sure an error always reaches the user and _stage_done is always
+    sent so run_stage can never wait on a dead task.
     """
     display_name = numbered_name or stage_name
     iteration = 0
-    while max_iterations is None or iteration < max_iterations:
-        is_last_turn = (max_iterations is not None and iteration == max_iterations - 1)
-        active_schemas = [finish_tool_schema] if (is_last_turn and finish_tool_schema is not None) else tool_schemas
-        done, _ = await chat_with_tools(
-            stage_messages, sub_session, active_schemas, working_directory, extra_tools=extra_tools
-        )
-        if sub_session.finish_result is not None:
-            break
-        if done:
-            logger.warning(
-                "[pipeline:%s] model stopped at iteration %d without calling finish tool",
-                display_name,
-                iteration,
+    try:
+        while max_iterations is None or iteration < max_iterations:
+            is_last_turn = (max_iterations is not None and iteration == max_iterations - 1)
+            active_schemas = [finish_tool_schema] if (is_last_turn and finish_tool_schema is not None) else tool_schemas
+            # When exactly one tool is valid, force it mechanically (llama.cpp grammar-constrains the
+            # generation) instead of just hoping the model chooses to call it. Offering a single schema
+            # without forcing does NOT stop the model from answering in free text instead.
+            forced_tool_choice = (
+                {"type": "function", "function": {"name": active_schemas[0]["function"]["name"]}}
+                if len(active_schemas) == 1
+                else None
             )
-            break
-        if inject_turn_reminders and max_iterations is not None:
-            turns_used = iteration + 1
-            turns_left = max_iterations - turns_used
-            if turns_left == 0:
-                reminder = f"[Turn {turns_used}/{max_iterations} complete. No turns remaining — you will be terminated. Call the finish tool NOW with whatever you found.]"
-            elif turns_left == 1:
-                reminder = f"[Turn {turns_used}/{max_iterations} complete. NEXT TURN IS YOUR LAST — call ONLY the finish tool, no other tool calls. Submit what you have found so far, mark it inconclusive if needed.]"
-            elif turns_left == 2:
-                reminder = f"[Turn {turns_used}/{max_iterations} complete. {turns_left} turns remaining. Do your last search NOW — the turn after must be finish_explore only.]"
-            else:
-                reminder = f"[Turn {turns_used}/{max_iterations} complete. {turns_left} turns remaining.]"
-            stage_messages.append({"role": "user", "content": reminder})
-        iteration += 1
-    else:
-        logger.warning("[pipeline:%s] max iterations (%d) reached without calling finish tool", display_name, max_iterations)
-        await sub_session.emit({"type": "error", "message": f"[pipeline:{display_name}] max iterations ({max_iterations}) reached without calling finish tool"})
-    await sub_session.outbound.put({"type": "_stage_done"})
+            logger.info(
+                "[pipeline:%s] iteration %d — requesting LLM completion (%d tool schemas, forced=%s)",
+                display_name, iteration, len(active_schemas), forced_tool_choice is not None,
+            )
+            turn = await chat_with_tools(
+                stage_messages, sub_session, ToolSet(tools=active_schemas, extra_tools=extra_tools), working_directory,
+                tool_choice=forced_tool_choice,
+            )
+            logger.info(
+                "[pipeline:%s] iteration %d — got response: is_done=%s finish_tool_called=%s",
+                display_name, iteration, turn.is_done, sub_session.finish_result is not None,
+            )
+            if sub_session.finish_result is not None:
+                break
+            if turn.is_done:
+                last_message = stage_messages[-1] if stage_messages else {}
+                raw_content = last_message.get("content") if isinstance(last_message, dict) else None
+                logger.warning(
+                    "[pipeline:%s] model stopped at iteration %d without calling finish tool — raw output:\n%s",
+                    display_name,
+                    iteration,
+                    raw_content if raw_content else "(empty content)",
+                )
+                break
+            if inject_turn_reminders and max_iterations is not None:
+                turns_used = iteration + 1
+                turns_left = max_iterations - turns_used
+                if turns_left == 0:
+                    reminder = f"[Turn {turns_used}/{max_iterations} complete. No turns remaining — you will be terminated. Call the finish tool NOW with whatever you found.]"
+                elif turns_left == 1:
+                    reminder = f"[Turn {turns_used}/{max_iterations} complete. NEXT TURN IS YOUR LAST — call ONLY the finish tool, no other tool calls. Submit what you have found so far, mark it inconclusive if needed.]"
+                elif turns_left == 2:
+                    reminder = f"[Turn {turns_used}/{max_iterations} complete. {turns_left} turns remaining. Do your last search NOW — the turn after must be finish_explore only.]"
+                else:
+                    reminder = f"[Turn {turns_used}/{max_iterations} complete. {turns_left} turns remaining.]"
+                stage_messages.append({"role": "user", "content": reminder})
+            iteration += 1
+        else:
+            logger.warning("[pipeline:%s] max iterations (%d) reached without calling finish tool", display_name, max_iterations)
+            await sub_session.emit({"type": "error", "message": f"[pipeline:{display_name}] max iterations ({max_iterations}) reached without calling finish tool"})
+    except Exception:
+        logger.exception("[pipeline:%s] stage loop crashed at iteration %d", display_name, iteration)
+        await sub_session.emit({"type": "error", "message": f"[pipeline:{display_name}] stage crashed at iteration {iteration} — see backend logs for the traceback"})
+    finally:
+        await sub_session.outbound.put({"type": "_stage_done"})
 
 
 async def run_stage(
@@ -228,11 +258,17 @@ async def run_stage(
     working_directory: str | None,
     max_iterations: int | None = None,
     inject_turn_reminders: bool = False,
+    stage_label: str | None = None,
 ) -> dict:
     """
     Run a single pipeline stage. Loops until the finish tool is called.
     Forwards all events to parent_session tagged with _pipeline_stage.
     Returns the finish tool's args dict, or empty dict if it was never called.
+
+    stage_label carries caller-supplied identity (e.g. which loop item and retry attempt this
+    call belongs to). It is displayed alongside the #N invocation counter, which counts total
+    calls of this stage name across the whole workflow and is NOT an item index — a retry of
+    item 11 gets the next counter value, not the same one.
     """
     sub_session = AgentSession()
     sub_session.mode = parent_session.mode
@@ -246,9 +282,12 @@ async def run_stage(
 
     count = parent_session._sub_stage_counters.get(stage_name, 0) + 1
     parent_session._sub_stage_counters[stage_name] = count
-    numbered_name = f"{stage_name}#{count}"
+    if stage_label is None:
+        numbered_name = f"{stage_name}#{count}"
+    else:
+        numbered_name = f"{stage_name}#{count} [{stage_label}]"
 
-    logger.info("[pipeline] starting stage: %s (call #%d)", stage_name, count)
+    logger.info("[pipeline] starting stage: %s (call #%d)%s", stage_name, count, "" if stage_label is None else f" [{stage_label}]")
 
     finish_schema = _finish_tool_schema(finish_tool)
     loop_task = asyncio.create_task(

@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 class WriteFileTool(BaseTool):
     name = "write_file"
-    description = "Create a new file or overwrite an existing file. Requires user confirmation. Only use when creating a brand-new file or doing a full rewrite. Prefer edit_file to make targeted edits. Requires a workspace directory to be configured in conversation settings."
+    description = "Create a new file. Requires user confirmation. Only use when creating a brand-new file. Use edit_file to make targeted edits. Requires a workspace directory to be configured in conversation settings."
     parameters = {
         "type": "object",
         "properties": {
@@ -23,10 +23,10 @@ class WriteFileTool(BaseTool):
                 "type": "string",
                 "description": "The content to write.",
             },
-            "append": {
-                "type": "boolean",
-                "description": "If true, append content instead of overwriting.",
-            },
+            # "append": {
+            #     "type": "boolean",
+            #     "description": "If true, append content instead of overwriting.",
+            # },
         },
         "required": ["file_path", "content"],
     }
@@ -55,6 +55,10 @@ class WriteFileTool(BaseTool):
         absolute_path = resolve_workspace_path(path, working_directory)
         if not file_in_directory(str(absolute_path), working_directory):
             return tool_error(self.name, f"Writing outside workspace is forbidden. Workspace: {working_directory}")
+
+        if absolute_path.exists():
+            return tool_error(self.name, f"File already exists, use edit_file instead")
+        
 
         preview = self.make_validation_text_for_user_confirmation(args)
         approved, user_msg = await session.request_confirm(f"write-{path}", self.name, args, preview)

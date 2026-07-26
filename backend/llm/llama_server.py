@@ -171,7 +171,7 @@ class LlamaServerBackend(LLMBackend):
         prompt_tokens: int = 0
         completion_tokens: int = 0
 
-        print(json.dumps(body, indent=2, ensure_ascii=False))
+        #print(json.dumps(body, indent=2, ensure_ascii=False))
         async with aiohttp.ClientSession() as http:
             async with http.post(LLAMA_CHAT_URL, json=body) as response:
                 if response.status != 200:

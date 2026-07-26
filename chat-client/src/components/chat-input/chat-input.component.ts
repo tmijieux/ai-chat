@@ -36,7 +36,7 @@ export class ChatInputComponent implements AfterViewInit {
   // The outer component decides what to cancel (agent run, streaming response, etc.).
   readonly stopRequested = output<void>()
 
-  readonly submitted = output<{ text: string; imageIds: string[]; workflowName?: string }>()
+  readonly submitted = output<{ text: string; imageIds: string[]; workflowName?: string; commandLabel?: string }>()
 
   readonly currentInput = signal('')
   readonly pendingImages = signal<PendingImage[]>([])
@@ -47,6 +47,8 @@ export class ChatInputComponent implements AfterViewInit {
   readonly availableWorkflows = signal<Workflow[]>([])
   private _workflowsLoaded = false
   private _pendingWorkflowName = signal<string | undefined>(undefined)
+  /** The command token (mode name or workflow name) last chosen, kept only so it can be echoed into the sent message for display. */
+  private _pendingCommandLabel = signal<string | undefined>(undefined)
 
   /** The text after the leading '/' when the palette is open (used for filtering). */
   readonly paletteFilter = computed(() => {
@@ -224,6 +226,7 @@ export class ChatInputComponent implements AfterViewInit {
     const remainder = spaceIndex === -1 ? '' : raw.slice(spaceIndex + 1)
     this.currentInput.set(remainder)
     this._textareaRef?.nativeElement.focus()
+    this._pendingCommandLabel.set(command.label)
 
     if (command.type === 'mode') {
       const settings = this.chatSvc.currentConversationSettings()
@@ -254,6 +257,7 @@ export class ChatInputComponent implements AfterViewInit {
 
     let messageText = this.currentInput().trim()
     let workflowName = this._pendingWorkflowName()
+    let commandLabel = this._pendingCommandLabel()
 
     // Parse a leading /command prefix if the user typed or Tab-completed it.
     // This is skipped when the command was already consumed via palette Enter.
@@ -265,14 +269,17 @@ export class ChatInputComponent implements AfterViewInit {
         const settings = this.chatSvc.currentConversationSettings()
         this.chatSvc.updateConversationSettings({ ...settings, mode: token as ConversationMode }).subscribe()
         messageText = remainder
+        commandLabel = token
       } else if (token.length > 0) {
         workflowName = token
         messageText = remainder
+        commandLabel = token
       }
     }
 
     if (!messageText && this.pendingImages().length === 0 && workflowName === undefined) {
       this.currentInput.set('')
+      this._pendingCommandLabel.set(undefined)
       return
     }
     const imageIds = this.pendingImages()
@@ -281,8 +288,9 @@ export class ChatInputComponent implements AfterViewInit {
     this.currentInput.set('')
     this.pendingImages.set([])
     this._pendingWorkflowName.set(undefined)
+    this._pendingCommandLabel.set(undefined)
     this.voiceSvc.dismissCorrection()
-    this.submitted.emit({ text: messageText, imageIds, workflowName })
+    this.submitted.emit({ text: messageText, imageIds, workflowName, commandLabel })
   }
 
   attachImages(files: FileList | File[]): void {

@@ -2,7 +2,9 @@
 
 ## Context
 
-The  app in this workspace is an AI agent. Do not be surprised if I speak about tools/agent stuff up front and read `CONTEXT.md`. I always speaking about my app and not about Claude unless I mention your name. If I did not explicitely talked about you by mentioning your name, then Starts investigating the code about the mentionned problem.
+**Default subject of every message is the app in this workspace, never Claude Code itself.** This is the first thing to check, before drafting any reply: does this message explicitly name Claude (or say "you", addressed at the assistant) as the thing being discussed? If not, it is about the AI agent app in this workspace — go read the relevant code / `CONTEXT.md` and investigate the app's behavior. Do not default to answering about Claude Code's own features, settings, or UI just because the wording (e.g. "slash command", "tool", "context", "agent") happens to overlap with Claude Code terminology — this project's domain uses the same words for its own features. When genuinely ambiguous, ask which one is meant rather than guessing Claude Code.
+
+The app in this workspace is an AI agent. Do not be surprised if I speak about tools/agent stuff up front and read `CONTEXT.md`.
 
 *ALWAYS* read `CONTEXT.md` at the start of every conversation. It contains the app mission, domain glossary, feature intent, known bugs, and planned changes. Features documented there must not be removed or broken when implementing other features.
 
@@ -40,7 +42,7 @@ After successfully implementing an approved plan, create a git commit immediatel
 ## Code Style
 
 - **No abbreviations** in variable or parameter names (e.g. `estimated_tokens` not `est_tokens`).
-- **No implicit boolean conversions** — use explicit comparisons: `if x is None` or `if x == ""`, never `if not x` for strings or optional values.
+- **No implicit boolean conversions** — use explicit comparisons: `if x is None` or `if x == ""`, never `if not x` for strings or optional values. use `if len(array)` == 0 , not `if not array`.
 - **No boolean lazy evaluation for fallbacks** — never `x or default` to substitute a missing value; use explicit `if x is None` checks instead.
 - **Docstrings on every function** — document both purpose and important details about implementation. One sentence is enough for simple helpers.
 - **Dataclasses for complex return types** — never return a plain tuple with 3+ values or multiple same-typed values (e.g. two `dict[str, str]`). Define a `@dataclass` with named fields instead.

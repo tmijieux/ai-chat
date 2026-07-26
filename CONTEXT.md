@@ -164,46 +164,44 @@ The current date (`YYYY-MM-DD` UTC) is prepended to the active system prompt con
 
 ## Working Memory
 
-A structured synthetic message (`role = "context_summary"`) inserted into the conversation message tree by the compression pipeline to replace a long sequence of accumulated assistant thinking blocks, tool stubs, and user messages with a compact `[Context:]` summary. Only the most recent non-excluded working memory message appears in the LLM context; earlier ones are marked `context_excluded` as they are folded forward.
+A structured synthetic message (`role = "context_summary"`) appended to the conversation branch by the compression pipeline after every agent run. It summarizes what happened in the covered messages so the agent can continue coherently without seeing them all verbatim. Only the most recent non-excluded working memory message appears in the LLM context; earlier ones are marked `context_excluded` as they are folded forward.
 
 **Stored as:** `Message.content` holds the rendered markdown; `Message.working_memory_json` holds the raw JSON for folding into the next write.
 
 **JSON sections:** `goal`, `learned`, `done`, `rejected`, `dead_ends` (all optional). Rendered as markdown with `**Goal:**`, `**Learned:**` etc. headers, injected into the inference context as a `user`-role message.
 
-**Tree insertion:** the working memory message is inserted between the last covered message and the last user message (the live window start). The first live message's `parent_id` is updated to point to the new working memory message. All covered messages are marked `context_excluded = True`.
+**Tree insertion:** appended as a new leaf at the end of the branch; `Conversation.active_message_id` is updated to point to it. Covered messages are marked `context_excluded = True` except those tagged as `data_payload`, `accepted`, or `keep` by the conversation classifier — those remain verbatim in the inference context.
 
-**Folding:** when compression runs again, the live working memory's `working_memory_json` is passed as context to the new write call alongside a fresh digest of messages since the last working memory. The old working memory message is then excluded.
-
-**Disabled by default:** Stage 3 is built and wired but not yet active. Stage 1/2 run independently and are unaffected. See ADR-0008.
+**Folding:** when compression runs again, the current working memory's `working_memory_json` is passed to the new write call alongside a fresh digest of messages since the last working memory. The old working memory message is then excluded.
 
 **UI:** rendered as a purple dashed card labeled "Working Memory" in the message list. Superseded (excluded) working memory messages show a `[superseded]` badge and reduced opacity.
 
 ## Strategic Direction: Context Management
 
-Context management is a primary improvement area. Stage 1/2 compresses individual tool-role messages. Stage 3 (working memory, disabled by default pending validation) squashes entire exploration sequences into structured summaries — see [[Working Memory]].
+Context management is a primary improvement area. Compression is routine maintenance — not just a safety valve. It runs after every agent run regardless of context size.
 
 ## Open Questions
 - **`summarize_subtask` tool**: whether the agent calls it autonomously or it is framework-triggered is TBD.
 - **`context_excluded` UX**: beyond the "excluded from context" label on evicted messages, whether the user should be able to force-include an evicted message is TBD.
 
 ## Post-Iteration Sub-Agent
-Framework-level compression pipeline that runs after each completed agent run. Two stages implemented (see ADR-0006):
+Framework-level compression pipeline that runs after each completed agent run and mid-run when context reaches 50–60% of the context limit. Compression is routine context management, not just a safety valve for overflow. See ADR-0006.
 
-**Stage 1 — Usefulness classification + deterministic compaction** ✅: a single batch LLM call receives the current user message, an optional one-sentence conversation summary, and for each tool call: `(tool_name, key_args, result_metadata, following_thinking)` — never the full tool output. Returns `compress | keep` per tool call plus an updated conversation summary. Compressed results get a compact one-liner (`glob_files("**/*ome-box*") → 0 files`) stored in `compressed_summary` and shown in the UI instead. `message.content` is never modified. Tools in `_SKIP_CLASSIFY = {write_file, edit_file}` are never classified. Thinking messages always kept verbatim.
+Three sequential passes operate on the delta since the last working memory message (first compression sees the full conversation):
 
-**Stage 2 — Reference file summarization** ✅: for each `keep` `read_file` result exceeding ~2 000 chars, an LLM call produces an API surface summary (module purpose, function signatures, key constants, imports). Stored as `compressed_summary` with a `[compressed: N lines → ~M tokens]` header. Target: 400–800 tokens. `search_web` results with total body content exceeding ~2 000 chars are also LLM-summarized in Stage 2, producing a concise summary of the search findings.
+**Pass 1 — Tool result classifier** ✅: classifies each tool result as `drop`, `1-line-summary`, `summarize`, or `keep`. Write and edit tools, and tools that interact with the user directly, are excluded from classification. User and assistant messages are included in the classifier prompt as context to improve signal quality. Classified results receive an appropriate compact representation.
 
-**Stage 3 — Working memory synthesis** (disabled by default pending validation): after Stages 1/2, all messages before the last user message are collected into a token-bounded digest, a single LLM pass produces structured JSON, and the result is inserted into the tree as a `context_summary` message with all covered messages marked excluded. See [[Working Memory]] and ADR-0008.
+**Pass 2 — User and assistant message classifier** ✅: classifies all user and assistant messages in the compression window at once, using surrounding context to make relational judgments. A user affirmation after an assistant response tags that response as `accepted` and drops the affirmation. A later refinement that supersedes an earlier answer tags the earlier response as `stale` with a brief note. `data_payload`, `accepted`, and `keep` messages stay verbatim in context; `stale` and `drop` are excluded.
+
+**Pass 3 — Working memory writer** ✅: produces structured JSON covering: current goal, key facts learned, completed actions, rejected approaches, and dead ends. Previous working memory folds forward into each new write. Pass 2 labels are authoritative for user messages and visible assistant responses — `data_payload`, `accepted`, and `keep` stay verbatim in context; `stale` and `drop` are excluded. For tool activity, Pass 3 may override Pass 1 labels: entire blocks of agent iteration (thinking → tool call → tool result) that are no longer needed can be stripped from context entirely, regardless of how Pass 1 classified the individual tool results.
+
+**On first user message** (not yet implemented): classify intent (complex task vs. casual exchange) and generate a short summary to seed the conversation title.
 
 **Compression triggers:**
-- Post-run: frontend calls `POST /api/conversations/{id}/compress` after every agent run.
-- Mid-run overflow ✅: when `ctx_after > CTX_LIMIT` after a tool result, the agent emits `tool_result` first, then `compressing`. The frontend compresses and sends `compression_done`. If still over limit after compression, emits an error.
-- Length stop ✅: when `done_reason == "length"` (LLM output cut off mid-generation), the agent emits `compressing` and awaits compression, then retries the iteration. The `TurnResult.length_compressed` flag prevents infinite retry if compression doesn't help.
-- Iteration threshold (disabled by default pending validation): the agent counts iterations within a run and triggers compression when the threshold (default 10) is reached, then resets the counter.
-
-**Not yet implemented:**
-- **Conversation title update**: after the first agent run, generate a short goal-framed title from the first user message. Only update once; preserve manual renames.
-Never compressed by Stage 2: `write_file`, `edit_file` results; thinking messages. `run_shell` and `search_web` results are summarized by Stage 2 and also pre-shrunk immediately at output time when they exceed a size threshold.
+- Post-run ✅: runs after every agent run, always.
+- Mid-run at 50–60% ✅: fires when context exceeds the threshold mid-run, leaving headroom for the compression calls themselves.
+- Length stop ✅: when the LLM output is cut off mid-generation, compression runs and the iteration retries.
+- Iteration threshold (disabled by default): triggers compression after N iterations within a run.
 
 ## Status Bar
 Always-visible top bar in the chat area. Shows token info: `Context Tokens: N / 32,768 (%)`. The value is the last measured token count — always from a real API call, never estimated. On conversation load, the count is refreshed immediately via `GET /api/conversations/{id}/ctx-tokens` so it reflects the current context even without a new inference. Shows 0 on a new chat. When the conversation mode is not Standard, a colored badge showing the active mode name (`PLAN`, `AUTO`, `YOLO`) is displayed next to the token count. The ⚙ button opens the [[Conversation Settings Drawer]]. A 🔍 button logs a per-message token breakdown to the backend console for debugging.

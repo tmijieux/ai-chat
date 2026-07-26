@@ -233,9 +233,9 @@ export class ChatComponent implements OnDestroy {
   // User actions — all delegated to ChatService
   // -------------------------------------------------------------------------
 
-  onSubmitted(data: { text: string; imageIds: string[]; workflowName?: string }): void {
+  onSubmitted(data: { text: string; imageIds: string[]; workflowName?: string; commandLabel?: string }): void {
     this.autoScrollEnabled.set(true)
-    this.chatSvc.startAgentRun(data.text, data.imageIds, data.workflowName)
+    this.chatSvc.startAgentRun(data.text, data.imageIds, data.workflowName, data.commandLabel)
   }
 
   startReject(toolId: string): void {

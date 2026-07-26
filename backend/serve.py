@@ -9,6 +9,43 @@ logger = logging.getLogger(__name__)
 _RELOADER_ENV_VAR = "HYPERCORN_RELOADER"
 
 
+class _ColorFormatter(logging.Formatter):
+    """Colors log lines by level, with pipeline/workflow loggers given their own color at INFO/DEBUG
+    so stage lifecycle logs stand out from the rest of the wall of text. WARNING/ERROR always win
+    regardless of logger, since those need to stay visible no matter where they came from.
+    """
+
+    _LEVEL_COLORS = {
+        logging.WARNING: "\x1b[33m",    # yellow
+        logging.ERROR: "\x1b[31m",      # red
+        logging.CRITICAL: "\x1b[1;31m", # bold red
+    }
+    _DEFAULT_COLORS = {
+        logging.DEBUG: "\x1b[2m",  # dim
+        logging.INFO: "\x1b[36m",  # cyan
+    }
+    _LOGGER_COLORS = {
+        "agent.pipeline": "\x1b[95m",        # bright magenta
+        "agent.custom_workflow": "\x1b[94m", # bright blue
+    }
+    _RESET = "\x1b[0m"
+
+    def format(self, record: logging.LogRecord) -> str:
+        message = super().format(record)
+        if record.levelno in self._LEVEL_COLORS:
+            color = self._LEVEL_COLORS[record.levelno]
+        else:
+            color = self._LOGGER_COLORS.get(record.name, self._DEFAULT_COLORS.get(record.levelno, ""))
+        return f"{color}{message}{self._RESET}" if color else message
+
+
+def _setup_logging(level: int) -> None:
+    """Set up colored console logging. Must be called before any other logging.basicConfig()."""
+    handler = logging.StreamHandler()
+    handler.setFormatter(_ColorFormatter("%(levelname)s:%(name)s:%(message)s"))
+    logging.basicConfig(level=level, handlers=[handler])
+
+
 def _is_running_in_reloader() -> bool:
     """Check if this process was spawned by the reloader parent."""
     return os.environ.get(_RELOADER_ENV_VAR, "") == "yes"
@@ -61,7 +98,7 @@ async def _serve_with_watcher(host: str, port: int) -> bool:
 
 def main() -> None:
     """Entry point — acts as either the reloader parent or the worker child."""
-    logging.basicConfig(level=logging.INFO)
+    _setup_logging(logging.INFO)
 
     if _is_running_in_reloader():
         try:

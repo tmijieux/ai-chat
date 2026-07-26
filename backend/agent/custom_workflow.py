@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import uuid
+from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
@@ -10,6 +11,7 @@ import aiohttp
 
 from agent.agent import AgentSession, run_agent
 from agent.tools.base import ToolDict
+from conv_helpers import ToolSet
 from message_types import LLMMessage
 from agent.finish_tools import BaseFinishTool
 from agent.pipeline import run_stage
@@ -98,6 +100,28 @@ def evaluate_condition(condition: str, slots: dict[str, Any]) -> bool:
 # Orchestrator
 # ---------------------------------------------------------------------------
 
+@dataclass
+class LoopContext:
+    """Identity of the loop item and retry attempt an inner stage is currently running for.
+
+    Deliberately separate from run_stage's #N counter: that counter counts every invocation of
+    a stage name across the whole workflow, so a retry advances it just like a new item would.
+    This carries the real item index so logs can show which chunk is actually being worked on.
+    """
+
+    item_number: int
+    item_total: int
+    attempt_number: int
+    attempt_total: int
+
+    def label(self) -> str:
+        """Render as 'item 11/84 attempt 2/3' for log display."""
+        return (
+            f"item {self.item_number}/{self.item_total} "
+            f"attempt {self.attempt_number}/{self.attempt_total}"
+        )
+
+
 class CustomWorkflowOrchestrator:
     """Drives a YAML-defined workflow through typed stages with a shared slot registry.
 
@@ -109,6 +133,7 @@ class CustomWorkflowOrchestrator:
         self._workflow = workflow
         self._working_directory = working_directory
         self._tools = tools or []
+        self._loop_context: LoopContext | None = None
 
     async def run(self, session: AgentSession, user_message: str, messages: list[LLMMessage]) -> None:
         """Entry point — runs all workflow stages and emits events via session.
@@ -228,6 +253,7 @@ class CustomWorkflowOrchestrator:
             self._working_directory,
             max_iterations=stage.max_iterations,
             inject_turn_reminders=stage.inject_turn_reminders,
+            stage_label=None if self._loop_context is None else self._loop_context.label(),
         )
 
         logger.info("[workflow] llm stage '%s' result keys: %s", stage.name, list(result.keys()) if result else "None")
@@ -282,8 +308,12 @@ class CustomWorkflowOrchestrator:
             items = [None]  # single-item sentinel for non-list loops
 
         aggregated: list[dict] = []
+        item_total = len(items)
+        attempt_total = stage.max_retries + 1
+        logger.info("[workflow] loop '%s' — %d item(s), up to %d attempt(s) each", stage.name, item_total, attempt_total)
 
-        for item in items:
+        for item_index, item in enumerate(items):
+            item_number = item_index + 1
             if stage.over != "":
                 slots[stage.item_var] = item
             # Reset on_retry slots to their default (empty string) before first attempt
@@ -291,23 +321,41 @@ class CustomWorkflowOrchestrator:
                 slots[slot_name] = ""
 
             item_success = False
-            for attempt in range(stage.max_retries + 1):
+            for attempt in range(attempt_total):
+                self._loop_context = LoopContext(
+                    item_number=item_number,
+                    item_total=item_total,
+                    attempt_number=attempt + 1,
+                    attempt_total=attempt_total,
+                )
                 if attempt > 0:
-                    logger.info("[workflow] loop '%s' retry %d/%d", stage.name, attempt, stage.max_retries)
+                    logger.info("[workflow] loop '%s' item %d/%d — retry attempt %d/%d", stage.name, item_number, item_total, attempt + 1, attempt_total)
                     for slot_name, template in stage.on_retry.items():
                         slots[slot_name] = resolve_template(template, slots)
 
-                for inner in stage.inner_stages:
-                    await self._dispatch(inner, session, messages, slots)
+                try:
+                    for inner in stage.inner_stages:
+                        await self._dispatch(inner, session, messages, slots)
+                except Exception as exc:
+                    # An inner stage (e.g. the model failing to call its required finish tool)
+                    # raises instead of returning — treat that as a failed attempt so it goes
+                    # through the same retry path as a failed exit_condition, instead of
+                    # escaping the loop and aborting the whole workflow after one try.
+                    logger.warning("[workflow] loop '%s' item %d/%d attempt %d/%d raised: %s", stage.name, item_number, item_total, attempt + 1, attempt_total, exc)
+                    continue
 
                 if evaluate_condition(stage.exit_condition, slots):
                     item_success = True
                     break
 
+            self._loop_context = None
+
             if not item_success:
                 if stage.on_max_retries == "abort_workflow":
-                    raise _WorkflowAbort(f"Loop '{stage.name}' exhausted {stage.max_retries} retries — aborting workflow")
-                logger.warning("[workflow] loop '%s' max retries exhausted for item, continuing", stage.name)
+                    raise _WorkflowAbort(f"Loop '{stage.name}' item {item_number}/{item_total} exhausted {attempt_total} attempts — aborting workflow")
+                logger.warning("[workflow] loop '%s' item %d/%d failed all %d attempt(s) — skipping it and continuing", stage.name, item_number, item_total, attempt_total)
+            else:
+                logger.info("[workflow] loop '%s' item %d/%d done", stage.name, item_number, item_total)
 
             if stage.over != "":
                 aggregated.append(_collect_inner_results(stage, slots, item, item_success))
@@ -363,7 +411,8 @@ class CustomWorkflowOrchestrator:
             })
 
         logger.info("[workflow] respond: calling run_agent with %d messages", len(working_messages))
-        await run_agent(session, working_messages, self._tools, self._working_directory)
+        await run_agent(session, working_messages, ToolSet(tools=self._tools, extra_tools=None), self._working_directory)
+        logger.info("[workflow] respond: run_agent returned")
 
     async def _run_isolated_agent(
         self,

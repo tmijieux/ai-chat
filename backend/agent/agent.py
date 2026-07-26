@@ -28,6 +28,14 @@ logger = logging.getLogger(__name__)
 
 _LARGE_OUTPUT_CHARS = 20_000  # preshrink threshold for run_shell / search_web outputs
 
+# ANSI colors for the raw model-output stream printed to the console — kept visually distinct
+# from the (separately colored) logging.* lines so the two don't blend together.
+_ANSI_RESET = "\x1b[0m"
+_ANSI_DIM = "\x1b[2m"       # thinking
+_ANSI_GREEN = "\x1b[32m"    # content
+_ANSI_MAGENTA = "\x1b[35m"  # tool calls
+_ANSI_BLUE = "\x1b[34m"     # stream start/end markers
+
 
 class ToolCallAccEntry(TypedDict):
     id: str
@@ -480,6 +488,7 @@ async def _stream_llm(
     tools: list[ToolDict],
     max_tokens: int,
     session: AgentSession,
+    tool_choice: dict | str | None = None,
 ) -> GenerationResult:
     """Stream one LLM completion, emit events to session, and return accumulated result."""
     message: AssistantMessage = {"role": "assistant", "content": "", "thinking": ""}
@@ -487,32 +496,47 @@ async def _stream_llm(
     eval_count: int = 0
     done_reason: str = ""
 
-    async for event in backend.stream_completion(prepared, tools, temperature=1.0, max_tokens=max_tokens):
+    logger.info("[llm] sending completion request to backend (%d messages, %d tools, max_tokens=%d, tool_choice=%r)", len(prepared), len(tools), max_tokens, tool_choice)
+    first_event_received = False
+    async for event in backend.stream_completion(prepared, tools, temperature=1.0, max_tokens=max_tokens, tool_choice=tool_choice):
+        if not first_event_received:
+            logger.info("[llm] backend started responding")
+            print(f"{_ANSI_BLUE}\n--- LLM stream start ---{_ANSI_RESET}", flush=True)
+            first_event_received = True
         etype = event["type"]
 
         if etype == "thinking":
             message["thinking"] += event["content"]
+            print(f"{_ANSI_DIM}{event['content']}{_ANSI_RESET}", end="", flush=True)
             await session.emit({"type": "thinking", "content": event["content"]})
 
         elif etype == "content":
             message["content"] += event["content"]
+            print(f"{_ANSI_GREEN}{event['content']}{_ANSI_RESET}", end="", flush=True)
             await session.emit({"type": "content", "content": event["content"]})
 
         elif etype == "tool_call_start":
             idx = event["index"]
             tool_calls_acc[idx] = ToolCallAccEntry(id=event["id"], name=event["name"], arguments_str="")
+            print(f"{_ANSI_MAGENTA}\n[tool_call] {event['name']}({_ANSI_RESET}", end="", flush=True)
             await session.emit({"type": "tool_call_start", "tool_id": event["id"], "tool_name": event["name"]})
 
         elif etype == "tool_call_arg":
             idx = event["index"]
             if idx in tool_calls_acc:
                 tool_calls_acc[idx]["arguments_str"] += event["fragment"]
+            print(f"{_ANSI_MAGENTA}{event['fragment']}{_ANSI_RESET}", end="", flush=True)
             await session.emit({"type": "tool_call_chunk", "tool_id": tool_calls_acc.get(idx, {}).get("id", ""), "chunk": event["fragment"]})
 
         elif etype == "done":
             eval_count = event["completion_tokens"]
             done_reason = event["finish_reason"]
 
+    if not first_event_received:
+        logger.warning("[llm] backend stream ended with no events at all — check llama-server is reachable")
+    else:
+        print(f"{_ANSI_BLUE}\n--- LLM stream end ---{_ANSI_RESET}", flush=True)
+    logger.info("[llm] completion done — finish_reason=%s completion_tokens=%d tool_calls=%d", done_reason, eval_count, len(tool_calls_acc))
     return GenerationResult(
         message=message,
         tool_calls_acc=tool_calls_acc,
@@ -573,10 +597,16 @@ async def chat_with_tools(
     session: AgentSession,
     toolset: "ToolSet",
     working_directory: str | None,
-    
+
     allow_length_compression: bool = True,
+    tool_choice: dict | str | None = None,
 ) -> TurnResult:
-    """One iteration of the LLM call + tool execution loop."""
+    """One iteration of the LLM call + tool execution loop.
+
+    tool_choice forwards to the backend to mechanically constrain generation (grammar-based on
+    llama.cpp) — pass a specific {"type": "function", "function": {"name": ...}} to guarantee
+    that exact tool gets called instead of the model optionally choosing to answer in prose.
+    """
     prepared = backend.prepare_messages(messages)
     _log_context(prepared)
 
@@ -585,7 +615,7 @@ async def chat_with_tools(
 
     await session.emit({"type": "context", "ctx_tokens": prompt_eval_count, "messages": list(prepared)})
 
-    generation = await _stream_llm(prepared, toolset.tools, max_tokens, session)
+    generation = await _stream_llm(prepared, toolset.tools, max_tokens, session, tool_choice=tool_choice)
 
     print(f"[tokens] prompt_tokens={prompt_eval_count} completion_tokens={generation.eval_count} finish_reason={generation.done_reason}")
 

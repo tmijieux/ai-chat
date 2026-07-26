@@ -199,6 +199,7 @@ export type AgentEvent = (
   | { type: 'generation_end'; ctx_tokens: number }
   | { type: 'iteration_end'; prompt_tokens: number; response_tokens: number }
   | { type: 'ctx_update' | 'compressing'; ctx_tokens: number }
+  | { type: 'context'; ctx_tokens: number; messages: unknown[] }
   | { type: 'plan_proposal'; plan_id: string; plan: string }
   | { type: 'agent_question'; question_id: string; question: string; options?: string[] }
   | { type: 'mode_changed'; mode: ConversationMode }

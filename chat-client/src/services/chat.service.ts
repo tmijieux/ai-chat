@@ -323,9 +323,12 @@ export class ChatService {
   // Agentic chat
   // -------------------------------------------------------------------------
 
-  startAgentRun(input: string, imageIds: string[] = [], workflowName?: string): void {
-    const effectiveInput = input !== '' ? input : workflowName !== undefined ? `/${workflowName}` : input
-    const userMsg: DisplayMessage = { kind: 'user', id: crypto.randomUUID(), content: effectiveInput }
+  startAgentRun(input: string, imageIds: string[] = [], workflowName?: string, commandLabel?: string): void {
+    // The command prefix is cosmetic: it is echoed into the displayed/persisted message so the
+    // user can see which slash command was used, but the agent still receives just `input`.
+    const displayInput =
+      commandLabel === undefined ? input : input !== '' ? `/${commandLabel} ${input}` : `/${commandLabel}`
+    const userMsg: DisplayMessage = { kind: 'user', id: crypto.randomUUID(), content: displayInput }
     this._messages.update((msgs) => [...msgs, userMsg])
     this._promptTokens.set(0)
 

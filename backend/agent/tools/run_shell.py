@@ -53,7 +53,7 @@ class RunShellTool(BaseTool):
             if _IS_WINDOWS:
                 bash_exe = shutil.which("bash")
                 if bash_exe is None:
-                    return tool_error(self.name, "bash not found on PATH. Install Git for Windows.")
+                    return tool_error(self.name, "bash not found on PATH.")
                 proc = await asyncio.create_subprocess_exec(
                     bash_exe, "-c", command,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
