@@ -128,10 +128,32 @@ def _create_agent_task(
         return asyncio.create_task(run_agent(session, messages, toolset, working_directory))
 
 
+_TASK_CANCEL_TIMEOUT_SECONDS = 5.0
+
+
+async def _cancel_and_wait(task: asyncio.Task, label: str) -> None:
+    """Cancel a task and wait, bounded, for it to unwind. Never re-raises the task's outcome.
+
+    asyncio.wait reports completion rather than raising, which suits cleanup paths where the task's
+    own error is already handled or no longer relevant. The timeout guards against a task that
+    swallows CancelledError (the workflow orchestrator does, to report the abort) or is stuck in a
+    subprocess, so a wedged agent can never hang the websocket handler.
+    """
+    task.cancel()
+    done, _pending = await asyncio.wait({task}, timeout=_TASK_CANCEL_TIMEOUT_SECONDS)
+    if len(done) == 0:
+        logger.warning("[ws] %s did not stop within %ss of cancellation", label, _TASK_CANCEL_TIMEOUT_SECONDS)
+
+
 async def _run_agent_event_loop(
     websocket: WebSocket, session: AgentSession, agent_task: asyncio.Task
 ) -> None:
-    """Drive the agent session over WebSocket until the agent emits done or error."""
+    """Drive the agent session over WebSocket until the agent emits done or error.
+
+    The agent runs as an independent task and must be cancelled on every exit path. When the client
+    disconnects mid-run (page reload) send_json raises here, which previously skipped the cleanup
+    and left a whole workflow running against a dead socket.
+    """
     async def _send_events_from_agent_to_frontend() -> None:
         while True:
             event = await session.outbound.get()
@@ -145,9 +167,11 @@ async def _run_agent_event_loop(
 
     send_task = asyncio.create_task(_send_events_from_agent_to_frontend())
     recv_task = asyncio.create_task(_ws_receive_messages_from_frontend(websocket, session, agent_task))
-    await send_task
-    recv_task.cancel()
-    agent_task.cancel()
+    try:
+        await send_task
+    finally:
+        await _cancel_and_wait(recv_task, "websocket receive task")
+        await _cancel_and_wait(agent_task, "agent task")
 
 
 @router.websocket("/api/agent/ws")
@@ -254,9 +278,13 @@ async def pipeline_websocket(websocket: WebSocket, sess: AsyncSession = Depends(
         send_task = asyncio.create_task(send_pipeline_events_to_websocket())
         recv_task = asyncio.create_task(_ws_receive_messages_from_frontend(websocket, session, agent_task))
 
-        await send_task
-        recv_task.cancel()
-        agent_task.cancel()
+        # See the main agent endpoint: cleanup must run even when send_json raises on a
+        # client disconnect, or the orchestrator keeps running headless.
+        try:
+            await send_task
+        finally:
+            await _cancel_and_wait(recv_task, "pipeline websocket receive task")
+            await _cancel_and_wait(agent_task, "pipeline agent task")
 
     except WebSocketDisconnect:
         pass

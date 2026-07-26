@@ -300,24 +300,34 @@ async def run_stage(
         _run_stage_loop(sub_session, stage_messages, all_schemas, extra_tools, working_directory, stage_name, max_iterations, numbered_name, inject_turn_reminders, finish_schema)
     )
 
-    while True:
-        event = await sub_session.outbound.get()
-        if event["type"] == "_stage_done":
-            break
-        if event.get("type") == "tool_confirm":
-            tool_id = event.get("tool_id")
-            if tool_id and tool_id in sub_session._pending_confirms:
-                parent_session._pending_confirms[tool_id] = sub_session._pending_confirms[tool_id]
-        existing = event.get("_pipeline_stage")
-        tag = f"{numbered_name}.{existing}" if existing else numbered_name
-        forwarded = {**event, "_pipeline_stage": tag}
-        if execution_id is not None and forwarded.get("_workflow_execution") is None:
-            # Only stamp the innermost stage's id — a nested run_stage already tagged its own
-            # events, and the run view files activity under the stage that actually produced it.
-            forwarded["_workflow_execution"] = execution_id
-        await parent_session.emit(forwarded)
+    try:
+        while True:
+            event = await sub_session.outbound.get()
+            if event["type"] == "_stage_done":
+                break
+            if event.get("type") == "tool_confirm":
+                tool_id = event.get("tool_id")
+                if tool_id and tool_id in sub_session._pending_confirms:
+                    parent_session._pending_confirms[tool_id] = sub_session._pending_confirms[tool_id]
+            existing = event.get("_pipeline_stage")
+            tag = f"{numbered_name}.{existing}" if existing else numbered_name
+            forwarded = {**event, "_pipeline_stage": tag}
+            if execution_id is not None and forwarded.get("_workflow_execution") is None:
+                # Only stamp the innermost stage's id — a nested run_stage already tagged its own
+                # events, and the run view files activity under the stage that actually produced it.
+                forwarded["_workflow_execution"] = execution_id
+            await parent_session.emit(forwarded)
 
-    await loop_task
+        await loop_task
+    finally:
+        # _run_stage_loop is an independent task, so cancelling whoever awaits this stage does not
+        # touch it: the CancelledError surfaces at the queue read above and unwinds past here while
+        # the loop keeps driving the LLM. That orphaned task was why aborting a run (or reloading
+        # the page) left the in-flight generation running to completion. Not awaited — we are
+        # already unwinding, and stopping it is what matters.
+        if not loop_task.done():
+            logger.info("[pipeline:%s] stage abandoned — cancelling its loop task", numbered_name)
+            loop_task.cancel()
 
     if sub_session.finish_result is None:
         msg = f"[pipeline:{numbered_name}] stage did not call its finish tool — aborting"
