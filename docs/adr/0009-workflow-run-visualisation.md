@@ -15,7 +15,9 @@ The obvious cheap option was to render stages as cards in the conversation. Reje
 
 The flooding problem reinforces this (168 ephemeral cards in a list that is also the persistent conversation record), but the context-ledger argument is the load-bearing one: it would still hold even for a two-stage workflow.
 
-The run view therefore replaces the message list inside the chat area while open, rather than being a new split pane. The status bar and input stay put so a long run can still be aborted, and the existing inference-context pane remains usable alongside it. A `respond` stage is the exception: its output genuinely *is* conversation, so the view hands back to the message list when one starts.
+The run view therefore replaces the message list inside the chat area while open, rather than being a new split pane. The status bar and input stay put so a long run can still be aborted, and the existing inference-context pane remains usable alongside it.
+
+The cost of covering the message list is that anything rendered *into* that list becomes unreachable while the view is open. A `respond` stage is one case — its output genuinely is conversation. The sharper one is interaction that blocks the workflow: a tool confirmation card appearing behind the run view leaves the user looking at a stalled workflow with no visible way to unblock it. So the view closes itself for those events (confirmations, agent questions, plan proposals) and is reopened manually via the chip. It deliberately never reopens on its own mid-run, which would risk covering a prompt the user is part-way through answering. If this hand-back proves too disruptive on confirmation-heavy workflows, the alternative is making the run view a side pane like the inference-context view so both are visible at once.
 
 ## Live only, no persistence
 

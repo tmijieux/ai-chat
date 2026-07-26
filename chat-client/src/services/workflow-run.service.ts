@@ -83,6 +83,13 @@ export class WorkflowRunService {
       return
     }
 
+    // Anything that blocks on the user is rendered in the message list, which the run view is
+    // covering — so hand the view back rather than leaving them staring at a stalled workflow
+    // with the prompt hidden behind it. The chip brings the run view back.
+    if (event.type === 'tool_confirm' || event.type === 'agent_question' || event.type === 'plan_proposal') {
+      this.viewOpen.set(false)
+    }
+
     if (event.type === 'stage_enter') {
       this._onStageEnter(event)
       return

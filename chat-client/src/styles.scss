@@ -563,7 +563,23 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   transition: width 0.2s ease;
 }
 
+/* Stage activity is full of long unbreakable tokens (absolute paths, JSON blobs). pre-wrap alone
+   only wraps at whitespace, so one long token would widen the panel and scroll the whole page. */
+.wf-pre {
+  overflow-wrap: anywhere;
+}
+
+/* Cap the stage list so a workflow with many stages cannot squeeze out the detail pane. */
+.wf-stage-list {
+  max-height: 45%;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
 /* --- MISSING UTILITIES --- */
+/* Flex items default to min-height:auto, which stops them shrinking below their content and
+   makes an overflowing child push the whole page out instead of scrolling inside itself. */
+.min-h-0       { min-height: 0; }
 .border-b      { border-bottom: 1px solid #334155; }
 .border-y      { border-top: 1px solid #334155; border-bottom: 1px solid #334155; }
 .text-gray-300 { color: #d1d5db; }

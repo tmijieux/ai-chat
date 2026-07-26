@@ -14,7 +14,7 @@
     </div>
 
     <!-- stage rows -->
-    <div class="v-scroll flex flex-col shrink-0">
+    <div class="wf-stage-list flex flex-col">
       @for (row of rows(); track row.node.path) {
         @let node = row.node;
         @let state = stateFor(node);
@@ -85,7 +85,7 @@
 
     <!-- detail pane -->
     @let selected = workflowSvc.selectedExecution();
-    <div class="flex flex-col flex-1 min-h-0 border-t">
+    <div class="flex flex-col flex-1 min-h-0 min-w-0 border-t">
       <div class="flex items-center gap-2 px-3 py-1 bg-card border-b shrink-0">
         <span class="text-10 font-semibold text-gray-300 font-mono">
           {{ selected === null ? 'no stage selected' : selected.execution_id }}
@@ -103,7 +103,7 @@
         }
       </div>
 
-      <div class="flex-1 overflow-y-auto flex flex-col">
+      <div class="flex-1 min-h-0 min-w-0 overflow-y-auto flex flex-col">
         @if (selected === null) {
           <div class="flex items-center justify-center py-12 text-gray-500 text-xs italic">
             Select a stage to see what it did
@@ -121,13 +121,13 @@
                 <div class="px-3 py-1 border-b bg-card">
                   <span class="text-10 text-gray-500 font-mono uppercase">thinking</span>
                 </div>
-                <pre class="text-11 text-gray-500 whitespace-pre-wrap m-0 px-3 py-2 shrink-0">{{ entry.text }}</pre>
+                <pre class="wf-pre text-11 text-gray-500 whitespace-pre-wrap m-0 px-3 py-2 shrink-0">{{ entry.text }}</pre>
               }
               @case ('content') {
                 <div class="px-3 py-1 border-b bg-card">
                   <span class="text-10 text-gray-500 font-mono uppercase">response</span>
                 </div>
-                <pre class="text-11 text-gray-300 whitespace-pre-wrap m-0 px-3 py-2 shrink-0">{{ entry.text }}</pre>
+                <pre class="wf-pre text-11 text-gray-300 whitespace-pre-wrap m-0 px-3 py-2 shrink-0">{{ entry.text }}</pre>
               }
               @case ('tool_call') {
                 <div class="flex items-center gap-2 px-3 py-1 border-y bg-card shrink-0">
@@ -135,7 +135,7 @@
                     {{ entry.tool_name }}
                   </span>
                 </div>
-                <pre class="text-11 text-gray-500 whitespace-pre-wrap m-0 px-3 py-2 shrink-0">{{ entry.args_text }}</pre>
+                <pre class="wf-pre text-11 text-gray-500 whitespace-pre-wrap m-0 px-3 py-2 shrink-0">{{ entry.args_text }}</pre>
               }
               @case ('tool_result') {
                 <div class="flex items-center gap-2 px-3 py-1 border-y bg-card shrink-0">
@@ -144,10 +144,10 @@
                     <span class="text-10 text-gray-300 font-mono truncate">{{ entry.log_message }}</span>
                   }
                 </div>
-                <pre class="text-11 text-gray-300 whitespace-pre-wrap m-0 px-3 py-2 shrink-0 ctx-bg-tool">{{ entry.content }}</pre>
+                <pre class="wf-pre text-11 text-gray-300 whitespace-pre-wrap m-0 px-3 py-2 shrink-0 ctx-bg-tool">{{ entry.content }}</pre>
               }
               @case ('error') {
-                <pre class="text-11 text-danger whitespace-pre-wrap m-0 px-3 py-2 shrink-0">⚠ {{ entry.message }}</pre>
+                <pre class="wf-pre text-11 text-danger whitespace-pre-wrap m-0 px-3 py-2 shrink-0">⚠ {{ entry.message }}</pre>
               }
             }
           }
@@ -156,7 +156,7 @@
             <div class="px-3 py-1 border-y bg-card shrink-0">
               <span class="text-10 text-gray-500 font-mono uppercase">stage result</span>
             </div>
-            <pre class="text-11 text-gray-300 whitespace-pre-wrap m-0 px-3 py-2 shrink-0">{{ resultJson(selected.result) }}</pre>
+            <pre class="wf-pre text-11 text-gray-300 whitespace-pre-wrap m-0 px-3 py-2 shrink-0">{{ resultJson(selected.result) }}</pre>
           }
         }
       </div>

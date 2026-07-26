@@ -337,4 +337,4 @@ Workflow stages run in isolated sessions and are **not** part of the conversatio
 
 **Live only:** the run view is built from the event stream and is not persisted. A page refresh loses the view while the run continues on the backend.
 
-A `respond` stage streams into the conversation itself, so the view automatically hands back to the message list when one starts.
+**Handing the view back:** the run view closes itself whenever the message list has something the user must see or act on, because it is covering that list. This happens for a `respond` stage (whose output genuinely is conversation) and for anything that blocks on the user — tool confirmations, agent questions, plan proposals. The chip brings the run view back; it never reopens on its own mid-run, so the view never steals focus from a prompt the user is answering.
