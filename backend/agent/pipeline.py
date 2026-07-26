@@ -259,6 +259,7 @@ async def run_stage(
     max_iterations: int | None = None,
     inject_turn_reminders: bool = False,
     stage_label: str | None = None,
+    execution_id: str | None = None,
 ) -> dict:
     """
     Run a single pipeline stage. Loops until the finish tool is called.
@@ -269,6 +270,11 @@ async def run_stage(
     call belongs to). It is displayed alongside the #N invocation counter, which counts total
     calls of this stage name across the whole workflow and is NOT an item index — a retry of
     item 11 gets the next counter value, not the same one.
+
+    execution_id identifies this exact stage invocation for the workflow run view. When set,
+    every forwarded event is additionally stamped with _workflow_execution, so the frontend can
+    file thinking and tool activity under the right stage node. _pipeline_stage stays a display
+    string; this is the machine-readable key alongside it.
     """
     sub_session = AgentSession()
     sub_session.mode = parent_session.mode
@@ -304,7 +310,12 @@ async def run_stage(
                 parent_session._pending_confirms[tool_id] = sub_session._pending_confirms[tool_id]
         existing = event.get("_pipeline_stage")
         tag = f"{numbered_name}.{existing}" if existing else numbered_name
-        await parent_session.emit({**event, "_pipeline_stage": tag})
+        forwarded = {**event, "_pipeline_stage": tag}
+        if execution_id is not None and forwarded.get("_workflow_execution") is None:
+            # Only stamp the innermost stage's id — a nested run_stage already tagged its own
+            # events, and the run view files activity under the stage that actually produced it.
+            forwarded["_workflow_execution"] = execution_id
+        await parent_session.emit(forwarded)
 
     await loop_task
 

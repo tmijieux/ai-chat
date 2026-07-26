@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -100,6 +101,72 @@ def evaluate_condition(condition: str, slots: dict[str, Any]) -> bool:
 # Orchestrator
 # ---------------------------------------------------------------------------
 
+_MAX_STAGE_RESULT_CHARS = 4000
+
+
+def _truncate_stage_result(result: Any) -> Any:
+    """Keep stage_exit payloads small enough to stream.
+
+    Some stage products are inherently huge — chunk_file returns the entire source file, and a
+    loop aggregate holds every item's output — and shipping those verbatim would duplicate the
+    whole payload over the websocket. Oversized results are replaced by a description of their
+    shape; the run view shows a summary line and the detail pane, never the raw bulk.
+    """
+    if result is None:
+        return None
+    serialized = json.dumps(result, ensure_ascii=False, default=str)
+    if len(serialized) <= _MAX_STAGE_RESULT_CHARS:
+        return result
+    summary: dict[str, Any] = {
+        "_truncated": True,
+        "_size_chars": len(serialized),
+        "_type": type(result).__name__,
+    }
+    if isinstance(result, dict):
+        summary["_keys"] = sorted(str(key) for key in result.keys())
+    if isinstance(result, list):
+        summary["_length"] = len(result)
+    return summary
+
+
+def _serialize_stage_nodes(
+    stages: list[WorkflowStageDefinition], path_prefix: str = ""
+) -> list[dict]:
+    """Serialize the static stage structure for the workflow_start event.
+
+    Emitted once up front so the run view can draw the whole plan before anything executes,
+    then decorate it with runtime status. `path` is the stable dotted identity used by every
+    later stage_enter / stage_exit event; loop inner stages are nested under `children`.
+    """
+    nodes: list[dict] = []
+    for stage in stages:
+        path = path_prefix + stage.name
+        nodes.append({
+            "path": path,
+            "name": stage.name,
+            "type": stage.type,
+            "finish_tool": stage.finish_tool_name if stage.type == "llm" else None,
+            "tools": stage.tools + stage.agents,
+            "over": stage.over if stage.over != "" else None,
+            "attempt_total": stage.max_retries + 1 if stage.type == "loop" else None,
+            "children": _serialize_stage_nodes(stage.inner_stages, f"{path}."),
+        })
+    return nodes
+
+
+@dataclass
+class StageOutcome:
+    """What a dispatched stage produced.
+
+    jump_to is set only by branch stages, naming the stage to continue from.
+    result is the stage's finish-tool args (llm/agent), coordinator output, or branch decision —
+    whatever should be shown as that stage's product in the run view. None when there is none.
+    """
+
+    jump_to: str | None = None
+    result: dict | None = None
+
+
 @dataclass
 class LoopContext:
     """Identity of the loop item and retry attempt an inner stage is currently running for.
@@ -134,6 +201,7 @@ class CustomWorkflowOrchestrator:
         self._working_directory = working_directory
         self._tools = tools or []
         self._loop_context: LoopContext | None = None
+        self._invocation_counters: dict[str, int] = {}
 
     async def run(self, session: AgentSession, user_message: str, messages: list[LLMMessage]) -> None:
         """Entry point — runs all workflow stages and emits events via session.
@@ -148,6 +216,11 @@ class CustomWorkflowOrchestrator:
             session.mode = self._workflow.mode
             logger.info("[workflow:%s] mode temporarily set to '%s'", self._workflow.name, self._workflow.mode)
         session.auto_safe_commands = list(self._workflow.auto_safe_commands)
+        await session.emit({
+            "type": "workflow_start",
+            "workflow_name": self._workflow.name,
+            "nodes": _serialize_stage_nodes(self._workflow.stages),
+        })
         try:
             await self._run_workflow(session, user_message, messages)
         except asyncio.CancelledError:
@@ -183,9 +256,10 @@ class CustomWorkflowOrchestrator:
         while current < len(stages):
             stage = stages[current]
             logger.info("[workflow:%s] dispatching stage '%s' (type=%s)", self._workflow.name, stage.name, stage.type)
-            jump_to = await self._dispatch(stage, session, messages, slots)
+            outcome = await self._dispatch(stage, session, messages, slots)
             logger.info("[workflow:%s] stage '%s' done — slots keys: %s", self._workflow.name, stage.name, list(slots.keys()))
-            if jump_to is not None:
+            if outcome.jump_to is not None:
+                jump_to = outcome.jump_to
                 if jump_to not in stage_index:
                     raise ValueError(f"Branch target '{jump_to}' not found in workflow stages")
                 logger.info("[workflow:%s] jumping to stage '%s'", self._workflow.name, jump_to)
@@ -196,42 +270,122 @@ class CustomWorkflowOrchestrator:
         logger.info("[workflow:%s] all stages complete", self._workflow.name)
         await session.emit({"type": "done", "finished_without_response": False})
 
+    def _next_execution_id(self, path: str) -> str:
+        """Allocate a unique id for one invocation of a stage path (e.g. 'translate_loop.translate_chunk#41')."""
+        count = self._invocation_counters.get(path, 0) + 1
+        self._invocation_counters[path] = count
+        return f"{path}#{count}"
+
+    async def _emit_stage_enter(
+        self, session: AgentSession, stage: WorkflowStageDefinition, path: str, execution_id: str
+    ) -> None:
+        """Announce that a stage invocation is starting, carrying its loop item and attempt identity."""
+        loop_context = self._loop_context
+        await session.emit({
+            "type": "stage_enter",
+            "path": path,
+            "execution_id": execution_id,
+            "stage_type": stage.type,
+            "invocation_number": self._invocation_counters[path],
+            "item_number": None if loop_context is None else loop_context.item_number,
+            "item_total": None if loop_context is None else loop_context.item_total,
+            "attempt_number": None if loop_context is None else loop_context.attempt_number,
+            "attempt_total": None if loop_context is None else loop_context.attempt_total,
+        })
+
+    async def _emit_stage_exit(
+        self,
+        session: AgentSession,
+        path: str,
+        execution_id: str,
+        status: str,
+        result: Any,
+        started_at: float | None,
+    ) -> None:
+        """Announce that a stage invocation ended. started_at is None for stages that never ran."""
+        duration_ms = 0 if started_at is None else int((time.monotonic() - started_at) * 1000)
+        await session.emit({
+            "type": "stage_exit",
+            "path": path,
+            "execution_id": execution_id,
+            "status": status,
+            "result": _truncate_stage_result(result),
+            "duration_ms": duration_ms,
+        })
+
     async def _dispatch(
         self,
         stage: WorkflowStageDefinition,
         session: AgentSession,
         messages: list[LLMMessage],
         slots: dict[str, Any],
-    ) -> str | None:
-        """Run one stage. Returns a jump target name for branch stages, None otherwise."""
+        path_prefix: str = "",
+    ) -> StageOutcome:
+        """Run one stage, bracketed by stage_enter / stage_exit events for the run view.
+
+        Single choke point for the skip condition, the invocation counter and the timing, so every
+        stage type reports the same lifecycle no matter which runner handles it. A runner that
+        raises still reports stage_exit(failed) before the exception propagates — _run_loop relies
+        on catching it to retry the item.
+        """
+        path = path_prefix + stage.name
+        execution_id = self._next_execution_id(path)
+
+        # Loops gate on entry_condition, everything except branches on condition.
+        skip_condition = stage.entry_condition if stage.type == "loop" else stage.condition
+        if stage.type != "branch" and not evaluate_condition(skip_condition, slots):
+            logger.info("[workflow] skipping %s stage '%s' (condition false)", stage.type, stage.name)
+            await self._emit_stage_enter(session, stage, path, execution_id)
+            await self._emit_stage_exit(session, path, execution_id, "skipped", None, None)
+            return StageOutcome()
+
+        await self._emit_stage_enter(session, stage, path, execution_id)
+        started_at = time.monotonic()
+        try:
+            outcome = await self._run_by_type(stage, session, messages, slots, path, execution_id)
+        except Exception:
+            await self._emit_stage_exit(session, path, execution_id, "failed", None, started_at)
+            raise
+        await self._emit_stage_exit(session, path, execution_id, "done", outcome.result, started_at)
+        return outcome
+
+    async def _run_by_type(
+        self,
+        stage: WorkflowStageDefinition,
+        session: AgentSession,
+        messages: list[LLMMessage],
+        slots: dict[str, Any],
+        path: str,
+        execution_id: str,
+    ) -> StageOutcome:
+        """Route a stage to the runner for its type and return what it produced."""
         if stage.type == "llm":
-            await self._run_llm(stage, session, slots)
-        elif stage.type == "coordinator":
-            await self._run_coordinator(stage, session, slots)
-        elif stage.type == "branch":
+            return StageOutcome(result=await self._run_llm(stage, session, slots, execution_id))
+        if stage.type == "coordinator":
+            return StageOutcome(result=await self._run_coordinator(stage, session, slots))
+        if stage.type == "branch":
             return self._resolve_branch(stage, slots)
-        elif stage.type == "loop":
-            await self._run_loop(stage, session, messages, slots)
-        elif stage.type == "respond":
+        if stage.type == "loop":
+            return StageOutcome(result=await self._run_loop(stage, session, messages, slots, path))
+        if stage.type == "respond":
             await self._run_respond(stage, session, messages, slots)
-        elif stage.type == "agent":
-            await self._run_isolated_agent(stage, session, slots)
-        else:
-            raise ValueError(f"Unknown stage type '{stage.type}'")
-        return None
+            return StageOutcome()
+        if stage.type == "agent":
+            return StageOutcome(result=await self._run_isolated_agent(stage, session, slots, execution_id))
+        raise ValueError(f"Unknown stage type '{stage.type}'")
 
     # ------------------------------------------------------------------
     # Stage runners
     # ------------------------------------------------------------------
 
     async def _run_llm(
-        self, stage: WorkflowStageDefinition, session: AgentSession, slots: dict[str, Any]
-    ) -> None:
-        """Run an LLM stage: resolve prompts, run the loop, store finish result."""
-        if not evaluate_condition(stage.condition, slots):
-            logger.info("[workflow] skipping llm stage '%s' (condition false)", stage.name)
-            return
-
+        self,
+        stage: WorkflowStageDefinition,
+        session: AgentSession,
+        slots: dict[str, Any],
+        execution_id: str,
+    ) -> dict:
+        """Run an LLM stage: resolve prompts, run the loop, store and return the finish result."""
         system_prompt = resolve_template(stage.system_prompt, slots)
         user_prompt = resolve_template(stage.user_prompt, slots)
         logger.info("[workflow] llm stage '%s' — tools=%s finish_tool=%s user_prompt=%r",
@@ -254,25 +408,17 @@ class CustomWorkflowOrchestrator:
             max_iterations=stage.max_iterations,
             inject_turn_reminders=stage.inject_turn_reminders,
             stage_label=None if self._loop_context is None else self._loop_context.label(),
+            execution_id=execution_id,
         )
 
         logger.info("[workflow] llm stage '%s' result keys: %s", stage.name, list(result.keys()) if result else "None")
         slots[stage.name] = result
-        await session.emit({
-            "type": "pipeline_summary",
-            "label": f"stage: {stage.name}",
-            "content": json.dumps(result, ensure_ascii=False, indent=2),
-            "notes": None,
-        })
+        return result
 
     async def _run_coordinator(
         self, stage: WorkflowStageDefinition, session: AgentSession, slots: dict[str, Any]
-    ) -> None:
-        """Run a coordinator action: resolve inputs, execute action, store output."""
-        if not evaluate_condition(stage.condition, slots):
-            logger.info("[workflow] skipping coordinator stage '%s' (condition false)", stage.name)
-            return
-
+    ) -> Any:
+        """Run a coordinator action: resolve inputs, execute action, store and return its output."""
         logger.info("[workflow] coordinator '%s' action='%s' inputs=%s", stage.name, stage.action, list(stage.action_input.keys()))
         resolved_inputs = {k: resolve_value(v, slots) for k, v in stage.action_input.items()}
         output = await run_coordinator_action(stage.action, resolved_inputs, session, self._working_directory)
@@ -280,14 +426,21 @@ class CustomWorkflowOrchestrator:
         if stage.action_output != "":
             slots[stage.action_output] = output
         logger.info("[workflow] coordinator '%s' done — output_slot='%s'", stage.name, stage.action_output)
+        return output
 
-    def _resolve_branch(self, stage: WorkflowStageDefinition, slots: dict[str, Any]) -> str:
-        """Evaluate a branch condition and return the target stage name."""
-        if evaluate_condition(stage.condition, slots):
-            logger.info("[workflow] branch '%s' → %s (true)", stage.name, stage.if_true)
-            return stage.if_true
-        logger.info("[workflow] branch '%s' → %s (false)", stage.name, stage.if_false)
-        return stage.if_false
+    def _resolve_branch(self, stage: WorkflowStageDefinition, slots: dict[str, Any]) -> StageOutcome:
+        """Evaluate a branch condition and return the target stage name as the jump target.
+
+        The decision rides along as the stage result so the run view can show which way it went
+        without needing a dedicated event.
+        """
+        condition_result = evaluate_condition(stage.condition, slots)
+        target = stage.if_true if condition_result else stage.if_false
+        logger.info("[workflow] branch '%s' → %s (%s)", stage.name, target, condition_result)
+        return StageOutcome(
+            jump_to=target,
+            result={"condition_result": condition_result, "target": target},
+        )
 
     async def _run_loop(
         self,
@@ -295,12 +448,14 @@ class CustomWorkflowOrchestrator:
         session: AgentSession,
         messages: list[LLMMessage],
         slots: dict[str, Any],
-    ) -> None:
-        """Run a loop stage: iterate over a list or repeat until exit_condition."""
-        if not evaluate_condition(stage.entry_condition, slots):
-            logger.info("[workflow] skipping loop '%s' (entry_condition false)", stage.name)
-            return
+        path: str,
+    ) -> dict:
+        """Run a loop stage: iterate over a list or repeat until exit_condition.
 
+        Returns a compact tally rather than the aggregated per-item results: those are already
+        stored in the loop_output slot, and streaming them again as a stage result would repeat
+        every item's full output over the event stream.
+        """
         items: list[Any]
         if stage.over != "":
             items = resolve_value(stage.over, slots) or []
@@ -310,6 +465,8 @@ class CustomWorkflowOrchestrator:
         aggregated: list[dict] = []
         item_total = len(items)
         attempt_total = stage.max_retries + 1
+        succeeded_count = 0
+        failed_count = 0
         logger.info("[workflow] loop '%s' — %d item(s), up to %d attempt(s) each", stage.name, item_total, attempt_total)
 
         for item_index, item in enumerate(items):
@@ -335,7 +492,7 @@ class CustomWorkflowOrchestrator:
 
                 try:
                     for inner in stage.inner_stages:
-                        await self._dispatch(inner, session, messages, slots)
+                        await self._dispatch(inner, session, messages, slots, path_prefix=f"{path}.")
                 except Exception as exc:
                     # An inner stage (e.g. the model failing to call its required finish tool)
                     # raises instead of returning — treat that as a failed attempt so it goes
@@ -348,14 +505,26 @@ class CustomWorkflowOrchestrator:
                     item_success = True
                     break
 
+            attempts_used = attempt + 1
             self._loop_context = None
+
+            await session.emit({
+                "type": "loop_item_exit",
+                "path": path,
+                "item_number": item_number,
+                "item_total": item_total,
+                "success": item_success,
+                "attempts_used": attempts_used,
+            })
 
             if not item_success:
                 if stage.on_max_retries == "abort_workflow":
                     raise _WorkflowAbort(f"Loop '{stage.name}' item {item_number}/{item_total} exhausted {attempt_total} attempts — aborting workflow")
                 logger.warning("[workflow] loop '%s' item %d/%d failed all %d attempt(s) — skipping it and continuing", stage.name, item_number, item_total, attempt_total)
+                failed_count += 1
             else:
                 logger.info("[workflow] loop '%s' item %d/%d done", stage.name, item_number, item_total)
+                succeeded_count += 1
 
             if stage.over != "":
                 aggregated.append(_collect_inner_results(stage, slots, item, item_success))
@@ -363,6 +532,12 @@ class CustomWorkflowOrchestrator:
         if stage.loop_output != "" and stage.over != "":
             task_summary = _format_task_summary(aggregated)
             slots[stage.loop_output] = {"items": aggregated, "task_summary": task_summary}
+
+        return {
+            "item_total": item_total,
+            "succeeded": succeeded_count,
+            "failed": failed_count,
+        }
 
     async def _run_respond(
         self,
@@ -419,8 +594,9 @@ class CustomWorkflowOrchestrator:
         stage: WorkflowStageDefinition,
         session: AgentSession,
         slots: dict[str, Any],
-    ) -> None:
-        """Run a named agent from agents/ as an isolated stage. Result stored in slots.
+        execution_id: str,
+    ) -> dict:
+        """Run a named agent from agents/ as an isolated stage. Result stored in slots and returned.
 
         Resolves agent YAML relative to the workflow's own directory first (agents/
         subdirectory), then falls back to the global backend/agents/ directory.
@@ -451,15 +627,11 @@ class CustomWorkflowOrchestrator:
             self._working_directory,
             max_iterations=agent_def.max_iterations,
             inject_turn_reminders=agent_def.inject_turn_reminders,
+            execution_id=execution_id,
         )
 
         slots[stage.name] = result
-        await session.emit({
-            "type": "pipeline_summary",
-            "label": f"agent: {stage.workflow_ref}",
-            "content": json.dumps(result, ensure_ascii=False, indent=2),
-            "notes": None,
-        })
+        return result
 
 
 # ---------------------------------------------------------------------------

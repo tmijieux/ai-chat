@@ -23,6 +23,8 @@ import { PlanCardComponent, PlanAcceptPayload } from '../plan-card/plan-card.com
 import { AgentQuestionCardComponent } from '../agent-question-card/agent-question-card.component'
 import { ToolEvaluatingComponent } from '../tool-evaluating/tool-evaluating.component'
 import { ContextViewComponent } from '../context-view/context-view.component'
+import { WorkflowRunPanelComponent } from '../workflow-run-panel/workflow-run-panel.component'
+import { WorkflowRunService } from '../../services/workflow-run.service'
 
 @Component({
   selector: 'app-chat',
@@ -43,6 +45,7 @@ import { ContextViewComponent } from '../context-view/context-view.component'
     AgentQuestionCardComponent,
     ToolEvaluatingComponent,
     ContextViewComponent,
+    WorkflowRunPanelComponent,
   ],
   templateUrl: './chat.component.html',
   styleUrls: ['./chat.component.scss'],
@@ -53,6 +56,28 @@ export class ChatComponent implements OnDestroy {
   private router = inject(Router)
   readonly chatSvc = inject(ChatService)
   readonly appStatus = inject(AppStatusService)
+  readonly workflowSvc = inject(WorkflowRunService)
+
+  /** Stage name + loop progress for the status bar chip, or null when no workflow has run. */
+  readonly workflowChipLabel = computed(() => {
+    const run = this.workflowSvc.run()
+    if (run === null) {
+      return null
+    }
+    const executionId = run.current_execution_id
+    if (executionId === null) {
+      return run.workflow_name
+    }
+    const state = run.execution_by_id[executionId]
+    if (state === undefined) {
+      return run.workflow_name
+    }
+    const stageName = state.path.split('.').pop() ?? state.path
+    if (state.item_number === null) {
+      return stageName
+    }
+    return `${stageName} ${state.item_number}/${state.item_total}`
+  })
 
   readonly drawerOpen = signal(false)
   readonly sidebarPickerOpen = signal(false)

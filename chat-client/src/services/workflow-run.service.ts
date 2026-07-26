@@ -1,0 +1,372 @@
+import { Injectable, computed, inject, signal } from '@angular/core'
+import { AgentService } from './agent.service'
+import {
+  AgentEvent,
+  WorkflowActivityEntry,
+  WorkflowLoopItemState,
+  WorkflowRun,
+  WorkflowStageState,
+} from '../types/message-types'
+
+/**
+ * Number of stage invocations that keep their full activity log. Older ones are released and
+ * marked detail_dropped, so a loop over hundreds of items cannot grow memory without bound.
+ */
+const ACTIVITY_RETAINED_EXECUTIONS = 11
+
+/**
+ * Live view of the running workflow, assembled from the agent event stream.
+ *
+ * Subscribes to AgentService.events$ once and keeps that subscription for the app's lifetime —
+ * events$ is a long-lived root Subject, so this catches every run without the per-run
+ * subscribe/unsubscribe dance ChatService needs for its message accumulation.
+ *
+ * State is live only: nothing is persisted, and a page refresh loses the view while the run
+ * continues headless on the backend.
+ */
+@Injectable({ providedIn: 'root' })
+export class WorkflowRunService {
+  private agentSvc = inject(AgentService)
+
+  private readonly _run = signal<WorkflowRun | null>(null)
+  readonly run = this._run.asReadonly()
+
+  /** True when the run view replaces the message list. Set automatically, toggleable by the user. */
+  readonly viewOpen = signal(false)
+
+  /** Which invocation the detail pane shows. Null follows the running stage. */
+  readonly selectedExecutionId = signal<string | null>(null)
+
+  /** Execution ids that still hold activity, oldest first — the ring buffer's order. */
+  private activityOrder: string[] = []
+
+  readonly selectedExecution = computed<WorkflowStageState | null>(() => {
+    const run = this._run()
+    if (run === null) {
+      return null
+    }
+    const explicitId = this.selectedExecutionId()
+    const id = explicitId !== null ? explicitId : run.current_execution_id
+    if (id === null) {
+      return null
+    }
+    return run.execution_by_id[id] ?? null
+  })
+
+  constructor() {
+    this.agentSvc.events$.subscribe((event) => {
+      this._handle(event)
+    })
+  }
+
+  private _handle(event: AgentEvent): void {
+    if (event.type === 'workflow_start') {
+      this.activityOrder = []
+      this.selectedExecutionId.set(null)
+      this._run.set({
+        workflow_name: event.workflow_name,
+        status: 'running',
+        started_at: Date.now(),
+        finished_at: null,
+        nodes: event.nodes,
+        execution_by_id: {},
+        latest_execution_by_path: {},
+        loop_items: {},
+        current_execution_id: null,
+        total_tokens_processed: 0,
+      })
+      this.viewOpen.set(true)
+      return
+    }
+
+    if (this._run() === null) {
+      return
+    }
+
+    if (event.type === 'stage_enter') {
+      this._onStageEnter(event)
+      return
+    }
+    if (event.type === 'stage_exit') {
+      this._onStageExit(event)
+      return
+    }
+    if (event.type === 'loop_item_exit') {
+      this._onLoopItemExit(event)
+      return
+    }
+    if ((event.type === 'done' || event.type === 'error') && event._pipeline_stage === undefined) {
+      this._run.update((run) =>
+        run === null
+          ? null
+          : {
+              ...run,
+              status: event.type === 'done' ? 'done' : 'error',
+              finished_at: Date.now(),
+              current_execution_id: null,
+            },
+      )
+      return
+    }
+    if (event._workflow_execution !== undefined) {
+      this._onStageActivity(event, event._workflow_execution)
+    }
+  }
+
+  private _onStageEnter(event: Extract<AgentEvent, { type: 'stage_enter' }>): void {
+    const state: WorkflowStageState = {
+      path: event.path,
+      execution_id: event.execution_id,
+      status: 'running',
+      stage_type: event.stage_type,
+      invocation_number: event.invocation_number,
+      item_number: event.item_number,
+      item_total: event.item_total,
+      attempt_number: event.attempt_number,
+      attempt_total: event.attempt_total,
+      iteration_count: 0,
+      context_tokens: null,
+      response_tokens: 0,
+      result: null,
+      duration_ms: null,
+      activity: [],
+      detail_dropped: false,
+    }
+    this._run.update((run) => {
+      if (run === null) {
+        return null
+      }
+      const loopItems = this._markLoopItemRunning(run, event.path, event.item_number, event.item_total)
+      return {
+        ...run,
+        execution_by_id: { ...run.execution_by_id, [event.execution_id]: state },
+        latest_execution_by_path: { ...run.latest_execution_by_path, [event.path]: event.execution_id },
+        loop_items: loopItems,
+        current_execution_id: event.execution_id,
+      }
+    })
+    this._retainActivityFor(event.execution_id)
+    // A respond stage streams into the conversation itself, so hand the view back to the chat.
+    if (event.stage_type === 'respond') {
+      this.viewOpen.set(false)
+    }
+  }
+
+  private _onStageExit(event: Extract<AgentEvent, { type: 'stage_exit' }>): void {
+    this._patchExecution(event.execution_id, (state) => ({
+      ...state,
+      status: event.status,
+      result: event.result,
+      duration_ms: event.duration_ms,
+    }))
+    this._run.update((run) =>
+      run === null || run.current_execution_id !== event.execution_id
+        ? run
+        : { ...run, current_execution_id: null },
+    )
+  }
+
+  private _onLoopItemExit(event: Extract<AgentEvent, { type: 'loop_item_exit' }>): void {
+    this._run.update((run) => {
+      if (run === null) {
+        return null
+      }
+      const items = this._ensureLoopItems(run, event.path, event.item_total)
+      const updated = items.map((item) =>
+        item.item_number === event.item_number
+          ? {
+              item_number: item.item_number,
+              status: event.success ? ('done' as const) : ('failed' as const),
+              attempts_used: event.attempts_used,
+            }
+          : item,
+      )
+      return { ...run, loop_items: { ...run.loop_items, [event.path]: updated } }
+    })
+  }
+
+  /**
+   * File a tagged event under the stage invocation that produced it.
+   *
+   * Text events coalesce into the trailing entry of the same kind so a streamed thinking block
+   * stays one block. Tool calls arrive as a start plus argument chunks — the backend never emits
+   * a single complete tool_call event — so the entry is opened on start and filled in as chunks
+   * land.
+   */
+  private _onStageActivity(event: AgentEvent, executionId: string): void {
+    if (event.type === 'iteration_end') {
+      const promptTokens = event.prompt_tokens
+      const responseTokens = event.response_tokens
+      this._patchExecution(executionId, (state) => ({
+        ...state,
+        iteration_count: state.iteration_count + 1,
+        context_tokens: promptTokens,
+        response_tokens: state.response_tokens + responseTokens,
+      }))
+      this._run.update((run) =>
+        run === null
+          ? null
+          : { ...run, total_tokens_processed: run.total_tokens_processed + promptTokens + responseTokens },
+      )
+      return
+    }
+
+    if (event.type === 'thinking' || event.type === 'content') {
+      const text = event.content
+      if (text === undefined || text === '') {
+        return
+      }
+      const kind = event.type
+      this._appendActivity(executionId, (activity) => {
+        const last = activity.length > 0 ? activity[activity.length - 1] : null
+        if (last !== null && last.kind === kind) {
+          return [...activity.slice(0, -1), { kind, text: last.text + text }]
+        }
+        return [...activity, { kind, text }]
+      })
+      return
+    }
+
+    if (event.type === 'tool_call_start') {
+      const entry: WorkflowActivityEntry = {
+        kind: 'tool_call',
+        tool_id: event.tool_id,
+        tool_name: event.tool_name,
+        args_text: '',
+      }
+      this._appendActivity(executionId, (activity) => [...activity, entry])
+      return
+    }
+
+    if (event.type === 'tool_call_chunk') {
+      const toolId = event.tool_id
+      const chunk = event.chunk
+      this._appendActivity(executionId, (activity) =>
+        activity.map((entry) =>
+          entry.kind === 'tool_call' && entry.tool_id === toolId
+            ? { ...entry, args_text: entry.args_text + chunk }
+            : entry,
+        ),
+      )
+      return
+    }
+
+    if (event.type === 'tool_result') {
+      const entry: WorkflowActivityEntry = {
+        kind: 'tool_result',
+        tool_id: event.tool_id,
+        tool_name: event.tool_name ?? '',
+        log_message: event.log_message ?? null,
+        content: event.content ?? '',
+      }
+      this._appendActivity(executionId, (activity) => [...activity, entry])
+      return
+    }
+
+    if (event.type === 'error') {
+      const message = event.message
+      this._appendActivity(executionId, (activity) => [...activity, { kind: 'error', message }])
+    }
+  }
+
+  private _patchExecution(
+    executionId: string,
+    patch: (state: WorkflowStageState) => WorkflowStageState,
+  ): void {
+    this._run.update((run) => {
+      if (run === null) {
+        return null
+      }
+      const existing = run.execution_by_id[executionId]
+      if (existing === undefined) {
+        return run
+      }
+      return { ...run, execution_by_id: { ...run.execution_by_id, [executionId]: patch(existing) } }
+    })
+  }
+
+  private _appendActivity(
+    executionId: string,
+    update: (activity: WorkflowActivityEntry[]) => WorkflowActivityEntry[],
+  ): void {
+    this._patchExecution(executionId, (state) =>
+      state.detail_dropped ? state : { ...state, activity: update(state.activity) },
+    )
+  }
+
+  /** Register an execution as activity-holding and release the oldest ones past the retention limit. */
+  private _retainActivityFor(executionId: string): void {
+    this.activityOrder = [...this.activityOrder.filter((id) => id !== executionId), executionId]
+    while (this.activityOrder.length > ACTIVITY_RETAINED_EXECUTIONS) {
+      const droppedId = this.activityOrder.shift()
+      if (droppedId === undefined) {
+        break
+      }
+      this._patchExecution(droppedId, (state) => ({ ...state, activity: [], detail_dropped: true }))
+    }
+  }
+
+  /** Loop item slots, created lazily on first sight of the loop so the dot grid has a full row. */
+  private _ensureLoopItems(run: WorkflowRun, path: string, itemTotal: number): WorkflowLoopItemState[] {
+    const existing = run.loop_items[path]
+    if (existing !== undefined && existing.length === itemTotal) {
+      return existing
+    }
+    return Array.from({ length: itemTotal }, (_unused, index) => {
+      const previous = existing !== undefined ? existing[index] : undefined
+      if (previous !== undefined) {
+        return previous
+      }
+      return { item_number: index + 1, status: 'pending' as const, attempts_used: 0 }
+    })
+  }
+
+  /**
+   * Mark the loop item an inner stage is working on as running.
+   *
+   * The inner stage's path carries the item numbers, so the owning loop is its parent path.
+   */
+  private _markLoopItemRunning(
+    run: WorkflowRun,
+    path: string,
+    itemNumber: number | null,
+    itemTotal: number | null,
+  ): Record<string, WorkflowLoopItemState[]> {
+    if (itemNumber === null || itemTotal === null) {
+      return run.loop_items
+    }
+    const separatorIndex = path.lastIndexOf('.')
+    if (separatorIndex === -1) {
+      return run.loop_items
+    }
+    const loopPath = path.slice(0, separatorIndex)
+    const items = this._ensureLoopItems(run, loopPath, itemTotal)
+    const updated = items.map((item) =>
+      item.item_number === itemNumber && item.status === 'pending' ? { ...item, status: 'running' as const } : item,
+    )
+    return { ...run.loop_items, [loopPath]: updated }
+  }
+
+  /**
+   * Latest invocation of any stage inside a loop that ran for the given item.
+   *
+   * Used when the user clicks a dot in the loop grid: the item may have several inner stages and
+   * several retry attempts, and the most recent one is what they want to look at.
+   */
+  latestExecutionForLoopItem(loopPath: string, itemNumber: number): WorkflowStageState | null {
+    const run = this._run()
+    if (run === null) {
+      return null
+    }
+    let best: WorkflowStageState | null = null
+    for (const state of Object.values(run.execution_by_id)) {
+      if (!state.path.startsWith(`${loopPath}.`) || state.item_number !== itemNumber) {
+        continue
+      }
+      if (best === null || state.invocation_number > best.invocation_number) {
+        best = state
+      }
+    }
+    return best
+  }
+}

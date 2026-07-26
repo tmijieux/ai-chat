@@ -13,7 +13,9 @@
 
 ## Pipeline / Agent
 
-- **Pipeline stage event visibility**: all events tagged `_pipeline_stage` are silently dropped by the frontend (`chat.service.ts:524`) — tool calls, results, and thinking inside workflow LLM stages and sub-agents are invisible to the user. Need to design a way to surface this (collapsible stage activity section, live log panel, etc.). Also covers sub-agent visibility.
+- **Pipeline stage event visibility**: done for YAML workflows — see the Workflow Run View in `CONTEXT.md` and ADR-0009. Still open for `PipelineOrchestrator`, whose hardcoded stages (classify / augment / critique / plan / execute / verify / compile_fix) emit no lifecycle events and so do not appear in the run view. The event shapes are generic enough to cover it; it just needs the same instrumentation.
+
+- **Persist workflow runs**: the run view is live-only and lost on refresh. Worth revisiting for after-the-fact debugging when authoring workflow YAML.
 
 - **"Context mismatch" indicator after compression**: when the model's compressed context no longer matches the visible conversation (e.g. after an agent session stops mid-run without a response, tool calls and thinking get compressed away on the next session — the model has lost all prior progression), the frontend should show a clear button/badge that lets the user inspect exactly what context the model is actually seeing. This surfaces the divergence before the user is confused by the model apparently "forgetting" work it had already done.
 

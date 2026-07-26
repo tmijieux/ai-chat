@@ -260,12 +260,13 @@ The `prompt_eval_count` value returned by the LLM backend for a given message. S
 The difference between a message's cumulative token count and the closest preceding message that also has a token count. Displayed in the per-message ⓘ tooltip as "This message: ~N tokens". Computed at generation time from two consecutive API-measured cumulatives and stored in `Message.token_delta`. Stable forever — does not change when upstream messages are deleted or evicted. Critical because context size varies with: which system prompt is active, which tool responses have been evicted, and which messages have been deleted.
 
 ## Token Visibility Surfaces
-Five places in the UI where token information is shown — all intentional, all must be preserved:
+Six places in the UI where token information is shown — all intentional, all must be preserved:
 1. **Status bar** — always-visible; shows last measured cumulative / 16 384 (%). Shows 0 on new chat.
 2. **Per-message ⓘ tooltip** — cumulative count, %, and delta. Only shown on messages that have a stored `token_count`.
 3. **System prompt bubble** — shows prompt token count and `+ tools (~N tok)` when a prompt is active.
 4. **Settings drawer / tools section** — total token cost of enabled tools + per-tool cost.
 5. **Settings page / prompt list** — each prompt option label includes `(~N tok)`.
+6. **[[Workflow Run View]]** — per-stage and whole-run token cost. This is the only surface that shows tokens spent by workflow stages, which run in isolated sessions and never appear in the conversation's own count. Two distinct measured values: per stage, the peak context its isolated session reached; per run, the total prompt + generated tokens put through the model across every stage iteration.
 
 ## Context Eviction
 
@@ -319,3 +320,21 @@ Workflows can include a `prepare_verification` stage that generates executable v
 A `create-workflow` workflow (self-hosted) helps users design and write new workflow YAML files.
 
 **Implementation status:** YAML files are discovered and listed via `GET /api/workflows` and appear in the [[Slash Command Palette]]. Stage execution is handled by `PipelineOrchestrator` (`agent/pipeline.py`) and `CustomWorkflowOrchestrator` (`agent/custom_workflow.py`). The `prepare_verification` stage and post-execution script running are not yet fully wired.
+
+## Workflow Run View
+
+Live visualisation of a running workflow. Opens automatically when a workflow starts and takes the message list's place inside the chat area — the status bar and input stay visible so the run can still be aborted. A chip in the [[Status Bar]] shows the current stage and loop position and toggles between the run view and the conversation.
+
+Workflow stages run in isolated sessions and are **not** part of the conversation context, which is why they get their own surface instead of appearing as messages. Mixing them into the message list would misreport where the conversation's tokens are going.
+
+**Structure:** the whole workflow plan is drawn as soon as the run starts, before anything executes, then decorated with live status. Each stage row shows: status (pending, running, done, failed, skipped), stage type, a one-line summary of what the stage produced, its measured token count, and its duration. A stage that runs more than once — because a branch jumped back to it, or because it is inside a loop — shows which invocation is being displayed.
+
+**Loops** render as a single row: a progress bar plus one status dot per item, so a loop over hundreds of items stays scannable instead of producing hundreds of rows. Retry attempts are shown on the stage currently running. Clicking a dot inspects that item.
+
+**Detail pane:** selecting a stage shows what happened inside it — thinking, tool calls with their arguments, tool results, and the stage's finish result. Full detail is kept for the most recent stage invocations only; older ones keep their status and result and say so, which bounds memory on long runs.
+
+**Branches** show which way the condition went and which stage it jumped to. Backward jumps are not drawn as edges — the view stays a linear list.
+
+**Live only:** the run view is built from the event stream and is not persisted. A page refresh loses the view while the run continues on the backend.
+
+A `respond` stage streams into the conversation itself, so the view automatically hands back to the message list when one starts.

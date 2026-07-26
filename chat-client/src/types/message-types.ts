@@ -176,6 +176,82 @@ export type ConversationTree = {
 }
 
 // ---------------------------------------------------------------------------
+// Workflow run view
+// ---------------------------------------------------------------------------
+
+export type WorkflowStageType = 'llm' | 'coordinator' | 'branch' | 'loop' | 'respond' | 'agent'
+
+/** Static structure of one workflow stage, sent once up front so the plan can be drawn before it runs. */
+export type WorkflowNode = {
+  /** Stable dotted identity, e.g. 'translate_loop.translate_chunk'. Matches stage_enter.path. */
+  path: string
+  name: string
+  type: WorkflowStageType
+  finish_tool: string | null
+  tools: string[]
+  over: string | null
+  attempt_total: number | null
+  children: WorkflowNode[]
+}
+
+export type WorkflowStageStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+
+/** One piece of activity produced inside a stage, in arrival order. */
+export type WorkflowActivityEntry =
+  | { kind: 'thinking'; text: string }
+  | { kind: 'content'; text: string }
+  | { kind: 'tool_call'; tool_id: string; tool_name: string; args_text: string }
+  | { kind: 'tool_result'; tool_id: string; tool_name: string; log_message: string | null; content: string }
+  | { kind: 'error'; message: string }
+
+/** Runtime state of a single stage invocation. Keyed by execution_id. */
+export type WorkflowStageState = {
+  path: string
+  execution_id: string
+  status: WorkflowStageStatus
+  stage_type: WorkflowStageType
+  invocation_number: number
+  item_number: number | null
+  item_total: number | null
+  attempt_number: number | null
+  attempt_total: number | null
+  iteration_count: number
+  /** Last measured prompt size for this stage's isolated sub-context. Never estimated. */
+  context_tokens: number | null
+  /** Sum of generated tokens across this stage's iterations. */
+  response_tokens: number
+  result: unknown
+  duration_ms: number | null
+  activity: WorkflowActivityEntry[]
+  /** True once activity was released by the ring buffer; status and result are still valid. */
+  detail_dropped: boolean
+}
+
+export type WorkflowLoopItemState = {
+  item_number: number
+  status: 'pending' | 'running' | 'done' | 'failed'
+  attempts_used: number
+}
+
+export type WorkflowRun = {
+  workflow_name: string
+  status: 'running' | 'done' | 'error'
+  started_at: number
+  /** Set when the run ends, so the elapsed display freezes instead of counting forever. */
+  finished_at: number | null
+  nodes: WorkflowNode[]
+  /** Every invocation, by execution_id — the single source of truth for stage state. */
+  execution_by_id: Record<string, WorkflowStageState>
+  /** Which invocation a stage row should display: static path → latest execution_id. */
+  latest_execution_by_path: Record<string, string>
+  /** Per-loop item outcomes, by the loop stage's static path. Drives the dot grid. */
+  loop_items: Record<string, WorkflowLoopItemState[]>
+  current_execution_id: string | null
+  /** Tokens the whole run has put through the model — prompt + generated, summed over every iteration. */
+  total_tokens_processed: number
+}
+
+// ---------------------------------------------------------------------------
 // Agent WebSocket event types
 // ---------------------------------------------------------------------------
 
@@ -203,9 +279,37 @@ export type AgentEvent = (
   | { type: 'plan_proposal'; plan_id: string; plan: string }
   | { type: 'agent_question'; question_id: string; question: string; options?: string[] }
   | { type: 'mode_changed'; mode: ConversationMode }
+  | { type: 'workflow_start'; workflow_name: string; nodes: WorkflowNode[] }
+  | {
+      type: 'stage_enter'
+      path: string
+      execution_id: string
+      stage_type: WorkflowStageType
+      invocation_number: number
+      item_number: number | null
+      item_total: number | null
+      attempt_number: number | null
+      attempt_total: number | null
+    }
+  | {
+      type: 'stage_exit'
+      path: string
+      execution_id: string
+      status: 'done' | 'failed' | 'skipped'
+      result: unknown
+      duration_ms: number
+    }
+  | {
+      type: 'loop_item_exit'
+      path: string
+      item_number: number
+      item_total: number
+      success: boolean
+      attempts_used: number
+    }
   | { type: 'done'; finished_without_response?: boolean }
   | { type: 'error'; message: string }
-) & { _pipeline_stage?: string }
+) & { _pipeline_stage?: string; _workflow_execution?: string }
 
 export type AgentEventType = AgentEvent['type']
 
