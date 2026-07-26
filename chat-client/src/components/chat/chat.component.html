@@ -17,7 +17,9 @@
 <!-- =========================
    LEFT SIDEBAR: new chat + conversation list
    ========================= -->
-<aside class="w-64 flex flex-col shadow-2xl bg-sidebar slate-200">
+<!-- shrink-0: w-64 alone does not stop a flex item being squeezed when a sibling's content is
+     too wide, which let wide main-area content eat into the conversation list. -->
+<aside class="w-64 shrink-0 flex flex-col shadow-2xl bg-sidebar slate-200">
   <div class="p-6 border-b border-gray-700 bg-gray-800">
     <h1 class="text-2xl font-extrabold tracking-wide text-white">AI Chat</h1>
     <p class="text-sm text-gray-400 mt-1">Keep track of your context easily</p>
@@ -72,7 +74,9 @@
 <!-- =========================
    MAIN CHAT AREA
    ========================= -->
-<main class="flex flex-row flex-grow bg-main h-full">
+<!-- min-w-0 so overflowing content scrolls inside this area instead of widening it and pushing
+     the sidebar out. -->
+<main class="flex flex-row flex-grow min-w-0 bg-main h-full">
 <div class="flex flex-col flex-1 min-w-0 h-full p-relative">
   <!-- Backend loading banner -->
   @if (!appStatus.llmReady() || !appStatus.whisperReady()) {

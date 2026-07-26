@@ -103,7 +103,11 @@
         }
       </div>
 
-      <div class="flex-1 min-h-0 min-w-0 overflow-y-auto flex flex-col">
+      <div
+        #detailScroll
+        class="flex-1 min-h-0 min-w-0 overflow-y-auto flex flex-col"
+        (scroll)="onDetailScroll($event)"
+      >
         @if (selected === null) {
           <div class="flex items-center justify-center py-12 text-gray-500 text-xs italic">
             Select a stage to see what it did

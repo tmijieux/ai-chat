@@ -1,4 +1,14 @@
-import { Component, OnDestroy, computed, inject, signal } from '@angular/core'
+import {
+  Component,
+  ElementRef,
+  OnDestroy,
+  ViewChild,
+  computed,
+  effect,
+  inject,
+  signal,
+  untracked,
+} from '@angular/core'
 import { CommonModule } from '@angular/common'
 import { WorkflowRunService } from '../../services/workflow-run.service'
 import {
@@ -51,6 +61,42 @@ export class WorkflowRunPanelComponent implements OnDestroy {
     const seconds = totalSeconds % 60
     return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
   })
+
+  // Auto-scroll the detail pane, same rule as the chat message list: stick to the bottom while
+  // activity streams in, stop the moment the user scrolls up to read, resume when they come back.
+  @ViewChild('detailScroll') private _detailScrollEl!: ElementRef<HTMLElement>
+  readonly autoScrollEnabled = signal(true)
+
+  constructor() {
+    effect(() => {
+      // Registers the dependency: every activity append replaces the stage state object, so this
+      // re-runs as thinking text streams in, not just when a new entry is added.
+      this.workflowSvc.selectedExecution()
+      untracked(() => {
+        if (this.autoScrollEnabled()) {
+          queueMicrotask(() => {
+            const element = this._detailScrollEl?.nativeElement
+            if (element) {
+              element.scrollTop = element.scrollHeight
+            }
+          })
+        }
+      })
+    })
+
+    // Switching which stage is inspected starts pinned to the bottom again.
+    effect(() => {
+      this.workflowSvc.selectedExecutionId()
+      untracked(() => {
+        this.autoScrollEnabled.set(true)
+      })
+    })
+  }
+
+  onDetailScroll(event: Event): void {
+    const element = event.target as HTMLElement
+    this.autoScrollEnabled.set(element.scrollHeight - element.scrollTop - element.clientHeight < 50)
+  }
 
   ngOnDestroy(): void {
     clearInterval(this.tickHandle)

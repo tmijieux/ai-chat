@@ -333,6 +333,8 @@ Workflow stages run in isolated sessions and are **not** part of the conversatio
 
 **Detail pane:** selecting a stage shows what happened inside it — thinking, tool calls with their arguments, tool results, and the stage's finish result. Full detail is kept for the most recent stage invocations only; older ones keep their status and result and say so, which bounds memory on long runs.
 
+By default the pane follows whichever stage is currently running, and auto-scrolls as activity streams in under the same rule as [[Chat Auto-scroll]]: scrolling up stops it so nothing jumps while reading, and returning to the bottom resumes it. Selecting a specific stage pins the pane to that stage; a control returns it to following the running one.
+
 **Branches** show which way the condition went and which stage it jumped to. Backward jumps are not drawn as edges — the view stays a linear list.
 
 **Live only:** the run view is built from the event stream and is not persisted. A page refresh loses the view while the run continues on the backend.
