@@ -7,9 +7,8 @@ Two failure modes show up after a translate-locale run:
   copied source — the value is byte-identical to the source file's value, i.e. the English text was
                  left in place. Only checked when --source is given.
 
-Both are reported exactly and near-exactly: a value that merely differs from the key by punctuation
-or one accent was almost certainly copied too, so it is flagged separately for review rather than
-silently ignored.
+Only exact, character-for-character identity counts. A value that differs from the key or the source
+even slightly has been touched by the translator, so it is treated as translated and never reported.
 
 Short values (--min-length, default 3) are counted but listed apart, because strings like "OK",
 "Email" or "1" are legitimately identical across languages.
@@ -28,18 +27,10 @@ import argparse
 from dataclasses import dataclass
 from pathlib import Path
 
-from locale_utils import (
-    LoadedFile,
-    describe_character_differences,
-    load_json_pairs,
-    similarity,
-    write_pairs_file,
-)
+from locale_utils import LoadedFile, load_json_pairs, write_pairs_file
 
 REASON_COPIED_KEY = "value is the key"
-REASON_NEAR_KEY = "value nearly the key"
 REASON_COPIED_SOURCE = "value is the source value"
-REASON_NEAR_SOURCE = "value nearly the source value"
 REASON_EMPTY = "value is empty"
 
 
@@ -50,8 +41,6 @@ class Suspect:
     key: str
     value: str
     reason: str
-    compared_against: str
-    ratio: float
 
     def is_short(self, min_length: int) -> bool:
         """True when the value is too short for identity to mean anything (e.g. "OK", "1").
@@ -64,13 +53,12 @@ class Suspect:
         return len(self.value.strip()) < min_length
 
 
-def collect_suspects(
-    translated: LoadedFile, source: LoadedFile | None, threshold: float
-) -> list[Suspect]:
-    """Scan every entry for a value that matches its key, or its source-file counterpart, too closely.
+def collect_suspects(translated: LoadedFile, source: LoadedFile | None) -> list[Suspect]:
+    """Scan every entry for a value left exactly identical to its key or its source-file counterpart.
 
-    Each entry yields at most one suspect: the exact checks win over the near checks, and the key
-    comparison wins over the source comparison, so the reported reason is always the strongest one.
+    Each entry yields at most one suspect: the key comparison wins over the source comparison, so the
+    reported reason is always the most direct one. Any difference at all, however small, means the
+    entry was touched by the translator and is not reported.
     """
     source_values = source.as_dict() if source is not None else {}
     suspects: list[Suspect] = []
@@ -80,44 +68,30 @@ def collect_suspects(
             continue
 
         if value.strip() == "":
-            suspects.append(Suspect(key, value, REASON_EMPTY, "", 0.0))
+            suspects.append(Suspect(key, value, REASON_EMPTY))
             continue
 
         if value == key:
-            suspects.append(Suspect(key, value, REASON_COPIED_KEY, key, 1.0))
+            suspects.append(Suspect(key, value, REASON_COPIED_KEY))
             continue
 
         source_value = source_values.get(key)
         if isinstance(source_value, str) and value == source_value:
-            suspects.append(Suspect(key, value, REASON_COPIED_SOURCE, source_value, 1.0))
-            continue
-
-        key_ratio = similarity(value, key)
-        if key_ratio >= threshold:
-            suspects.append(Suspect(key, value, REASON_NEAR_KEY, key, key_ratio))
-            continue
-
-        if isinstance(source_value, str):
-            source_ratio = similarity(value, source_value)
-            if source_ratio >= threshold:
-                suspects.append(Suspect(key, value, REASON_NEAR_SOURCE, source_value, source_ratio))
+            suspects.append(Suspect(key, value, REASON_COPIED_SOURCE))
 
     return suspects
 
 
-def print_group(title: str, suspects: list[Suspect], show_diff: bool) -> None:
-    """Print one titled block of suspects, with a character-level diff when the match was not exact."""
+def print_group(title: str, suspects: list[Suspect]) -> None:
+    """Print one titled block of suspects."""
     if len(suspects) == 0:
         return
     print("-" * 72)
     print(f"{title} — {len(suspects)} entr{'y' if len(suspects) == 1 else 'ies'}")
     print("-" * 72)
-    for suspect in sorted(suspects, key=lambda s: -s.ratio):
+    for suspect in suspects:
         print(f"  key:   {suspect.key!r}")
         print(f"  value: {suspect.value!r}")
-        if show_diff:
-            print(f"  similarity: {suspect.ratio:.3f}  vs {suspect.compared_against!r}")
-            print(f"  diff:  {describe_character_differences(suspect.value, suspect.compared_against)}")
         print()
 
 
@@ -141,24 +115,18 @@ def report(
     print(f"  entries in file ............... {total}")
     print(f"  look translated ............... {clean}")
     print(f"  value is the key .............. {len(by_reason.get(REASON_COPIED_KEY, []))}")
-    print(f"  value nearly the key .......... {len(by_reason.get(REASON_NEAR_KEY, []))}   (review these)")
     if source is not None:
         print(f"  value is the source value ..... {len(by_reason.get(REASON_COPIED_SOURCE, []))}")
-        print(f"  value nearly the source value . {len(by_reason.get(REASON_NEAR_SOURCE, []))}   (review these)")
     else:
         print("  (source-value checks skipped — pass --source <en.json> to enable them)")
     print(f"  empty values .................. {len(by_reason.get(REASON_EMPTY, []))}")
     print(f"  short, ignored (< {min_length} chars) .... {len(short_suspects)}")
     print()
 
-    print_group("VALUE IS THE KEY — never translated", by_reason.get(REASON_COPIED_KEY, []), show_diff=False)
+    print_group("VALUE IS THE KEY — never translated", by_reason.get(REASON_COPIED_KEY, []))
     print_group("VALUE IS THE SOURCE VALUE — left in the source language",
-                by_reason.get(REASON_COPIED_SOURCE, []), show_diff=False)
-    print_group("VALUE NEARLY THE KEY — probably a copy with minor edits",
-                by_reason.get(REASON_NEAR_KEY, []), show_diff=True)
-    print_group("VALUE NEARLY THE SOURCE VALUE — probably a copy with minor edits",
-                by_reason.get(REASON_NEAR_SOURCE, []), show_diff=True)
-    print_group("EMPTY VALUES", by_reason.get(REASON_EMPTY, []), show_diff=False)
+                by_reason.get(REASON_COPIED_SOURCE, []))
+    print_group("EMPTY VALUES", by_reason.get(REASON_EMPTY, []))
 
     if len(short_suspects) > 0:
         print("-" * 72)
@@ -175,7 +143,7 @@ def report(
 def main() -> None:
     """Parse arguments, scan for untranslated values, report them, and optionally export them."""
     parser = argparse.ArgumentParser(
-        description="Find locale entries whose value is identical (or nearly identical) to the key.",
+        description="Find locale entries whose value is exactly identical to the key or the source value.",
     )
     parser.add_argument("translated", type=Path, help="Translated locale file to inspect.")
     parser.add_argument(
@@ -194,12 +162,6 @@ def main() -> None:
         "--force", action="store_true", help="Allow --out to overwrite an existing file."
     )
     parser.add_argument(
-        "--threshold",
-        type=float,
-        default=0.90,
-        help="Minimum similarity (0-1) for a value to count as a near-copy. Default: 0.90",
-    )
-    parser.add_argument(
         "--min-length",
         type=int,
         default=3,
@@ -216,11 +178,11 @@ def main() -> None:
     print("=" * 72)
     print(f"translated: {translated.path}  ({len(translated.pairs)} entries)")
     print(f"source:     {source.path if source is not None else '(not given)'}")
-    print(f"near-copy threshold: {args.threshold}   min length: {args.min_length}")
+    print(f"exact matches only   min length: {args.min_length}")
     print("=" * 72)
     print()
 
-    suspects = collect_suspects(translated, source, args.threshold)
+    suspects = collect_suspects(translated, source)
     reportable = report(translated, source, suspects, args.min_length)
 
     if args.out is None:
