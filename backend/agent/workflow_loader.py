@@ -54,7 +54,8 @@ class WorkflowStageDefinition:
       coordinator — deterministic action run by the orchestrator (no LLM)
       branch      — evaluate a condition and jump to a named stage
       loop        — iterate over a list or repeat until exit_condition, with inner stages
-      agent       — run the plain agent loop on the full conversation history
+      agent       — run a named agent from agents/ as an isolated stage
+      workflow    — run another workflow definition as an isolated sub-stage
     """
 
     name: str
@@ -83,6 +84,16 @@ class WorkflowStageDefinition:
 
     # agent type fields
     message_suffix: str = ""
+
+    # agent / workflow ref (name of the agents/<ref>.yaml or workflows/<ref>.yaml to run)
+    workflow_ref: str = ""
+
+    # workflow type fields: dotted sub-slot path -> template expression, resolved against the
+    # caller's slots and used to seed the sub-workflow's own (isolated) slot registry
+    sub_workflow_input: dict[str, str] = field(default_factory=dict)
+    # top-level stage names of the referenced workflow to bypass entirely (their slot is
+    # expected to already be seeded via sub_workflow_input)
+    skip_stages: list[str] = field(default_factory=list)
 
     # loop fields
     over: str = ""                   # {{slot.field}} expression resolving to a list
@@ -186,6 +197,16 @@ def _parse_stage(data: dict, finish_tool_classes: dict[str, type[BaseFinishTool]
             type="agent",
             workflow_ref=data.get("ref") or "",
             user_prompt=data.get("user_prompt") or "",
+        )
+
+    if stage_type == "workflow":
+        return WorkflowStageDefinition(
+            name=name,
+            type="workflow",
+            workflow_ref=data.get("ref") or "",
+            sub_workflow_input=data.get("input") or {},
+            skip_stages=data.get("skip_stages") or [],
+            condition=data.get("condition") or "",
         )
 
     if stage_type == "loop":

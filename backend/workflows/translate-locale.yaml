@@ -1,5 +1,5 @@
 name: translate-locale
-description: "Translate a key-value localization file into another language, 40 lines at a time. The model only ever translates one chunk — chunking, looping, and writing are handled deterministically by the framework."
+description: "Translate a key-value localization file into another language, a handful of entries at a time. The model only ever translates one chunk — chunking, looping, and writing are handled deterministically by the framework, working with parsed JSON entries rather than raw text so the model never has to hand-produce JSON syntax."
 
 stages:
 
@@ -37,11 +37,13 @@ stages:
     max_iterations: 3
 
   # -------------------------------------------------------------------------
-  # Coordinator: split the source file into fixed-size line chunks (deterministic, no model)
+  # Coordinator: parse the source file and split it into fixed-size groups of entries
+  # (deterministic, no model) — the model only ever sees clean {key, value} objects, never raw
+  # JSON text it has to reproduce byte-for-byte.
   # -------------------------------------------------------------------------
   - name: split
     type: coordinator
-    action: chunk_file
+    action: chunk_json_entries
     input:
       path: "{{parse_request.source_path}}"
     output: chunks
@@ -55,60 +57,59 @@ stages:
     item_var: chunk
     max_retries: 10
     on_max_retries: continue
+    exit_condition: "append_chunk.success"
     output: translate_results
 
     stages:
       - name: translate_chunk
         type: llm
         system_prompt: |
-          You are localizing a JSON translation file. Every line has this shape:
+          You are localizing a JSON translation file. You will be given a list of entries, each with:
+          - key: a French lookup identifier used by the application code
+          - value: the message in the source language, shown to the user
 
-              "french text": "english text",
-
-          The KEY (left of the colon) is a French lookup identifier used by the application code.
-          The VALUE (right of the colon) is the English message shown to the user.
           The key and the value express the SAME message in two different languages.
 
-          For every line, do exactly two things:
-          1. Copy the KEY byte-for-byte. Never translate it, reword it, or change its casing.
-             It is an identifier — changing it breaks the application.
-          2. Replace the VALUE with that same message written in {{parse_request.target_language}}.
-             Read both the French key and the English value to be sure of the meaning, then write
-             it in {{parse_request.target_language}}.
+          For every entry, write the SAME message as `value`, in {{parse_request.target_language}}.
+          Read both the key and the value to be sure of the meaning before translating.
 
           Example, when the target language is German:
-              input line:   "Se connecter": "Log in",
-              output line:  "Se connecter": "Anmelden",
+              input:  {"key": "Se connecter", "value": "Log in"}
+              output: {"key": "Se connecter", "translated_value": "Anmelden"}
 
-          Note in that example: the key stayed French, and only the value changed — from English to
-          the target language. Never write the value in French, and never leave it in English
-          (unless {{parse_request.target_language}} is French or English respectively).
+          Note in that example: only the value changed — from English to the target language. Never
+          write translated_value in French, and never leave it in English (unless
+          {{parse_request.target_language}} is French or English respectively).
 
-          Rules — this output is written to disk unmodified:
-          - One line in, one line out. Keep line order, indentation, quotes, colons, commas and
-            braces exactly as they appear.
-          - Keep placeholders such as {name}, %s, %d and any HTML tags exactly as they appear.
-          - If a line has no key/value pair (e.g. a lone brace), copy it unchanged.
-          - Output only the transformed lines — no commentary, no markdown fences, no line numbers.
+          Keep placeholders such as {name}, %s, %d and any HTML tags exactly as they appear in the
+          translated value.
 
-          Before answering, check that every VALUE you wrote is in {{parse_request.target_language}}
-          and every KEY is unchanged.
+          Submit one output entry per input entry, in the same order, by calling
+          finish_translate_chunk: copy each entry's key back as given (this just helps you stay on
+          the right entry as you go — it is not what identifies the entry when saved), and set
+          translated_value to the message rewritten in {{parse_request.target_language}}.
+
+          Before answering, check every translated_value is actually in
+          {{parse_request.target_language}}, and that you produced exactly one output entry per
+          input entry.
           You MUST call finish_translate_chunk. Do not write a text response — call the tool instead.
         user_prompt: |
-          Rewrite the value of each line below into {{parse_request.target_language}}, keeping every
-          key unchanged. Return only the rewritten lines.
+          Translate the value of each entry below into {{parse_request.target_language}}. Return one
+          output entry per input entry, in the same order.
 
-          {{chunk.text}}
+          {{chunk.entries}}
         tools: []
         finish_tool: finish_translate_chunk
         max_iterations: 2
 
       - name: append_chunk
         type: coordinator
-        action: append_text
+        action: append_json_entries
         input:
           path: "{{parse_request.output_path}}"
-          text: "{{translate_chunk.translated_text}}"
+          entries: "{{translate_chunk.entries}}"
+          keys: "{{chunk.keys}}"
+        output: append_chunk
 
   # -------------------------------------------------------------------------
   # Stage 4: Synthesis — report completion
@@ -136,8 +137,18 @@ finish_tools:
         description: "The target language to translate into (e.g. German, Dutch)."
 
   finish_translate_chunk:
-    description: "Submit the translated chunk text, ready to be appended to the output file unmodified."
+    description: "Submit the translated entries for this chunk, one per input entry, in the same order."
     parameters:
-      translated_text:
-        type: string
-        description: "The chunk with only the string values translated. Same line count, same structure as the input."
+      entries:
+        type: array
+        description: "One object per input entry, in the same order the input entries were given."
+        items:
+          type: object
+          properties:
+            key:
+              type: string
+              description: "Copy the input entry's key, so you stay aligned to the right entry while translating."
+            translated_value:
+              type: string
+              description: "The entry's value, rewritten in the target language."
+          required: [key, translated_value]

@@ -317,9 +317,19 @@ A named, user-defined multi-stage agent execution flow stored as a YAML file in 
 
 Workflows can include a `prepare_verification` stage that generates executable verification scripts. After an execution stage, the framework runs those scripts directly (no LLM involvement) and uses the results to determine pass/fail.
 
+A workflow is not limited to LLM stages: a deterministic stage can run a standalone script bundled in the workflow's own directory (so the workflow is self-contained — its scripts travel with it, not scattered elsewhere in the repo), and a stage can invoke another whole workflow by name as an isolated sub-step, optionally skipping some of its stages when the caller already knows the values those stages would have produced (e.g. a directory-wide sync workflow calling a single-file translation workflow once per file, skipping that workflow's own "ask the user which file" step). A called sub-workflow runs with its own independent state — it cannot see or collide with the caller's — and its nested steps still show up correctly under the caller in the [[Workflow Run View]].
+
 A `create-workflow` workflow (self-hosted) helps users design and write new workflow YAML files.
 
 **Implementation status:** YAML files are discovered and listed via `GET /api/workflows` and appear in the [[Slash Command Palette]]. Stage execution is handled by `PipelineOrchestrator` (`agent/pipeline.py`) and `CustomWorkflowOrchestrator` (`agent/custom_workflow.py`). The `prepare_verification` stage and post-execution script running are not yet fully wired.
+
+## Locale Translation Workflow
+`translate-locale` — translates a key-value localization file into another language. The file's keys are treated as fixed identifiers in the source language (used by application code to look up strings) and are never altered; only the values are rewritten into the target language. Runs one confirmation up front (to create the output file), then works through the source file in fixed-size chunks so a large file never needs to fit in context at once. Invoked via the [[Slash Command Palette]] with a free-text request naming the source file, output file (optional — derived from the source filename otherwise), and target language.
+
+## Locale Directory Sync Workflow
+`sync-locale-directory` — loops over every locale file in a directory against one authoritative source file, and for each one: finds entries that are either missing entirely or still untranslated (left equal to the key or to the source value), translates just that delta by reusing the [[Locale Translation Workflow]], repairs any keys a translation pass corrupted (e.g. smart punctuation getting normalized), and merges the result back into the real file. Each target file's language is derived from its filename's ISO 639-1 code; a file whose filename isn't a recognized code is reported and skipped rather than guessed.
+
+Runs unattended across the whole directory — no per-file confirmation, so a directory of many files doesn't produce a wall of prompts. Every file that gets merged is backed up first. A `dry_run` request previews what would change (including the actual translations) without writing anything to the real locale files. Invoked via the [[Slash Command Palette]] with a free-text request naming the locale directory and the source filename.
 
 ## Workflow Run View
 

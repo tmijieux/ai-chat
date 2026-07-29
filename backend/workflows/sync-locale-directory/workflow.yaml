@@ -1,0 +1,126 @@
+name: sync-locale-directory
+description: "Loop over every locale file in a directory against a source file, 
+  translate what's missing or untranslated, repair corrupted keys, and merge the result back 
+  — unattended, across the whole directory."
+stages:
+  # -------------------------------------------------------------------------
+  # Stage 1: Parse — extract the locale directory, source filename, and dry-run flag
+  # -------------------------------------------------------------------------
+  - name: parse_request
+    type: llm
+    system_prompt: |
+      You extract three fields from the user's request: the locale directory, the source filename,
+      and whether this is a dry run. Do not translate or analyze anything here — only extract these fields.
+      - directory: the folder containing all the locale files (e.g. an i18n or locales folder).
+      - source_filename: the filename (not full path) of the authoritative source file within that
+        directory — the one whose keys are canonical and whose values every other file translates.
+      - dry_run: true only if the user explicitly asked to preview, check, or dry-run without writing
+        any changes. Otherwise false.
+      You MUST call finish_sync_request. Do not write a text response — call the tool instead.
+    user_prompt: "{{user_message}}"
+    tools: []
+    finish_tool: finish_sync_request
+    max_iterations: 2
+
+  # -------------------------------------------------------------------------
+  # Stage 2: List every locale file in the directory (deterministic — runs scripts/list_locale_files.py)
+  # -------------------------------------------------------------------------
+  - name: list_files
+    type: coordinator
+    action: run_script
+    input:
+      script: "scripts/list_locale_files.py"
+      args: ["{{parse_request.directory}}", "{{parse_request.source_filename}}"]
+    output: list_files
+
+  # -------------------------------------------------------------------------
+  # Stage 3: Per-file sync loop
+  # -------------------------------------------------------------------------
+  - name: sync_loop
+    type: loop
+    over: "{{list_files.data.files}}"
+    item_var: locale_file
+    max_retries: 2
+    on_max_retries: continue
+    output: sync_loop_summary
+
+    stages:
+      # Find what's missing or untranslated in this file (scripts/find_gaps.py)
+      - name: find_gaps
+        type: coordinator
+        action: run_script
+        input:
+          script: "scripts/find_gaps.py"
+          args:
+            - "{{parse_request.directory}}/{{parse_request.source_filename}}"
+            - "{{locale_file.path}}"
+        output: find_gaps
+
+      # Translate just the delta, by reusing translate-locale as a sub-workflow. Its own
+      # parse_request/init_output/synthesis stages are skipped: source_path, output_path and
+      # target_language are already known here, and a chat response per file would be noise.
+      - name: translate_delta
+        type: workflow
+        ref: translate-locale
+        condition: "find_gaps.data.count > 0"
+        skip_stages: [parse_request, init_output, synthesis]
+        input:
+          parse_request.source_path: "{{find_gaps.data.path}}"
+          parse_request.output_path: "{{find_gaps.data.translated_path}}"
+          parse_request.target_language: "{{locale_file.language_name}}"
+
+      # Repair any keys the translation pass corrupted (scripts/fix_locale_keys.py --apply)
+      - name: fix_delta_keys
+        type: coordinator
+        action: run_script
+        condition: "find_gaps.data.count > 0"
+        input:
+          script: "scripts/fix_locale_keys.py"
+          args: ["{{find_gaps.data.path}}", "{{find_gaps.data.translated_path}}", "--apply"]
+        output: fix_delta_keys
+
+      # Merge the translated delta into the real locale file (scripts/merge_locale_entries.py --apply)
+      - name: merge_into_main
+        type: coordinator
+        action: run_script
+        condition: "find_gaps.data.count > 0 and not parse_request.dry_run"
+        input:
+          script: "scripts/merge_locale_entries.py"
+          args: ["{{locale_file.path}}", "{{find_gaps.data.translated_path}}", "--apply"]
+        output: merge_into_main
+
+  # -------------------------------------------------------------------------
+  # Stage 4: Synthesis — report what happened, per file
+  # -------------------------------------------------------------------------
+  - name: synthesis
+    type: respond
+    message_suffix: |
+      [Locale sync complete. {{list_files.data.files | length}} locale file(s) checked against
+      {{parse_request.source_filename}} in {{parse_request.directory}}.
+      {{parse_request.dry_run}} dry_run — merge_into_main did not run if true.
+
+      Per-file results (each item: the locale_file, whether it succeeded, and what find_gaps/
+      translate_delta/fix_delta_keys/merge_into_main produced — a stage is absent from an item when
+      it had nothing to do, i.e. find_gaps.data.count was 0):
+      {{sync_loop_summary.items}}
+
+      Files skipped because their filename isn't a recognized ISO 639-1 language code:
+      {{list_files.data.skipped}}]
+
+      Summarize this for the user: how many files were checked, how many had gaps and were
+      translated/merged (or would have been, if dry_run), how many needed nothing, and list any
+      skipped files by name. Do not dump the raw JSON — write it as prose.
+
+finish_tools:
+  finish_sync_request:
+    description: "Submit the extracted locale directory, source filename, and dry-run flag."
+    parameters:
+      directory:
+        type: string
+        description: "Path to the directory containing all the locale files, relative to the workspace."
+      source_filename:
+        type: string
+        description: "Filename (not full path) of the authoritative source file within that directory."
+      dry_run:
+        type: boolean
+        description: "True only if the user explicitly asked to preview/check without writing changes. False otherwise."

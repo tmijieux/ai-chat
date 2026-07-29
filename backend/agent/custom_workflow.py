@@ -5,6 +5,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -21,9 +22,28 @@ from agent.workflow_loader import (
     WorkflowDefinition,
     WorkflowStageDefinition,
     _BUILTIN_FINISH_TOOL_CLASSES,
+    load_workflow,
 )
 
 logger = logging.getLogger(__name__)
+
+_WORKFLOWS_DIR = Path(__file__).parent.parent / "workflows"
+_sub_workflow_cache: dict[str, WorkflowDefinition] = {}
+
+
+def _load_referenced_workflow(ref: str) -> WorkflowDefinition:
+    """Load a workflow by name (flat `<ref>.yaml` or `<ref>/workflow.yaml`), cached by name.
+
+    Same resolution rule ws.py uses to dispatch a top-level workflow, so `type: workflow` stages
+    can reference any workflow the slash command palette can. Workflow definitions are immutable
+    once parsed, so caching them process-wide is safe.
+    """
+    if ref not in _sub_workflow_cache:
+        flat_path = _WORKFLOWS_DIR / f"{ref}.yaml"
+        dir_path = _WORKFLOWS_DIR / ref
+        workflow_path = flat_path if flat_path.exists() else dir_path
+        _sub_workflow_cache[ref] = load_workflow(workflow_path)
+    return _sub_workflow_cache[ref]
 
 # ---------------------------------------------------------------------------
 # Slot registry helpers
@@ -78,6 +98,29 @@ def resolve_value(expr: str, slots: dict[str, Any]) -> Any:
     return _resolve_path(match.group(1).strip(), slots)
 
 
+def resolve_action_input_value(value: Any, slots: dict[str, Any]) -> Any:
+    """Resolve one coordinator action_input value, permissively.
+
+    A plain `{{slot.field}}` string resolves to its actual typed value (list/dict/str/...), same
+    as resolve_value. A string mixing literal text with `{{...}}` resolves via string
+    interpolation. A string with no `{{` at all passes through unchanged as a literal (e.g. a
+    fixed script path or CLI flag). Lists and dicts resolve element-wise, so an action input like
+    `args: ["--apply", "{{gaps.path}}"]` — needed by run_script to build an argv — works.
+    """
+    if isinstance(value, list):
+        return [resolve_action_input_value(item, slots) for item in value]
+    if isinstance(value, dict):
+        return {key: resolve_action_input_value(item, slots) for key, item in value.items()}
+    if isinstance(value, str):
+        match = re.fullmatch(r"\{\{([^}]+)\}\}", value.strip())
+        if match is not None:
+            return _resolve_path(match.group(1).strip(), slots)
+        if "{{" in value:
+            return resolve_template(value, slots)
+        return value
+    return value
+
+
 _SAFE_EVAL_GLOBALS = {"__builtins__": {}, "len": len, "None": None, "True": True, "False": False}
 
 
@@ -86,6 +129,12 @@ def evaluate_condition(condition: str, slots: dict[str, Any]) -> bool:
 
     Slots are accessible by name with dot notation (e.g. plan.compile_command).
     Returns True when condition is empty (unconditional).
+
+    A condition that fails to evaluate at all (undefined slot name, bad syntax, wrong type) is a
+    workflow-definition bug, not a runtime maybe-true-maybe-false outcome — it will fail exactly
+    the same way on every retry, so silently treating it as False previously meant a loop would
+    burn every retry attempt against a check that could never pass. It now raises _WorkflowAbort
+    instead, so the whole run stops immediately with a clear error rather than retrying pointlessly.
     """
     if condition is None or condition == "":
         return True
@@ -93,8 +142,7 @@ def evaluate_condition(condition: str, slots: dict[str, Any]) -> bool:
     try:
         return bool(eval(condition, _SAFE_EVAL_GLOBALS, context))  # noqa: S307
     except Exception as exc:
-        logger.warning("[workflow] condition eval failed %r: %s", condition, exc)
-        return False
+        raise _WorkflowAbort(f"Condition {condition!r} failed to evaluate: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +189,12 @@ def _serialize_stage_nodes(
     nodes: list[dict] = []
     for stage in stages:
         path = path_prefix + stage.name
+        if stage.type == "workflow" and stage.workflow_ref != "":
+            sub_def = _load_referenced_workflow(stage.workflow_ref)
+            visible_sub_stages = [s for s in sub_def.stages if s.name not in stage.skip_stages]
+            children = _serialize_stage_nodes(visible_sub_stages, f"{path}.")
+        else:
+            children = _serialize_stage_nodes(stage.inner_stages, f"{path}.")
         nodes.append({
             "path": path,
             "name": stage.name,
@@ -149,7 +203,7 @@ def _serialize_stage_nodes(
             "tools": stage.tools + stage.agents,
             "over": stage.over if stage.over != "" else None,
             "attempt_total": stage.max_retries + 1 if stage.type == "loop" else None,
-            "children": _serialize_stage_nodes(stage.inner_stages, f"{path}."),
+            "children": children,
         })
     return nodes
 
@@ -246,9 +300,29 @@ class CustomWorkflowOrchestrator:
     async def _run_workflow(
         self, session: AgentSession, user_message: str, messages: list[LLMMessage]
     ) -> None:
+        """Top-level entry: seed the slot registry from the user's message and run every stage."""
         effective_message = user_message if user_message.strip() != "" else f"/{self._workflow.name}"
         slots: dict[str, Any] = {"user_message": effective_message}
-        stages = self._workflow.stages
+        await self._run_stage_sequence(session, messages, slots)
+        logger.info("[workflow:%s] all stages complete", self._workflow.name)
+        await session.emit({"type": "done", "finished_without_response": False})
+
+    async def _run_stage_sequence(
+        self,
+        session: AgentSession,
+        messages: list[LLMMessage],
+        slots: dict[str, Any],
+        skip_stage_names: frozenset[str] = frozenset(),
+        path_prefix: str = "",
+    ) -> None:
+        """Drive this orchestrator's own stages (`self._workflow.stages`) to completion.
+
+        Shared by the top-level run and by a `type: workflow` sub-invocation (which constructs a
+        fresh orchestrator over the referenced definition and calls this on it directly, bypassing
+        `.run()`'s workflow_start/done events since those belong to the top-level run only).
+        `skip_stage_names` drops stages the caller already seeded via sub_workflow_input.
+        """
+        stages = [s for s in self._workflow.stages if s.name not in skip_stage_names]
         stage_index = {s.name: i for i, s in enumerate(stages)}
         logger.info("[workflow:%s] %d stages: %s", self._workflow.name, len(stages), [s.name for s in stages])
         current = 0
@@ -256,7 +330,7 @@ class CustomWorkflowOrchestrator:
         while current < len(stages):
             stage = stages[current]
             logger.info("[workflow:%s] dispatching stage '%s' (type=%s)", self._workflow.name, stage.name, stage.type)
-            outcome = await self._dispatch(stage, session, messages, slots)
+            outcome = await self._dispatch(stage, session, messages, slots, path_prefix=path_prefix)
             logger.info("[workflow:%s] stage '%s' done — slots keys: %s", self._workflow.name, stage.name, list(slots.keys()))
             if outcome.jump_to is not None:
                 jump_to = outcome.jump_to
@@ -266,9 +340,6 @@ class CustomWorkflowOrchestrator:
                 current = stage_index[jump_to]
             else:
                 current += 1
-
-        logger.info("[workflow:%s] all stages complete", self._workflow.name)
-        await session.emit({"type": "done", "finished_without_response": False})
 
     def _next_execution_id(self, path: str) -> str:
         """Allocate a unique id for one invocation of a stage path (e.g. 'translate_loop.translate_chunk#41')."""
@@ -372,6 +443,8 @@ class CustomWorkflowOrchestrator:
             return StageOutcome()
         if stage.type == "agent":
             return StageOutcome(result=await self._run_isolated_agent(stage, session, slots, execution_id))
+        if stage.type == "workflow":
+            return StageOutcome(result=await self._run_sub_workflow(stage, session, messages, slots, path))
         raise ValueError(f"Unknown stage type '{stage.type}'")
 
     # ------------------------------------------------------------------
@@ -420,8 +493,10 @@ class CustomWorkflowOrchestrator:
     ) -> Any:
         """Run a coordinator action: resolve inputs, execute action, store and return its output."""
         logger.info("[workflow] coordinator '%s' action='%s' inputs=%s", stage.name, stage.action, list(stage.action_input.keys()))
-        resolved_inputs = {k: resolve_value(v, slots) for k, v in stage.action_input.items()}
-        output = await run_coordinator_action(stage.action, resolved_inputs, session, self._working_directory)
+        resolved_inputs = {k: resolve_action_input_value(v, slots) for k, v in stage.action_input.items()}
+        output = await run_coordinator_action(
+            stage.action, resolved_inputs, session, self._working_directory, self._workflow.directory
+        )
 
         if stage.action_output != "":
             slots[stage.action_output] = output
@@ -493,6 +568,12 @@ class CustomWorkflowOrchestrator:
                 try:
                     for inner in stage.inner_stages:
                         await self._dispatch(inner, session, messages, slots, path_prefix=f"{path}.")
+                except _WorkflowAbort:
+                    # A condition (skip-condition or exit_condition) that failed to evaluate at all
+                    # is a workflow-definition bug, not a per-attempt failure — it will fail the
+                    # exact same way on every retry, so let it escape and abort the whole run
+                    # instead of burning every remaining attempt against a check that can never pass.
+                    raise
                 except Exception as exc:
                     # An inner stage (e.g. the model failing to call its required finish tool)
                     # raises instead of returning — treat that as a failed attempt so it goes
@@ -633,10 +714,72 @@ class CustomWorkflowOrchestrator:
         slots[stage.name] = result
         return result
 
+    async def _run_sub_workflow(
+        self,
+        stage: WorkflowStageDefinition,
+        session: AgentSession,
+        messages: list[LLMMessage],
+        slots: dict[str, Any],
+        path: str,
+    ) -> dict:
+        """Run another workflow definition as an isolated sub-stage.
+
+        The sub-workflow gets its own fresh slot registry — seeded only from
+        sub_workflow_input — rather than sharing the caller's, so its internal slot names
+        (e.g. `chunks`, `parse_request`) can never collide with the caller's. `skip_stages`
+        bypasses stages whose slot was already seeded this way (e.g. an extraction stage the
+        caller has no use for because it already knows the values).
+
+        _invocation_counters is shared by reference with the caller: without that, a fresh
+        orchestrator's counters would restart at 0 on every call (e.g. every item of an outer
+        loop), so the same nested stage path would get execution_id '...#1' every time and the
+        run view would treat separate invocations as the same one.
+        """
+        sub_def = _load_referenced_workflow(stage.workflow_ref)
+        sub_slots = _seed_sub_slots(stage.sub_workflow_input, slots)
+        sub_orchestrator = CustomWorkflowOrchestrator(sub_def, self._working_directory, self._tools)
+        sub_orchestrator._invocation_counters = self._invocation_counters
+
+        saved_mode = session.mode
+        saved_auto_safe_commands = session.auto_safe_commands
+        if sub_def.mode is not None:
+            session.mode = sub_def.mode
+        session.auto_safe_commands = list(sub_def.auto_safe_commands)
+        try:
+            await sub_orchestrator._run_stage_sequence(
+                session, messages, sub_slots,
+                skip_stage_names=frozenset(stage.skip_stages),
+                path_prefix=f"{path}.",
+            )
+        finally:
+            session.mode = saved_mode
+            session.auto_safe_commands = saved_auto_safe_commands
+
+        slots[stage.name] = sub_slots
+        return sub_slots
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _seed_sub_slots(input_map: dict[str, str], parent_slots: dict[str, Any]) -> dict[str, Any]:
+    """Build a fresh isolated slot registry for a sub-workflow from dotted paths -> resolved values.
+
+    E.g. {"parse_request.output_path": "{{gaps.translated_path}}"} produces
+    {"parse_request": {"output_path": <value>}} so the sub-workflow's own templates
+    ({{parse_request.output_path}}) resolve exactly as if that stage had produced it itself.
+    """
+    seeded: dict[str, Any] = {}
+    for dotted_path, expr in input_map.items():
+        value = resolve_action_input_value(expr, parent_slots)
+        parts = dotted_path.split(".")
+        target = seeded
+        for part in parts[:-1]:
+            target = target.setdefault(part, {})
+        target[parts[-1]] = value
+    return seeded
 
 def _make_finish_tool(name: str, finish_tool_classes: dict[str, type[BaseFinishTool]]) -> BaseFinishTool:
     """Instantiate a finish tool by name from the given registry."""
