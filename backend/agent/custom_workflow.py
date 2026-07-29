@@ -314,6 +314,7 @@ class CustomWorkflowOrchestrator:
         slots: dict[str, Any],
         skip_stage_names: frozenset[str] = frozenset(),
         path_prefix: str = "",
+        outcome_sink: dict[str, Any] | None = None,
     ) -> None:
         """Drive this orchestrator's own stages (`self._workflow.stages`) to completion.
 
@@ -321,6 +322,11 @@ class CustomWorkflowOrchestrator:
         fresh orchestrator over the referenced definition and calls this on it directly, bypassing
         `.run()`'s workflow_start/done events since those belong to the top-level run only).
         `skip_stage_names` drops stages the caller already seeded via sub_workflow_input.
+
+        `outcome_sink`, when given, is filled with `{stage.name: outcome.result}` for every stage
+        dispatched here — each stage's own compact, display-ready result, as opposed to the full
+        slot registry. Used by `_run_sub_workflow` so a sub-invocation can report a small summary
+        of what it did instead of exposing its entire internal state to the caller.
         """
         stages = [s for s in self._workflow.stages if s.name not in skip_stage_names]
         stage_index = {s.name: i for i, s in enumerate(stages)}
@@ -331,6 +337,8 @@ class CustomWorkflowOrchestrator:
             stage = stages[current]
             logger.info("[workflow:%s] dispatching stage '%s' (type=%s)", self._workflow.name, stage.name, stage.type)
             outcome = await self._dispatch(stage, session, messages, slots, path_prefix=path_prefix)
+            if outcome_sink is not None:
+                outcome_sink[stage.name] = outcome.result
             logger.info("[workflow:%s] stage '%s' done — slots keys: %s", self._workflow.name, stage.name, list(slots.keys()))
             if outcome.jump_to is not None:
                 jump_to = outcome.jump_to
@@ -667,7 +675,12 @@ class CustomWorkflowOrchestrator:
             })
 
         logger.info("[workflow] respond: calling run_agent with %d messages", len(working_messages))
-        await run_agent(session, working_messages, ToolSet(tools=self._tools, extra_tools=None), self._working_directory)
+        respond_session = _RespondStageSession(session)
+        await run_agent(respond_session, working_messages, ToolSet(tools=self._tools, extra_tools=None), self._working_directory)
+        if respond_session.error_message is not None:
+            logger.warning("[workflow] respond: run_agent errored: %s", respond_session.error_message)
+        elif respond_session.finished_without_response:
+            logger.warning("[workflow] respond: run_agent finished without a response")
         logger.info("[workflow] respond: run_agent returned")
 
     async def _run_isolated_agent(
@@ -745,18 +758,30 @@ class CustomWorkflowOrchestrator:
         if sub_def.mode is not None:
             session.mode = sub_def.mode
         session.auto_safe_commands = list(sub_def.auto_safe_commands)
+        outcomes: dict[str, Any] = {}
         try:
             await sub_orchestrator._run_stage_sequence(
                 session, messages, sub_slots,
                 skip_stage_names=frozenset(stage.skip_stages),
                 path_prefix=f"{path}.",
+                outcome_sink=outcomes,
             )
         finally:
             session.mode = saved_mode
             session.auto_safe_commands = saved_auto_safe_commands
 
-        slots[stage.name] = sub_slots
-        return sub_slots
+        # Report only each dispatched stage's own compact loop tally (item_total/succeeded/failed),
+        # never the sub-workflow's full slot registry. A sub-workflow like translate-locale carries
+        # every chunk's raw source and translated text in its internal slots — exposing all of that
+        # to the caller (e.g. into a directory-sync loop summary, then a synthesis prompt) can
+        # trivially overflow the model's context. The caller only needs to know what happened, not
+        # replay the sub-workflow's own working state.
+        summary = {
+            name: result for name, result in outcomes.items()
+            if isinstance(result, dict) and {"item_total", "succeeded", "failed"} <= result.keys()
+        }
+        slots[stage.name] = summary
+        return summary
 
 
 # ---------------------------------------------------------------------------
@@ -791,6 +816,38 @@ def _make_finish_tool(name: str, finish_tool_classes: dict[str, type[BaseFinishT
 
 class _WorkflowAbort(Exception):
     """Raised to abort the entire workflow (e.g. compile fix loop exhausted)."""
+
+
+class _RespondStageSession:
+    """Session proxy wrapped around a respond stage's run_agent call.
+
+    run_agent (agent.py) always emits its own {"type": "done"/"error"} event when it finishes.
+    For a respond stage that call is just one stage inside a larger workflow, not the whole run —
+    but nothing distinguishes that event from the workflow's real completion. Both the websocket
+    relay (ws.py) and the run view (workflow-run.service.ts) treat any untagged done/error as
+    terminal for the entire run: left unhandled, they stop and cancel the orchestrator right there,
+    before this stage's own stage_exit — and the workflow's actual final done — ever get sent.
+    Swallowing it here lets the orchestrator report the real outcome once every stage has finished.
+    Everything else (content, thinking, tool calls...) is forwarded untouched, since that output is
+    meant to stream straight into the conversation.
+    """
+
+    def __init__(self, real_session: AgentSession) -> None:
+        self._real = real_session
+        self.finished_without_response = False
+        self.error_message: str | None = None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+    async def emit(self, event: dict) -> None:
+        if event.get("type") == "done":
+            self.finished_without_response = event.get("finished_without_response", False)
+            return
+        if event.get("type") == "error":
+            self.error_message = event.get("message")
+            return
+        await self._real.emit(event)
 
 
 def _collect_inner_results(
