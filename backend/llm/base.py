@@ -1,3 +1,4 @@
+import re
 from abc import ABC, abstractmethod
 from typing import AsyncIterator, Sequence, TypedDict, Literal, Union
 
@@ -35,6 +36,40 @@ class DoneEvent(TypedDict):
 
 
 StreamEvent = Union[ContentEvent, ThinkingEvent, ToolCallStartEvent, ToolCallArgEvent, DoneEvent]
+
+
+# Qwen3's tool-call XML, shared by two callers: agent.py recovers a call the model emitted
+# inside an unclosed <think> block, and llama_server.py's forced-tool-call fallback parses a
+# grammar-constrained /completion reply. Same wire format both times: <tool_call><function=name>
+# <parameter=x>raw value</parameter></function></tool_call>, repeated for multiple calls.
+TOOL_CALL_BLOCK_RE = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
+_FUNCTION_RE = re.compile(r"<function=(\w+)>(.*?)</function>", re.DOTALL)
+_PARAMETER_RE = re.compile(r"<parameter=(\w+)>\n?(.*?)\n?</parameter>", re.DOTALL)
+
+
+def parse_embedded_tool_call(block_content: str) -> dict | None:
+    """Parse <function=NAME><parameter=K>V</parameter>...</function> into name + raw-string arguments."""
+    func_match = _FUNCTION_RE.search(block_content)
+    if func_match is None:
+        return None
+    name = func_match.group(1)
+    func_body = func_match.group(2)
+    arguments = {m.group(1): m.group(2) for m in _PARAMETER_RE.finditer(func_body)}
+    return {"name": name, "arguments": arguments}
+
+
+def parse_all_tool_calls(text: str) -> list[dict]:
+    """Parse every <tool_call>...</tool_call> block in text into {"name", "arguments"} dicts.
+
+    Arguments are raw strings — callers that have the tool's JSON Schema on hand may cast them
+    to the declared type (integer/number/boolean); callers that don't can pass them through as-is.
+    """
+    calls = []
+    for block_match in TOOL_CALL_BLOCK_RE.finditer(text):
+        parsed = parse_embedded_tool_call(block_match.group(1))
+        if parsed is not None and parsed["name"] != "":
+            calls.append(parsed)
+    return calls
 
 
 class ThinkingParser:

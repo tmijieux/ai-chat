@@ -11,13 +11,15 @@ from fastapi import HTTPException
 from tokenizer import render_messages
 from message_types import LLMMessage
 from .base import (
-    LLMBackend, StreamEvent,
+    LLMBackend, StreamEvent, ThinkingParser,
     ContentEvent, ThinkingEvent, ToolCallStartEvent, ToolCallArgEvent, DoneEvent,
+    parse_all_tool_calls,
 )
 
 MODEL_NAME = "local"
 LLAMA_BASE_URL = "http://127.0.0.1:8080"
 LLAMA_CHAT_URL = f"{LLAMA_BASE_URL}/v1/chat/completions"
+LLAMA_COMPLETION_URL = f"{LLAMA_BASE_URL}/completion"
 LLAMA_TOKENIZE_URL = f"{LLAMA_BASE_URL}/tokenize"
 LLAMA_HEALTH_URL = f"{LLAMA_BASE_URL}/health"
 LLAMA_SERVER_EXE = str(Path.home() / "ai/llama.cpp/build/bin/Release/llama-server.exe")
@@ -26,6 +28,41 @@ MMPROJ_PATH = str(Path.home() / "ai/models/unsloth/mmproj-F16.gguf")
 CTX_LIMIT = 2**15 # 14 -> 16K, 15 -> 32K, 16 -> 65k
 
 logger = logging.getLogger(__name__)
+
+# The think-block sub-grammar llama-server itself generates for eager tool-call grammars (copied
+# verbatim from a captured __verbose.generation_settings.grammar) — fixed boilerplate, the same
+# regardless of which tools/schema are involved, unlike the tool-call rules below it which are
+# schema-dependent and always taken fresh from the server.
+_THINK_BLOCK_RULE = (
+    'think-block ::= "<think>" "\\n"? ([^<] | "<" [^/] | "</" [^t] | "</t" [^h] | "</th" [^i] '
+    '| "</thi" [^n] | "</thin" [^k] | "</think" [^>])* "\\n"? "</think>" "\\n"? "\\n"?'
+)
+
+
+def _cast_tool_call_arguments(parsed_calls: list[dict], tools_by_name: dict[str, dict]) -> list[tuple[str, dict]]:
+    """Cast a parsed tool call's raw-string arguments to their declared JSON-Schema type.
+
+    parse_all_tool_calls (llm/base.py) only knows the XML wire format, not any particular tool's
+    schema, so it always returns raw strings; this casts them the way the normal
+    /v1/chat/completions path's server-side argument conversion would have.
+    """
+    calls: list[tuple[str, dict]] = []
+    for parsed in parsed_calls:
+        name = parsed["name"]
+        properties = tools_by_name.get(name, {}).get("parameters", {}).get("properties", {})
+        arguments: dict = {}
+        for param_name, raw_value in parsed["arguments"].items():
+            param_type = properties.get(param_name, {}).get("type", "string")
+            if param_type == "integer":
+                arguments[param_name] = int(raw_value.strip())
+            elif param_type == "number":
+                arguments[param_name] = float(raw_value.strip())
+            elif param_type == "boolean":
+                arguments[param_name] = raw_value.strip() == "true"
+            else:
+                arguments[param_name] = raw_value
+        calls.append((name, arguments))
+    return calls
 
 
 class LlamaServerBackend(LLMBackend):
@@ -50,6 +87,11 @@ class LlamaServerBackend(LLMBackend):
                 "-ngl", "99",
                 "--port", "8080",
                 "--host", "127.0.0.1",
+                # verbosity>9 makes llama-server attach a "__verbose" block (rendered prompt +
+                # grammar) to /v1/chat/completions responses — used by _force_tool_call below.
+                # --log-disable stops that verbosity from producing any log output.
+                "--verbosity", "10",
+                "--log-disable",
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -170,6 +212,7 @@ class LlamaServerBackend(LLMBackend):
         finish_reason: str = "stop"
         prompt_tokens: int = 0
         completion_tokens: int = 0
+        thinking_acc: str = ""
 
         #print(json.dumps(body, indent=2, ensure_ascii=False))
         async with aiohttp.ClientSession() as http:
@@ -206,6 +249,7 @@ class LlamaServerBackend(LLMBackend):
                     # Thinking — llama-server exposes it in reasoning_content, not <think> tags
                     thinking_frag = delta.get("reasoning_content") or ""
                     if thinking_frag:
+                        thinking_acc += thinking_frag
                         yield ThinkingEvent(type="thinking", content=thinking_frag)
 
                     # Content
@@ -227,9 +271,162 @@ class LlamaServerBackend(LLMBackend):
                             tool_calls_acc[idx]["arguments_str"] += args_frag
                             yield ToolCallArgEvent(type="tool_call_arg", index=idx, fragment=args_frag)
 
+        if tool_choice is not None and len(tool_calls_acc) == 0:
+            # llama-server's own parser doesn't recognize a call the model made without ever
+            # closing </think> — check for that (same recovery agent.py does post-hoc) before
+            # concluding tool_choice was genuinely ignored and paying for a forced reissue.
+            recovered = _cast_tool_call_arguments(parse_all_tool_calls(thinking_acc), {t["function"]["name"]: t["function"] for t in tools})
+            if len(recovered) > 0:
+                for idx, (name, arguments) in enumerate(recovered):
+                    tc_id = f"tc-recovered-{idx}"
+                    yield ToolCallStartEvent(type="tool_call_start", index=idx, id=tc_id, name=name)
+                    yield ToolCallArgEvent(type="tool_call_arg", index=idx, fragment=json.dumps(arguments, ensure_ascii=False))
+                yield DoneEvent(type="done", prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, finish_reason="tool_calls")
+                return
+
+            logger.warning(
+                "llama-server did not honor tool_choice=%r — retrying with a mechanically forced grammar",
+                tool_choice,
+            )
+            async for event in self._force_tool_call(messages, tools, tool_choice, max_tokens, temperature):
+                yield event
+            return
+
         yield DoneEvent(
             type="done",
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             finish_reason=finish_reason,
+        )
+
+    async def _force_tool_call(
+        self,
+        messages: Sequence[LLMMessage],
+        tools: list,
+        tool_choice: dict | str,
+        max_tokens: int | None,
+        temperature: float,
+    ) -> AsyncIterator[StreamEvent]:
+        """Mechanically force a tool call llama-server's tool_choice wiring failed to produce.
+
+        llama.cpp's PEG-native chat format (what Qwen3.5 uses) does not reliably turn tool_choice
+        into an eager grammar: either the grammar stays lazy and the model never triggers it, or
+        the eager grammar's root allows an unbounded run of ordinary content before the tool-call
+        rule, which the model can stall in forever. Both were confirmed empirically against a live
+        llama-server. The fix: probe /v1/chat/completions for the grammar and rendered prompt it
+        would have used (max_tokens=1 keeps this cheap; requires llama-server run with verbosity>9,
+        see ensure_running), rebuild the grammar's root as "think-block? tool-call" — reasoning is
+        still allowed, but the only way out of it is a real tool call, no free-text escape hatch —
+        and replay the prompt (minus its trailing open <think> tag, since the model reopens it
+        itself if it wants to reason) against the raw /completion endpoint, streamed so thinking
+        still displays live. The tool-call rules themselves come verbatim from llama-server's own
+        grammar — reusing them instead of hand-building GBNF keeps this correct for enum/integer/
+        boolean parameters too, not just the flat strings this was validated against.
+        """
+        # Own budget, decoupled from the caller's max_tokens: that budget was sized for a
+        # different generation, and the model is now free to reason at length before the
+        # mandatory call — a caller-supplied budget as low as auto_safety.py's 128 measurably
+        # risks the model spending it all on reasoning and never reaching the tool call at all.
+        n_predict = 1024 if max_tokens is None else max(max_tokens, 1024)
+
+        async with aiohttp.ClientSession() as http:
+            probe_body = {
+                "model": MODEL_NAME,
+                "messages": messages,
+                "stream": False,
+                "max_tokens": 1,
+                "temperature": temperature,
+                "tools": tools,
+                "tool_choice": tool_choice,
+            }
+            async with http.post(LLAMA_CHAT_URL, json=probe_body) as response:
+                if response.status != 200:
+                    logger.error("llama-server tool-call probe failed: %s", await response.text())
+                    yield DoneEvent(type="done", prompt_tokens=0, completion_tokens=0, finish_reason="error")
+                    return
+                probe = await response.json()
+
+            verbose = probe.get("__verbose")
+            if verbose is None:
+                logger.error(
+                    "llama-server probe response had no __verbose block (server not started with "
+                    "--verbosity 10+) — cannot mechanically force this tool call"
+                )
+                yield DoneEvent(type="done", prompt_tokens=0, completion_tokens=0, finish_reason="error")
+                return
+
+            prompt = verbose["prompt"]
+            if prompt.endswith("<think>\n"):
+                prompt = prompt[: -len("<think>\n")]
+
+            grammar_lines = [
+                line for line in verbose["generation_settings"]["grammar"].splitlines()
+                if not line.startswith("root ::=")
+            ]
+            grammar = "\n".join(["root ::= think-block? tool-call", _THINK_BLOCK_RULE] + grammar_lines)
+
+            completion_body = {
+                "prompt": prompt,
+                "grammar": grammar,
+                "n_predict": n_predict,
+                "temperature": temperature,
+                "presence_penalty": 1.5,
+                "top_k": 20,
+                "top_p": 0.95,
+                "cache_prompt": True,
+                "stream": True,
+            }
+            thinking_parser = ThinkingParser()
+            tool_call_text = ""
+            prompt_tokens = 0
+            completion_tokens = 0
+            async with http.post(LLAMA_COMPLETION_URL, json=completion_body) as response:
+                if response.status != 200:
+                    logger.error("llama-server forced tool-call completion failed: %s", await response.text())
+                    yield DoneEvent(type="done", prompt_tokens=0, completion_tokens=0, finish_reason="error")
+                    return
+
+                async for line_bytes in response.content:
+                    line = line_bytes.decode().strip()
+                    if not line.startswith("data:"):
+                        continue
+                    try:
+                        chunk = json.loads(line[5:].strip())
+                    except json.JSONDecodeError:
+                        continue
+
+                    thinking_frag, content_frag = thinking_parser.feed(chunk.get("content", ""))
+                    if thinking_frag:
+                        yield ThinkingEvent(type="thinking", content=thinking_frag)
+                    tool_call_text += content_frag
+
+                    if chunk.get("stop"):
+                        prompt_tokens = chunk.get("tokens_evaluated", 0)
+                        completion_tokens = chunk.get("tokens_predicted", 0)
+
+            trailing_thinking, trailing_content = thinking_parser.flush()
+            if trailing_thinking:
+                yield ThinkingEvent(type="thinking", content=trailing_thinking)
+            tool_call_text += trailing_content
+
+        tools_by_name = {t["function"]["name"]: t["function"] for t in tools}
+        parsed_calls = _cast_tool_call_arguments(parse_all_tool_calls(tool_call_text), tools_by_name)
+        if len(parsed_calls) == 0:
+            logger.error(
+                "forced tool-call completion produced no parseable <tool_call> (likely spent its "
+                "full %d-token budget still reasoning): %r", n_predict, tool_call_text,
+            )
+            yield DoneEvent(type="done", prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, finish_reason="error")
+            return
+
+        for idx, (name, arguments) in enumerate(parsed_calls):
+            tc_id = f"tc-{idx}"
+            yield ToolCallStartEvent(type="tool_call_start", index=idx, id=tc_id, name=name)
+            yield ToolCallArgEvent(type="tool_call_arg", index=idx, fragment=json.dumps(arguments, ensure_ascii=False))
+
+        yield DoneEvent(
+            type="done",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            finish_reason="tool_calls",
         )

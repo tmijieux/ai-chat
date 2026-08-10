@@ -2,7 +2,6 @@ import json
 import asyncio
 import logging
 import os
-import re
 import typing
 import uuid
 import aiofiles
@@ -17,7 +16,7 @@ from .tools import TOOL_REGISTRY, get_ollama_tool_list
 from .auto_safety import evaluate_tool_safety, _ALWAYS_SAFE_TOOLS, _FILE_WRITE_TOOLS, is_path_inside_workspace
 from .compress import _summarize_shell_output, _summarize_search_results, WORKING_MEMORY_ITERATION_THRESHOLD
 from llm import backend
-from llm.base import ToolCallStartEvent, ToolCallArgEvent
+from llm.base import ToolCallStartEvent, ToolCallArgEvent, TOOL_CALL_BLOCK_RE, parse_all_tool_calls
 from message_types import LLMMessage, AssistantMessage, ToolCall, ToolCallFunction
 from tool_result_types import ToolResult
 
@@ -254,22 +253,6 @@ class AgentSession:
         self._compression_event.set()
 
 
-_TOOL_CALL_BLOCK_RE = re.compile(r'<tool_call>(.*?)</tool_call>', re.DOTALL)
-_FUNCTION_RE = re.compile(r'<function=(\w+)>(.*?)</function>', re.DOTALL)
-_PARAMETER_RE = re.compile(r'<parameter=(\w+)>\n?(.*?)\n?</parameter>', re.DOTALL)
-
-
-def _parse_embedded_tool_call(block_content: str) -> dict | None:
-    """Parse <function=NAME><parameter=K>V</parameter>…</function> into name + arguments dict."""
-    func_match = _FUNCTION_RE.search(block_content)
-    if func_match is None:
-        return None
-    name = func_match.group(1)
-    func_body = func_match.group(2)
-    arguments = {m.group(1): m.group(2) for m in _PARAMETER_RE.finditer(func_body)}
-    return {"name": name, "arguments": arguments}
-
-
 def _extract_tool_calls_from_thinking(thinking: str) -> list[ToolCall]:
     """
     Recover tool calls that the model emitted inside the thinking block without closing </think>.
@@ -278,10 +261,7 @@ def _extract_tool_calls_from_thinking(thinking: str) -> list[ToolCall]:
     marked with _recovered=True so the caller can emit streaming events before generation_end.
     """
     result = []
-    for index, block_match in enumerate(_TOOL_CALL_BLOCK_RE.finditer(thinking)):
-        parsed = _parse_embedded_tool_call(block_match.group(1))
-        if parsed is None or parsed["name"] == "":
-            continue
+    for index, parsed in enumerate(parse_all_tool_calls(thinking)):
         result.append({
             "id": f"tc-recovered-{index}",
             "function": {"name": parsed["name"], "arguments": parsed["arguments"]},
@@ -292,7 +272,7 @@ def _extract_tool_calls_from_thinking(thinking: str) -> list[ToolCall]:
 
 def _strip_tool_call_blocks(thinking: str) -> str:
     """Remove <tool_call>…</tool_call> blocks from thinking before storing it in LLM context."""
-    return _TOOL_CALL_BLOCK_RE.sub("", thinking).strip()
+    return TOOL_CALL_BLOCK_RE.sub("", thinking).strip()
 
 
 
