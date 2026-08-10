@@ -69,6 +69,31 @@ stages:
           parse_request.output_path: "{{find_gaps.data.translated_path}}"
           parse_request.target_language: "{{locale_file.language_name}}"
 
+      # Check every translated entry for a broken placeholder or a leaked [ctx: ...] annotation
+      # (scripts/verify_placeholders.py)
+      - name: verify_placeholders
+        type: coordinator
+        action: run_script
+        condition: "find_gaps.data.count > 0"
+        input:
+          script: "scripts/verify_placeholders.py"
+          args: ["{{find_gaps.data.path}}", "{{find_gaps.data.translated_path}}"]
+        output: verify_placeholders
+
+      # Retranslate just the offending entries, once, by reusing translate-locale as a sub-workflow.
+      # Its output_path is the same delta file translate_delta already wrote, so this patches only
+      # the offending keys in place (append_json_entries merges by key). If violations remain after
+      # this pass, they are reported in synthesis but the run still proceeds.
+      - name: retranslate_violations
+        type: workflow
+        ref: translate-locale
+        condition: "verify_placeholders.data.count > 0"
+        skip_stages: [parse_request, init_output, synthesis]
+        input:
+          parse_request.source_path: "{{verify_placeholders.data.path}}"
+          parse_request.output_path: "{{find_gaps.data.translated_path}}"
+          parse_request.target_language: "{{locale_file.language_name}}"
+
       # Repair any keys the translation pass corrupted (scripts/fix_locale_keys.py --apply)
       - name: fix_delta_keys
         type: coordinator
@@ -100,16 +125,19 @@ stages:
       {{parse_request.dry_run}} dry_run — merge_into_main did not run if true.
 
       Per-file results (each item: the locale_file, whether it succeeded, and what find_gaps/
-      translate_delta/fix_delta_keys/merge_into_main produced — a stage is absent from an item when
-      it had nothing to do, i.e. find_gaps.data.count was 0):
+      translate_delta/verify_placeholders/retranslate_violations/fix_delta_keys/merge_into_main
+      produced — a stage is absent from an item when it had nothing to do, i.e. find_gaps.data.count
+      was 0, or verify_placeholders.data.count was 0 for retranslate_violations):
       {{sync_loop_summary.items}}
 
       Files skipped because their filename isn't a recognized ISO 639-1 language code:
       {{list_files.data.skipped}}]
 
       Summarize this for the user: how many files were checked, how many had gaps and were
-      translated/merged (or would have been, if dry_run), how many needed nothing, and list any
-      skipped files by name. Do not dump the raw JSON — write it as prose.
+      translated/merged (or would have been, if dry_run), how many needed nothing, how many had
+      placeholder/context violations caught and retranslated (mention if any still remained after
+      the retry — those need a manual look), and list any skipped files by name. Do not dump the raw
+      JSON — write it as prose.
 
 finish_tools:
   finish_sync_request:

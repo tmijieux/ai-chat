@@ -84,6 +84,10 @@ stages:
           Keep placeholders such as {name}, %s, %d and any HTML tags exactly as they appear in the
           translated value.
 
+          A key may start with a "[ctx: ...]" prefix giving you disambiguating context (e.g.
+          "[ctx: short form of September] Sept"). That prefix is only there to help you translate
+          correctly — never repeat it, or any part of it, in translated_value.
+
           Submit one output entry per input entry, in the same order, by calling
           finish_translate_chunk: copy each entry's key back as given (this just helps you stay on
           the right entry as you go — it is not what identifies the entry when saved), and set
