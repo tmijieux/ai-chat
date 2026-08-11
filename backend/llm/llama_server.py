@@ -27,6 +27,10 @@ GGUF_PATH = str(Path.home() / "ai/models/unsloth/Qwen3.5-9B-Q4_K_M.gguf")
 MMPROJ_PATH = str(Path.home() / "ai/models/unsloth/mmproj-F16.gguf")
 CTX_LIMIT = 2**15 # 14 -> 16K, 15 -> 32K, 16 -> 65k
 
+# Flip to False to instantly revert every tool-enabled turn to the pre-think-gate behavior
+# (_stream_completion_legacy) with no other code change, if the think-gated path misbehaves.
+USE_THINK_GATED_STREAMING = True
+
 logger = logging.getLogger(__name__)
 
 # The think-block sub-grammar llama-server itself generates for eager tool-call grammars (copied
@@ -190,6 +194,37 @@ class LlamaServerBackend(LLMBackend):
         disable_thinking: bool = False,
         tool_choice: dict | str | None = None,
     ) -> AsyncIterator[StreamEvent]:
+        """Dispatch to the think-gated path when it applies, else the legacy OAI-streaming path.
+
+        The think-gated path only helps when there's an unclosed <think> block a <tool_call>
+        could hide in and tools that could actually be called — so it's skipped whenever there
+        are no tools, thinking is disabled (disable_thinking's prompt already contains a
+        pre-closed empty <think></think>, confirmed via a live probe, so there's nothing to
+        gate), or tool_choice=="none" (no tool-calling outcome to guard against).
+        """
+        use_think_gate = (
+            USE_THINK_GATED_STREAMING
+            and len(tools) > 0
+            and disable_thinking == False
+            and tool_choice != "none"
+        )
+        if use_think_gate:
+            async for event in self._stream_completion_think_gated(messages, tools, temperature, max_tokens, tool_choice):
+                yield event
+            return
+
+        async for event in self._stream_completion_legacy(messages, tools, temperature, max_tokens, disable_thinking, tool_choice):
+            yield event
+
+    async def _stream_completion_legacy(
+        self,
+        messages: Sequence[LLMMessage],
+        tools: list,
+        temperature: float,
+        max_tokens: int | None = None,
+        disable_thinking: bool = False,
+        tool_choice: dict | str | None = None,
+    ) -> AsyncIterator[StreamEvent]:
         body: dict = {
             "model": MODEL_NAME,
             "messages": messages,
@@ -298,6 +333,212 @@ class LlamaServerBackend(LLMBackend):
             completion_tokens=completion_tokens,
             finish_reason=finish_reason,
         )
+
+    async def _stream_completion_think_gated(
+        self,
+        messages: Sequence[LLMMessage],
+        tools: list,
+        temperature: float,
+        max_tokens: int | None,
+        tool_choice: dict | str | None,
+    ) -> AsyncIterator[StreamEvent]:
+        """Two-phase generation that structurally prevents <tool_call> from being emitted before
+        </think> closes, instead of recovering from it after the fact like agent.py's regex-based
+        extraction (still needed for the legacy path).
+
+        Phase 1 runs an eager grammar that forbids only the special <tool_call> token (a distinct
+        vocab entry) and stops at </think> — this blocks real tool-call attempts without blocking
+        the model from writing "<tool_call>" as ordinary text, since ordinary tokens spelling the
+        same characters aren't the banned token (verified empirically against a live server:
+        forcing the special token via logit_bias still gets rejected pre-</think>, while a forced
+        prefix ending mid-"<tool_call>" text completes normally via an ordinary token).
+
+        Phase 2 continues generation from the same llama-server slot (cache_prompt reuses phase
+        1's KV cache, so this isn't a full prompt reprocess) with a grammar requiring either a
+        real, schema-validated tool call or free prose — using the same token-identity exclusion
+        for the prose branch, since a bare `.*` alternative there would silently void the schema
+        rule's validation (any text the schema rule could produce, `.*` could produce identically,
+        so the ever-permissive `.*` branch would make the schema branch's constraints moot).
+        """
+        n_predict = 1024 if max_tokens is None else max(max_tokens, 1024)
+
+        async with aiohttp.ClientSession() as http:
+            probe_body = {
+                "model": MODEL_NAME,
+                "messages": messages,
+                "stream": False,
+                "max_tokens": 1,
+                "temperature": temperature,
+                "tools": tools,
+                "tool_choice": "auto" if tool_choice is None else tool_choice,
+            }
+            async with http.post(LLAMA_CHAT_URL, json=probe_body) as response:
+                if response.status != 200:
+                    logger.error("llama-server think-gate probe failed: %s", await response.text())
+                    yield DoneEvent(type="done", prompt_tokens=0, completion_tokens=0, finish_reason="error")
+                    return
+                probe = await response.json()
+
+            verbose = probe.get("__verbose")
+            if verbose is None:
+                logger.error(
+                    "llama-server probe response had no __verbose block (server not started with "
+                    "--verbosity 10+) — cannot run the think-gated streaming path"
+                )
+                yield DoneEvent(type="done", prompt_tokens=0, completion_tokens=0, finish_reason="error")
+                return
+
+            prompt = verbose["prompt"]
+            grammar_lines = [
+                line for line in verbose["generation_settings"]["grammar"].splitlines()
+                if not line.startswith("root ::=")
+            ]
+
+            # Phase 1: think, with the special <tool_call> token banned outright.
+            phase1_body = {
+                "prompt": prompt,
+                "grammar": "root ::= !<tool_call>*\n",
+                "stop": ["</think>"],
+                "n_predict": n_predict,
+                "temperature": temperature,
+                "presence_penalty": 1.5,
+                "top_k": 20,
+                "top_p": 0.95,
+                "cache_prompt": True,
+                "stream": True,
+            }
+            thinking_acc = ""
+            prompt_tokens = 0
+            completion_tokens = 0
+            stopped_on_think_close = False
+            async with http.post(LLAMA_COMPLETION_URL, json=phase1_body) as response:
+                if response.status != 200:
+                    logger.error("llama-server think-gate phase 1 failed: %s", await response.text())
+                    yield DoneEvent(type="done", prompt_tokens=0, completion_tokens=0, finish_reason="error")
+                    return
+
+                async for line_bytes in response.content:
+                    line = line_bytes.decode().strip()
+                    if not line.startswith("data:"):
+                        continue
+                    try:
+                        chunk = json.loads(line[5:].strip())
+                    except json.JSONDecodeError:
+                        continue
+
+                    fragment = chunk.get("content", "")
+                    if fragment:
+                        thinking_acc += fragment
+                        yield ThinkingEvent(type="thinking", content=fragment)
+
+                    if chunk.get("stop"):
+                        prompt_tokens = chunk.get("tokens_evaluated", 0)
+                        completion_tokens = chunk.get("tokens_predicted", 0)
+                        stopped_on_think_close = chunk.get("stopping_word") == "</think>"
+
+        if stopped_on_think_close == False:
+            logger.error(
+                "think-gate phase 1 did not close </think> (likely spent its full %d-token "
+                "budget still reasoning): %r", n_predict, thinking_acc,
+            )
+            yield DoneEvent(type="done", prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, finish_reason="error")
+            return
+
+        # Phase 2: think is closed — free prose, optionally followed by a real, schema-validated
+        # tool call. This has to be a *sequence* (prose, then optionally tool-call), not a
+        # top-level "tool-call | prose" choice: alternation picks a branch once, at the very
+        # first phase-2 token, and the model's first tokens are near-always some lead-in prose
+        # ("I'll check the weather..."), which would permanently prune the tool-call branch (its
+        # literal must start immediately) and strand generation in prose — forbidden from ever
+        # using the real token again, so it hallucinates fake pseudo-call syntax instead of a real
+        # call. Confirmed both ways empirically: "tool-call | prose" reproduced this 5/5 runs;
+        # "prose tool-call?" does not, because the star's lazy exit (same ambiguity that makes the
+        # phase-1/phase-2 boundary work) keeps a "the loop already ended, tool-call starts here"
+        # derivation alive at every position, not just position 0.
+        # Uses a fresh session/connection rather than reusing phase 1's: llama-server closes the
+        # connection right after a stop-triggered stream ends, and reusing the pooled connection
+        # for the very next request races that close (observed empirically as a
+        # ServerDisconnectedError when both requests shared one aiohttp.ClientSession).
+        if tool_choice is None or tool_choice == "auto":
+            grammar = "\n".join(["root ::= prose tool-call?", "prose ::= !<tool_call>*"] + grammar_lines)
+        else:
+            # No "prose" prefix here, unlike the optional case above: an unbounded prose prefix
+            # in front of a *mandatory* call gives the model room to stall forever when it has no
+            # real reason to invoke the forced tool (confirmed empirically: it ran out its full
+            # token budget rambling instead of ever committing). Mirrors _force_tool_call's
+            # existing mandatory root exactly — the tail must start immediately with the literal
+            # tag, no lead-in room to avoid it.
+            grammar = "\n".join(["root ::= tool-call"] + grammar_lines)
+
+        # "stop" strings are excluded from the returned content (confirmed empirically), so
+        # the closing tag has to be reattached by hand to keep the replayed prompt accurate.
+        phase2_prompt = prompt + thinking_acc + "</think>"
+        phase2_body = {
+            "prompt": phase2_prompt,
+            "grammar": grammar,
+            "n_predict": n_predict,
+            "temperature": temperature,
+            "presence_penalty": 1.5,
+            "top_k": 20,
+            "top_p": 0.95,
+            "cache_prompt": True,
+            "stream": True,
+        }
+        thinking_parser = ThinkingParser()
+        tail_text = ""
+        async with aiohttp.ClientSession() as http2:
+            async with http2.post(LLAMA_COMPLETION_URL, json=phase2_body) as response:
+                if response.status != 200:
+                    logger.error("llama-server think-gate phase 2 failed: %s", await response.text())
+                    yield DoneEvent(type="done", prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, finish_reason="error")
+                    return
+
+                async for line_bytes in response.content:
+                    line = line_bytes.decode().strip()
+                    if not line.startswith("data:"):
+                        continue
+                    try:
+                        chunk = json.loads(line[5:].strip())
+                    except json.JSONDecodeError:
+                        continue
+
+                    thinking_frag, content_frag = thinking_parser.feed(chunk.get("content", ""))
+                    if thinking_frag:
+                        yield ThinkingEvent(type="thinking", content=thinking_frag)
+                    tail_text += content_frag
+
+                    if chunk.get("stop"):
+                        prompt_tokens = chunk.get("tokens_evaluated", 0)
+                        completion_tokens = chunk.get("tokens_predicted", 0)
+
+            trailing_thinking, trailing_content = thinking_parser.flush()
+            if trailing_thinking:
+                yield ThinkingEvent(type="thinking", content=trailing_thinking)
+            tail_text += trailing_content
+
+        tools_by_name = {t["function"]["name"]: t["function"] for t in tools}
+        parsed_calls = _cast_tool_call_arguments(parse_all_tool_calls(tail_text), tools_by_name)
+
+        if len(parsed_calls) > 0:
+            for idx, (name, arguments) in enumerate(parsed_calls):
+                tc_id = f"tc-{idx}"
+                yield ToolCallStartEvent(type="tool_call_start", index=idx, id=tc_id, name=name)
+                yield ToolCallArgEvent(type="tool_call_arg", index=idx, fragment=json.dumps(arguments, ensure_ascii=False))
+            yield DoneEvent(type="done", prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, finish_reason="tool_calls")
+            return
+
+        mandatory_call = tool_choice is not None and tool_choice != "auto"
+        if mandatory_call:
+            logger.error(
+                "think-gate phase 2 produced no parseable <tool_call> despite a mandatory "
+                "grammar (likely spent its full %d-token budget still reasoning): %r", n_predict, tail_text,
+            )
+            yield DoneEvent(type="done", prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, finish_reason="error")
+            return
+
+        if len(tail_text) > 0:
+            yield ContentEvent(type="content", content=tail_text)
+        yield DoneEvent(type="done", prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, finish_reason="stop")
 
     async def _force_tool_call(
         self,
