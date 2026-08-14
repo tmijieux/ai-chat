@@ -70,6 +70,8 @@ def _cast_tool_call_arguments(parsed_calls: list[dict], tools_by_name: dict[str,
                 arguments[param_name] = float(raw_value.strip())
             elif param_type == "boolean":
                 arguments[param_name] = raw_value.strip() == "true"
+            elif param_type in ("array", "object"):
+                arguments[param_name] = json.loads(raw_value)
             else:
                 arguments[param_name] = raw_value
         calls.append((name, arguments))
