@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import subprocess
 from pathlib import Path
 from typing import AsyncIterator, Sequence
@@ -12,7 +13,7 @@ from tokenizer import render_messages
 from message_types import LLMMessage
 from .base import (
     LLMBackend, StreamEvent, ThinkingParser,
-    ContentEvent, ThinkingEvent, ToolCallStartEvent, ToolCallArgEvent, DoneEvent,
+    ContentEvent, ThinkingEvent, ToolCallStartEvent, ToolCallArgEvent, ToolCallRawEvent, DoneEvent,
     parse_all_tool_calls,
 )
 
@@ -30,6 +31,12 @@ CTX_LIMIT = 2**15 # 14 -> 16K, 15 -> 32K, 16 -> 65k
 # Flip to False to instantly revert every tool-enabled turn to the pre-think-gate behavior
 # (_stream_completion_legacy) with no other code change, if the think-gated path misbehaves.
 USE_THINK_GATED_STREAMING = True
+
+# The special <tool_call> token's textual form, as it appears in raw /completion output — used
+# to split phase 2's content stream live into prose (ContentEvent) vs. the tool call's raw text
+# (ToolCallRawEvent), without waiting for the whole tail to finish generating.
+_TOOL_CALL_OPEN_TAG = "<tool_call>"
+_FUNCTION_NAME_RE = re.compile(r"<function=(\w+)>")
 
 logger = logging.getLogger(__name__)
 
@@ -486,6 +493,48 @@ class LlamaServerBackend(LLMBackend):
         }
         thinking_parser = ThinkingParser()
         tail_text = ""
+        # Splits phase 2's content stream live into prose (ContentEvent) and, once the special
+        # <tool_call> token's text is seen, a cosmetic live preview of the tool call's raw
+        # generated text — the display-only ToolCallRawEvent, gated behind the frontend already
+        # having a ToolCallStartEvent (tool name) to attach it to. So this waits for
+        # "<function=NAME>" to close before emitting anything for the tool-call side: the buffer
+        # between the two markers is tiny (the model always writes it immediately), and this way
+        # the frontend never has to render a preview with no name. tool_call_carry mirrors
+        # ThinkingParser's own carry technique for markers split across chunk boundaries.
+        tool_call_carry = ""
+        in_tool_call = False
+        tool_call_name_known = False
+        tool_call_name_buffer = ""
+
+        def split_prose_and_tool_call_live(text: str):
+            nonlocal tool_call_carry, in_tool_call, tool_call_name_known, tool_call_name_buffer
+            if in_tool_call:
+                if tool_call_name_known:
+                    if text:
+                        yield ToolCallRawEvent(type="tool_call_raw", fragment=text)
+                    return
+                tool_call_name_buffer += text
+                name_match = _FUNCTION_NAME_RE.search(tool_call_name_buffer)
+                if name_match is not None:
+                    tool_call_name_known = True
+                    yield ToolCallStartEvent(type="tool_call_start", index=0, id="tc-0", name=name_match.group(1))
+                    yield ToolCallRawEvent(type="tool_call_raw", fragment=tool_call_name_buffer)
+                    tool_call_name_buffer = ""
+                return
+            buf = tool_call_carry + text
+            marker_pos = buf.find(_TOOL_CALL_OPEN_TAG)
+            if marker_pos == -1:
+                safe_len = max(0, len(buf) - (len(_TOOL_CALL_OPEN_TAG) - 1))
+                if buf[:safe_len]:
+                    yield ContentEvent(type="content", content=buf[:safe_len])
+                tool_call_carry = buf[safe_len:]
+            else:
+                if buf[:marker_pos]:
+                    yield ContentEvent(type="content", content=buf[:marker_pos])
+                tool_call_carry = ""
+                in_tool_call = True
+                yield from split_prose_and_tool_call_live(buf[marker_pos:])
+
         async with aiohttp.ClientSession() as http2:
             async with http2.post(LLAMA_COMPLETION_URL, json=phase2_body) as response:
                 if response.status != 200:
@@ -506,6 +555,8 @@ class LlamaServerBackend(LLMBackend):
                     if thinking_frag:
                         yield ThinkingEvent(type="thinking", content=thinking_frag)
                     tail_text += content_frag
+                    for live_event in split_prose_and_tool_call_live(content_frag):
+                        yield live_event
 
                     if chunk.get("stop"):
                         prompt_tokens = chunk.get("tokens_evaluated", 0)
@@ -515,6 +566,8 @@ class LlamaServerBackend(LLMBackend):
             if trailing_thinking:
                 yield ThinkingEvent(type="thinking", content=trailing_thinking)
             tail_text += trailing_content
+            for live_event in split_prose_and_tool_call_live(trailing_content):
+                yield live_event
 
         tools_by_name = {t["function"]["name"]: t["function"] for t in tools}
         parsed_calls = _cast_tool_call_arguments(parse_all_tool_calls(tail_text), tools_by_name)
@@ -522,6 +575,12 @@ class LlamaServerBackend(LLMBackend):
         if len(parsed_calls) > 0:
             for idx, (name, arguments) in enumerate(parsed_calls):
                 tc_id = f"tc-{idx}"
+                # The first call's tool_call_start may have already been sent live (see
+                # tool_call_name_known above), once its name became known — this re-sends the
+                # same (index, id, name) for it rather than skip it, since consumers key on
+                # tool_id and treat a repeated start as "reset this call's entry to a clean
+                # slate", which is exactly what should happen right before the final,
+                # authoritative argument fragment replaces the raw live preview.
                 yield ToolCallStartEvent(type="tool_call_start", index=idx, id=tc_id, name=name)
                 yield ToolCallArgEvent(type="tool_call_arg", index=idx, fragment=json.dumps(arguments, ensure_ascii=False))
             yield DoneEvent(type="done", prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, finish_reason="tool_calls")
@@ -536,8 +595,11 @@ class LlamaServerBackend(LLMBackend):
             yield DoneEvent(type="done", prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, finish_reason="error")
             return
 
-        if len(tail_text) > 0:
-            yield ContentEvent(type="content", content=tail_text)
+        # in_tool_call being True here (but with no parseable calls) means the marker appeared
+        # yet parsing still found nothing — the raw text already streamed live as
+        # ToolCallRawEvent above, so it must not be re-sent as content here too.
+        if in_tool_call == False and len(tool_call_carry) > 0:
+            yield ContentEvent(type="content", content=tool_call_carry)
         yield DoneEvent(type="done", prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, finish_reason="stop")
 
     async def _force_tool_call(

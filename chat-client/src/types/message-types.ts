@@ -267,6 +267,7 @@ export type AgentEvent = (
   | { type: 'thinking' | 'content'; content: string }
   | { type: 'tool_call_start'; tool_id: string; tool_name: string }
   | { type: 'tool_call_chunk'; tool_id: string; chunk: string }
+  | { type: 'tool_call_raw'; fragment: string }
   | { type: 'tool_call'; tool_id: string; tool_name: string; arguments: Record<string, unknown> }
   | { type: 'tool_confirm'; tool_id: string; tool_name: string; arguments: Record<string, unknown>; preview: string; diff_lines?: DiffLine[]; evaluator_reason?: string }
   | { type: 'tool_evaluating'; tool_id: string; tool_name: string }

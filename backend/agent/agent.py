@@ -508,6 +508,10 @@ async def _stream_llm(
             print(f"{_ANSI_MAGENTA}{event['fragment']}{_ANSI_RESET}", end="", flush=True)
             await session.emit({"type": "tool_call_chunk", "tool_id": tool_calls_acc.get(idx, {}).get("id", ""), "chunk": event["fragment"]})
 
+        elif etype == "tool_call_raw":
+            print(f"{_ANSI_MAGENTA}{event['fragment']}{_ANSI_RESET}", end="", flush=True)
+            await session.emit({"type": "tool_call_raw", "fragment": event["fragment"]})
+
         elif etype == "done":
             eval_count = event["completion_tokens"]
             done_reason = event["finish_reason"]

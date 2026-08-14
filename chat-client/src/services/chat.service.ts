@@ -586,6 +586,12 @@ export class ChatService {
         if (accEntry !== undefined) {
           accEntry.argsStr += event.chunk
         }
+      } else if (event.type === 'tool_call_raw') {
+        // Cosmetic live preview of the tool call's raw native-format text, sent ahead of the
+        // real tool_call_start/tool_call_chunk pair (see think-gated streaming in
+        // llama_server.py). Only feeds the display signal — never streamingToolCallsAcc, which
+        // must stay valid JSON for the JSON.parse at generation_end.
+        this._streamingToolCallArgs.update((s) => s + event.fragment)
       } else if (event.type === 'tool_confirm') {
         this._messages.update((msgs) => {
           const updated = event.evaluator_reason

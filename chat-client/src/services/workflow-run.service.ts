@@ -235,13 +235,42 @@ export class WorkflowRunService {
     }
 
     if (event.type === 'tool_call_start') {
+      // A tool_call_start can arrive twice for the same tool_id — the think-gated llama.cpp
+      // path sends an early one for a live raw-text preview, then a second once the call is
+      // fully parsed and validated. Reset the existing entry in place instead of appending a
+      // duplicate block.
+      const toolId = event.tool_id
       const entry: WorkflowActivityEntry = {
         kind: 'tool_call',
-        tool_id: event.tool_id,
+        tool_id: toolId,
         tool_name: event.tool_name,
         args_text: '',
       }
-      this._appendActivity(executionId, (activity) => [...activity, entry])
+      this._appendActivity(executionId, (activity) => {
+        const existingIndex = activity.findIndex((a) => a.kind === 'tool_call' && a.tool_id === toolId)
+        if (existingIndex === -1) {
+          return [...activity, entry]
+        }
+        return activity.map((a, i) => (i === existingIndex ? entry : a))
+      })
+      return
+    }
+
+    if (event.type === 'tool_call_raw') {
+      // Cosmetic live preview of the tool call's raw generated text, sent ahead of the
+      // authoritative tool_call_start/tool_call_chunk pair (see think-gated streaming in
+      // llama_server.py). Carries no tool_id, so it appends into the most recently opened
+      // tool_call entry — the one tool_call_start just reset for this purpose.
+      const fragment = event.fragment
+      this._appendActivity(executionId, (activity) => {
+        const lastIndex = activity.length - 1
+        if (lastIndex < 0 || activity[lastIndex].kind !== 'tool_call') {
+          return activity
+        }
+        return activity.map((entry, i) =>
+          i === lastIndex && entry.kind === 'tool_call' ? { ...entry, args_text: entry.args_text + fragment } : entry,
+        )
+      })
       return
     }
 

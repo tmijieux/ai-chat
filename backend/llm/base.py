@@ -28,6 +28,14 @@ class ToolCallArgEvent(TypedDict):
     fragment: str
 
 
+class ToolCallRawEvent(TypedDict):
+    """Cosmetic, live preview of a tool call's raw generated text (native <function=.../> XML,
+    not JSON). Purely for display while streaming — the authoritative, schema-cast arguments
+    still arrive afterward via ToolCallStartEvent/ToolCallArgEvent, unaffected by this."""
+    type: Literal["tool_call_raw"]
+    fragment: str
+
+
 class DoneEvent(TypedDict):
     type: Literal["done"]
     prompt_tokens: int
@@ -35,7 +43,7 @@ class DoneEvent(TypedDict):
     finish_reason: str
 
 
-StreamEvent = Union[ContentEvent, ThinkingEvent, ToolCallStartEvent, ToolCallArgEvent, DoneEvent]
+StreamEvent = Union[ContentEvent, ThinkingEvent, ToolCallStartEvent, ToolCallArgEvent, ToolCallRawEvent, DoneEvent]
 
 
 # Qwen3's tool-call XML, shared by two callers: agent.py recovers a call the model emitted
