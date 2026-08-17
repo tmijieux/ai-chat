@@ -5,6 +5,7 @@ import {
   WorkflowActivityEntry,
   WorkflowLoopItemState,
   WorkflowRun,
+  WorkflowSelectedDetail,
   WorkflowStageState,
 } from '../types/message-types'
 
@@ -34,23 +35,39 @@ export class WorkflowRunService {
   /** True when the run view replaces the message list. Set automatically, toggleable by the user. */
   readonly viewOpen = signal(false)
 
-  /** Which invocation the detail pane shows. Null follows the running stage. */
+  /** Which invocation the detail pane shows when no loop item is selected. Null follows the running stage. */
   readonly selectedExecutionId = signal<string | null>(null)
+
+  /** Which loop item the detail pane shows — a dot click. Takes priority over selectedExecutionId. */
+  readonly selectedLoopItem = signal<{ path: string; itemNumber: number } | null>(null)
 
   /** Execution ids that still hold activity, oldest first — the ring buffer's order. */
   private activityOrder: string[] = []
 
-  readonly selectedExecution = computed<WorkflowStageState | null>(() => {
+  /**
+   * What the detail pane should render right now. A selected loop item always wins — it shows
+   * that item's own frozen result (see WorkflowLoopItemState.result), never whatever else happens
+   * to be streaming elsewhere in the run. Otherwise falls back to the explicitly selected stage
+   * invocation, or the currently running one in follow mode (both selections null).
+   */
+  readonly selectedDetail = computed<WorkflowSelectedDetail | null>(() => {
     const run = this._run()
     if (run === null) {
       return null
+    }
+    const loopSelection = this.selectedLoopItem()
+    if (loopSelection !== null) {
+      const items = run.loop_items[loopSelection.path]
+      const item = items?.find((candidate) => candidate.item_number === loopSelection.itemNumber) ?? null
+      return item === null ? null : { kind: 'loop_item', path: loopSelection.path, item }
     }
     const explicitId = this.selectedExecutionId()
     const id = explicitId !== null ? explicitId : run.current_execution_id
     if (id === null) {
       return null
     }
-    return run.execution_by_id[id] ?? null
+    const state = run.execution_by_id[id] ?? null
+    return state === null ? null : { kind: 'execution', state }
   })
 
   constructor() {
@@ -63,6 +80,7 @@ export class WorkflowRunService {
     if (event.type === 'workflow_start') {
       this.activityOrder = []
       this.selectedExecutionId.set(null)
+      this.selectedLoopItem.set(null)
       this._run.set({
         workflow_name: event.workflow_name,
         status: 'running',
@@ -185,6 +203,7 @@ export class WorkflowRunService {
               item_number: item.item_number,
               status: event.success ? ('done' as const) : ('failed' as const),
               attempts_used: event.attempts_used,
+              result: event.item_result,
             }
           : item,
       )
@@ -353,7 +372,7 @@ export class WorkflowRunService {
       if (previous !== undefined) {
         return previous
       }
-      return { item_number: index + 1, status: 'pending' as const, attempts_used: 0 }
+      return { item_number: index + 1, status: 'pending' as const, attempts_used: 0, result: null }
     })
   }
 
@@ -381,28 +400,5 @@ export class WorkflowRunService {
       item.item_number === itemNumber && item.status === 'pending' ? { ...item, status: 'running' as const } : item,
     )
     return { ...run.loop_items, [loopPath]: updated }
-  }
-
-  /**
-   * Latest invocation of any stage inside a loop that ran for the given item.
-   *
-   * Used when the user clicks a dot in the loop grid: the item may have several inner stages and
-   * several retry attempts, and the most recent one is what they want to look at.
-   */
-  latestExecutionForLoopItem(loopPath: string, itemNumber: number): WorkflowStageState | null {
-    const run = this._run()
-    if (run === null) {
-      return null
-    }
-    let best: WorkflowStageState | null = null
-    for (const state of Object.values(run.execution_by_id)) {
-      if (!state.path.startsWith(`${loopPath}.`) || state.item_number !== itemNumber) {
-        continue
-      }
-      if (best === null || state.invocation_number > best.invocation_number) {
-        best = state
-      }
-    }
-    return best
   }
 }

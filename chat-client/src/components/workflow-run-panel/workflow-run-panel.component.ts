@@ -14,6 +14,7 @@ import { WorkflowRunService } from '../../services/workflow-run.service'
 import {
   WorkflowLoopItemState,
   WorkflowNode,
+  WorkflowSelectedDetail,
   WorkflowStageState,
   WorkflowStageStatus,
 } from '../../types/message-types'
@@ -71,7 +72,7 @@ export class WorkflowRunPanelComponent implements OnDestroy {
     effect(() => {
       // Registers the dependency: every activity append replaces the stage state object, so this
       // re-runs as thinking text streams in, not just when a new entry is added.
-      this.workflowSvc.selectedExecution()
+      this.workflowSvc.selectedDetail()
       untracked(() => {
         if (this.autoScrollEnabled()) {
           queueMicrotask(() => {
@@ -84,9 +85,10 @@ export class WorkflowRunPanelComponent implements OnDestroy {
       })
     })
 
-    // Switching which stage is inspected starts pinned to the bottom again.
+    // Switching which stage/item is inspected starts pinned to the bottom again.
     effect(() => {
       this.workflowSvc.selectedExecutionId()
+      this.workflowSvc.selectedLoopItem()
       untracked(() => {
         this.autoScrollEnabled.set(true)
       })
@@ -198,6 +200,42 @@ export class WorkflowRunPanelComponent implements OnDestroy {
     return JSON.stringify(result, null, 2)
   }
 
+  /** True when this stage row's own invocation is the one shown in the detail pane. */
+  isRowSelected(state: WorkflowStageState | null): boolean {
+    if (state === null) {
+      return false
+    }
+    const detail = this.workflowSvc.selectedDetail()
+    return detail !== null && detail.kind === 'execution' && detail.state.execution_id === state.execution_id
+  }
+
+  /** True when this exact loop item dot is the one shown in the detail pane. */
+  isDotSelected(node: WorkflowNode, item: WorkflowLoopItemState): boolean {
+    const detail = this.workflowSvc.selectedDetail()
+    return (
+      detail !== null &&
+      detail.kind === 'loop_item' &&
+      detail.path === node.path &&
+      detail.item.item_number === item.item_number
+    )
+  }
+
+  /** The loop variable itself (e.g. the file being processed), pulled out for its own labeled row. */
+  loopItemVariable(detail: Extract<WorkflowSelectedDetail, { kind: 'loop_item' }>): unknown {
+    const result = detail.item.result as Record<string, unknown> | null
+    return result === null ? undefined : result['item']
+  }
+
+  /** Everything this loop item produced, excluding the loop variable and the bookkeeping success flag. */
+  loopItemProduced(detail: Extract<WorkflowSelectedDetail, { kind: 'loop_item' }>): Record<string, unknown> | null {
+    const result = detail.item.result as Record<string, unknown> | null
+    if (result === null) {
+      return null
+    }
+    const { item: _item, success: _success, ...produced } = result
+    return produced
+  }
+
   private _stringify(value: unknown): string {
     if (value === null || value === undefined) {
       return ''
@@ -219,18 +257,18 @@ export class WorkflowRunPanelComponent implements OnDestroy {
   selectStage(node: WorkflowNode): void {
     const state = this.stateFor(node)
     if (state !== null) {
+      this.workflowSvc.selectedLoopItem.set(null)
       this.workflowSvc.selectedExecutionId.set(state.execution_id)
     }
   }
 
   selectLoopItem(node: WorkflowNode, item: WorkflowLoopItemState): void {
-    const state = this.workflowSvc.latestExecutionForLoopItem(node.path, item.item_number)
-    if (state !== null) {
-      this.workflowSvc.selectedExecutionId.set(state.execution_id)
-    }
+    this.workflowSvc.selectedExecutionId.set(null)
+    this.workflowSvc.selectedLoopItem.set({ path: node.path, itemNumber: item.item_number })
   }
 
   followRunningStage(): void {
+    this.workflowSvc.selectedLoopItem.set(null)
     this.workflowSvc.selectedExecutionId.set(null)
   }
 }

@@ -231,7 +231,24 @@ export type WorkflowLoopItemState = {
   item_number: number
   status: 'pending' | 'running' | 'done' | 'failed'
   attempts_used: number
+  /**
+   * What this item actually produced: {item: <the loop variable>, success, <inner stage name>:
+   * <its result>, ...} for every inner stage that ran. Null while the item is still pending/running
+   * — filled in atomically on loop_item_exit, once, unambiguous by construction (no reconstruction
+   * from the separate stage_enter/stage_exit stream needed).
+   */
+  result: unknown | null
 }
+
+/**
+ * What the detail pane is currently showing — either one stage invocation's live/frozen activity
+ * feed (row click, or following the running stage), or one loop item's own frozen result (dot
+ * click). Kept as a discriminated union rather than shoehorning both into WorkflowStageState,
+ * since a loop item spans several stage invocations and isn't itself one.
+ */
+export type WorkflowSelectedDetail =
+  | { kind: 'execution'; state: WorkflowStageState }
+  | { kind: 'loop_item'; path: string; item: WorkflowLoopItemState }
 
 export type WorkflowRun = {
   workflow_name: string
@@ -307,6 +324,7 @@ export type AgentEvent = (
       item_total: number
       success: boolean
       attempts_used: number
+      item_result: unknown
     }
   | { type: 'done'; finished_without_response?: boolean }
   | { type: 'error'; message: string }
@@ -406,4 +424,41 @@ export type DisplayMessageWithMeta = DisplayMessage & {
   prev_sibling_id?: string | null
   next_sibling_id?: string | null
   has_children?: boolean
+}
+
+export type TokenVisualizerPiece = {
+  id: number
+  piece: string
+  special: boolean
+}
+
+export type TokenVisualizerStreamEvent =
+  | { type: 'system_tokens'; tokens: TokenVisualizerPiece[] }
+  | { type: 'user_tokens'; tokens: TokenVisualizerPiece[] }
+  | { type: 'assistant_preamble_tokens'; tokens: TokenVisualizerPiece[] }
+  | { type: 'assistant_token'; id: number; piece: string; special: boolean }
+  | { type: 'done' }
+
+export type TokenVisualizerToolCall = {
+  id: string
+  type: 'function'
+  function: { name: string; arguments: string }
+}
+
+/** Raw OpenAI-shaped message sent to the backend to be rendered through llama.cpp's own
+ * chat template — never interpreted locally, just passed straight through. */
+export type TokenVisualizerHistoryMessage =
+  | { role: 'user'; content: string }
+  | { role: 'assistant'; content: string | null; tool_calls?: TokenVisualizerToolCall[] }
+  | { role: 'tool'; tool_call_id: string; name?: string; content: string }
+
+export type TokenVisualizerMessage = {
+  role: 'system' | 'user' | 'assistant' | 'tool'
+  displayLabel: string
+  /** The exact message sent/to-send as history for later turns. Null for 'system', since the
+   * system prompt is carried on every request via its own field, not as a history entry. */
+  historyMessage: TokenVisualizerHistoryMessage | null
+  /** Accumulated generated text, used only for 'assistant' messages produced by real generation. */
+  content: string
+  tokens: TokenVisualizerPiece[]
 }

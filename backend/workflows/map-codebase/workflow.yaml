@@ -1,0 +1,416 @@
+# ==============================================================================
+# Experimental. Output shape and granularity are expected to change as we see
+# what's actually useful to feed back into the agent's own context later.
+#
+# Coordinator actions used here:
+#   - enumerate_files, append_jsonl_record, chunk_file: generic, implemented in
+#     the shared backend/agent/workflow_coordinator.py (reusable by any
+#     workflow).
+#   - bucket_own_files_by_depth, merge_fold_level: specific to THIS workflow's
+#     own bottom-up directory-fold algorithm, so they're bundled scripts in
+#     scripts/ (invoked via the generic run_script action) rather than named
+#     actions in the shared coordinator — see scripts/*.py for their contracts.
+#
+# Note on file size and context budget: every file is chunked, unconditionally
+# — no size threshold, no "small file gets a direct read_file" special case.
+# One code path, always: chunk_file -> per-chunk summarize loop -> fold into
+# one file-level summary. A one-chunk file just runs that loop once. chunk_file
+# targets a token budget per chunk (estimated from character count, ~12,000
+# tokens/chunk — generous headroom under the 32K context, chosen so most
+# ordinary source files fit in a single chunk), not a fixed line count — a
+# fixed line count is a poor proxy for chunk size since a single line can be a
+# handful of characters or several thousand (minified code, a long string
+# literal). A line that alone exceeds the budget is split into its own
+# character-bounded pieces rather than left in one oversized chunk.
+#
+# Note on directory rollup and uneven trees: grouping by top-level directory
+# alone risks the same context-overflow problem solved above for files, one
+# level up (a repo like this one would dump hundreds of files into one
+# "backend" bucket). Instead the rollup is bottom-up BY DEPTH LEVEL, deepest
+# first: at each depth, every directory at that depth is synthesized from (a)
+# its own direct files and (b) the already-synthesized summaries of its
+# immediate child directories from the previous (deeper) pass. A shallow
+# directory (e.g. "docs", depth 1) is only ever touched once, at the depth-1
+# pass — nothing references it again until root, so no wasted re-processing.
+# A deep directory keeps folding once per depth level until it also reaches
+# depth 1. `max_fold_depth` (user-configurable via parse_request, default 6)
+# caps how deep this goes; deeper chains get clamped (see
+# scripts/bucket_own_files_by_depth.py) rather than followed indefinitely.
+#
+# This is a SINGLE ordinary loop (fold_levels_loop below), not one stage block
+# per depth — no new engine primitive needed, just a trick with how loop slots
+# already behave: a slot written by one iteration's inner stages stays in the
+# registry until something overwrites it, so the NEXT iteration can read it
+# before that happens. fold_levels_loop iterates the depth-ordered list from
+# bucket_own_files_by_depth (deepest first); each iteration's merge step reads
+# `current_level_summaries` — the PREVIOUS iteration's synthesized output —
+# then that same iteration's own synthesize/record loop overwrites
+# `current_level_summaries` with this level's results, ready for the next
+# iteration. On the very first iteration `current_level_summaries` doesn't
+# exist yet, which merge_fold_level.py treats as an empty list. This makes the
+# loop length exactly `max_fold_depth`, entirely data-driven — no hardcoded
+# pass count, and no wasted work when the request or the repo doesn't need
+# every level.
+# ==============================================================================
+
+name: map-codebase
+description: "Walk a codebase (any repo in the configured workspace, with or without existing docs) and produce a per-file structured index plus a rolled-up architecture overview, without ever holding the whole repo in context at once. Experimental — output shape and granularity are expected to change as we see what's actually useful to feed back into the agent's own context later."
+
+stages:
+
+  # -------------------------------------------------------------------------
+  # Stage 1: Parse — what to scan, where to write results
+  # -------------------------------------------------------------------------
+  - name: parse_request
+    type: llm
+    system_prompt: |
+      You extract four fields from the user's request: the target directory to scan, the output
+      directory to write results into, an optional focus note, and the fold depth.
+      - target_directory: the directory to walk, relative to the workspace. Default to "." (the
+        whole workspace) if the user didn't name a subdirectory.
+      - output_directory: where to write the generated index and docs. Default to
+        "docs/codebase-map" if the user didn't ask for somewhere else.
+      - focus_note: if the user said what they're specifically interested in (e.g. "focus on the
+        backend", "I mostly care about the API layer"), capture it in one short sentence so later
+        stages can weight their summaries toward it. Empty string if the user gave no such hint.
+      - max_fold_depth: how many directory levels deep (relative to target_directory) the
+        bottom-up rollup should go before folding everything remaining into the root summary.
+        Default to 6 unless the user explicitly asked for a different depth.
+      You MUST call finish_parse_request. Do not write a text response — call the tool instead.
+    user_prompt: "{{user_message}}"
+    tools: []
+    finish_tool: finish_parse_request
+    max_iterations: 2
+
+  # -------------------------------------------------------------------------
+  # Stage 2: Reset the output files (single confirmation for the whole run)
+  # -------------------------------------------------------------------------
+  - name: init_output
+    type: llm
+    system_prompt: |
+      Create two empty files with write_file, using empty content for both:
+      - "{{parse_request.output_directory}}/files.jsonl"
+      - "{{parse_request.output_directory}}/directories.jsonl"
+      If write_file reports either file already exists, that's fine — treat it as success, do not
+      use edit_file, do not read or preserve the existing content (this run replaces it).
+      Call finish_task with status "success" either way.
+    user_prompt: "Output directory: {{parse_request.output_directory}}"
+    tools: [write_file]
+    finish_tool: finish_task
+    max_iterations: 4
+
+  # -------------------------------------------------------------------------
+  # Coordinator: enumerate every file under the target directory (deterministic,
+  # no model — generic action, implemented in workflow_coordinator.py).
+  # -------------------------------------------------------------------------
+  - name: enumerate
+    type: coordinator
+    action: enumerate_files
+    input:
+      root: "{{parse_request.target_directory}}"
+      max_files: 300
+      exclude:
+        - "{{parse_request.output_directory}}"
+    output: files
+
+  # -------------------------------------------------------------------------
+  # Stage 3: Per-file pass — one file per iteration. Every file is chunked,
+  # unconditionally: chunk_file -> summarize each chunk -> fold into one
+  # file-level summary -> append it to the structured index. Same shape as
+  # translate-locale's translate_loop, with an extra chunk-level loop nested
+  # inside each file's iteration.
+  # -------------------------------------------------------------------------
+  - name: files_loop
+    type: loop
+    over: "{{files.files}}"
+    item_var: file
+    max_retries: 1
+    on_max_retries: continue
+    exit_condition: "record_file.success"
+    output: file_summaries
+
+    stages:
+      - name: chunk_the_file
+        type: coordinator
+        action: chunk_file
+        input:
+          path: "{{file.path}}"
+        output: file_chunks
+        # Scratch input for chunk_notes_loop below, not part of what this file produced — a raw
+        # chunk list isn't a useful "result" for the run view or file_summaries.
+        include_in_item_result: false
+
+      - name: chunk_notes_loop
+        type: loop
+        over: "{{file_chunks}}"
+        item_var: chunk
+        max_retries: 1
+        on_max_retries: continue
+        exit_condition: "True"
+        output: chunk_notes
+        # Intermediate per-chunk notes, already folded into summarize_file below — not part of
+        # what this file produced on its own.
+        include_in_item_result: false
+
+        stages:
+          - name: summarize_chunk
+            type: llm
+            system_prompt: |
+              You are looking at one chunk (a line range) of a source file, as part of documenting
+              the whole file for a codebase map. You will NOT see the rest of the file in this call
+              — note only what THIS chunk shows. Call finish_summarize_chunk with:
+              - notes: one or two sentences on what this chunk contains (e.g. imports, a function
+                definition, config values, comments/prose — whatever is actually there).
+              - exports_seen: names of functions/classes/symbols DEFINED in this chunk that look
+                like they'd be used elsewhere. Empty list if none.
+              - dependencies_seen: other modules/files this chunk references (imports, requires).
+                Empty list if none.
+              You MUST call finish_summarize_chunk. Do not write a text response — call the tool
+              instead.
+            user_prompt: |
+              File: {{file.path}} (lines {{chunk.start_line}}-{{chunk.end_line}})
+              {{parse_request.focus_note}}
+
+              {{chunk.text}}
+            tools: []
+            finish_tool: finish_summarize_chunk
+            max_iterations: 2
+
+      - name: summarize_file
+        type: llm
+        system_prompt: |
+          You are given chunk-by-chunk notes covering one whole source file, produced without any
+          one call seeing the full file at once. Fold them into a single file-level summary by
+          calling finish_summarize_file with:
+          - role: one sentence — what this file is for, synthesized across all its chunks.
+          - exports: the union of symbols this file makes available to the rest of the codebase
+            (empty list if none, e.g. a pure script or config file).
+          - key_dependencies: the union of other modules/files this one clearly depends on. Empty
+            list if none or unclear.
+          You MUST call finish_summarize_file. Do not write a text response — call the tool instead.
+        user_prompt: |
+          File: {{file.path}}
+          {{parse_request.focus_note}}
+
+          Chunk notes, in file order:
+          {{chunk_notes.items}}
+        tools: []
+        finish_tool: finish_summarize_file
+        max_iterations: 2
+
+      - name: record_file
+        type: coordinator
+        action: append_jsonl_record
+        input:
+          path: "{{parse_request.output_directory}}/files.jsonl"
+          record:
+            path: "{{file.path}}"
+            role: "{{summarize_file.role}}"
+            exports: "{{summarize_file.exports}}"
+            key_dependencies: "{{summarize_file.key_dependencies}}"
+        output: record_file
+
+  # -------------------------------------------------------------------------
+  # Coordinator: bucket every directory's own files by depth level, so each
+  # fold pass below only has to look at directories at its own depth. Workflow-
+  # specific — bundled script, see scripts/bucket_own_files_by_depth.py.
+  # -------------------------------------------------------------------------
+  - name: bucket_by_depth
+    type: coordinator
+    action: run_script
+    input:
+      script: "scripts/bucket_own_files_by_depth.py"
+      args:
+        - "{{file_summaries.items}}"
+        - "{{parse_request.target_directory}}"
+        - "{{parse_request.max_fold_depth}}"
+    output: bucket_by_depth
+
+  # -------------------------------------------------------------------------
+  # Stage 4: Bottom-up directory rollup, deepest level first. One loop over
+  # bucket_by_depth.data (length = max_fold_depth, deepest first — see
+  # scripts/bucket_own_files_by_depth.py). Each iteration: merge this level's
+  # own files with the PREVIOUS iteration's synthesized child summaries (still
+  # sitting in the current_level_summaries slot from last time — see the
+  # depth-indexed fold note above for why that's enough, without a new engine
+  # primitive), then synthesize + record one summary per directory at this
+  # level, overwriting current_level_summaries for the next iteration.
+  # -------------------------------------------------------------------------
+  - name: fold_levels_loop
+    type: loop
+    over: "{{bucket_by_depth.data}}"
+    item_var: level
+    max_retries: 1
+    on_max_retries: continue
+    exit_condition: "True"
+
+    stages:
+      - name: merge_level
+        type: coordinator
+        action: run_script
+        input:
+          script: "scripts/merge_fold_level.py"
+          args:
+            - "{{level.own_groups}}"
+            - "{{current_level_summaries.items}}"
+        output: merge_level
+
+      - name: synthesize_loop
+        type: loop
+        over: "{{merge_level.data}}"
+        item_var: dir_group
+        max_retries: 1
+        on_max_retries: continue
+        exit_condition: "record_directory.success"
+        output: current_level_summaries
+
+        stages:
+          - name: synthesize_directory
+            type: llm
+            system_prompt: |
+              You are given one directory of a codebase: its own files (if any) and the
+              already-synthesized summaries of its immediate subdirectories (if any) — a directory
+              can have either, or both. Synthesize a directory-level summary by calling
+              finish_synthesize_directory with:
+              - purpose: one or two sentences — what this directory is responsible for, inferred
+                from its own files' roles and its subdirectories' purposes.
+              - key_files: the 3-6 files or subdirectories that best represent this directory's
+                purpose (paths only).
+              - notable_dependencies: dependencies (from own files' key_dependencies and
+                subdirectories' notable_dependencies) that point OUTSIDE this directory — what this
+                directory relies on elsewhere in the codebase.
+              You MUST call finish_synthesize_directory. Do not write a text response — call the
+              tool instead.
+            user_prompt: |
+              Directory: {{dir_group.directory}}
+              {{parse_request.focus_note}}
+
+              Files directly in this directory (may be empty):
+              {{dir_group.own_files}}
+
+              Subdirectories already folded into this one (may be empty):
+              {{dir_group.child_summaries}}
+            tools: []
+            finish_tool: finish_synthesize_directory
+            max_iterations: 2
+
+          - name: record_directory
+            type: coordinator
+            action: append_jsonl_record
+            input:
+              path: "{{parse_request.output_directory}}/directories.jsonl"
+              record:
+                directory: "{{dir_group.directory}}"
+                purpose: "{{synthesize_directory.purpose}}"
+                key_files: "{{synthesize_directory.key_files}}"
+                notable_dependencies: "{{synthesize_directory.notable_dependencies}}"
+            output: record_directory
+
+  # -------------------------------------------------------------------------
+  # Stage 5: Root synthesis — fold the depth-1 directory summaries (the
+  # top-level children of target_directory, each already carrying everything
+  # folded up from beneath them — the final iteration of fold_levels_loop
+  # left them in current_level_summaries) into one overview document.
+  # -------------------------------------------------------------------------
+  - name: synthesize_root
+    type: llm
+    system_prompt: |
+      You are given directory-level summaries for a codebase. Write a single markdown document,
+      "{{parse_request.output_directory}}/overview.md", with write_file, containing:
+      - A short "Mission" paragraph — your best inference of what this codebase is for, from the
+        directories' purposes.
+      - An "Architecture" section — how the directories relate (who depends on whom), based on
+        notable_dependencies.
+      - A "Glossary candidates" section — a short list of domain terms or concepts you noticed
+        recurring across files/directories that a human maintainer might want to define properly
+        (this is a starting point for a hand-maintained glossary, not a finished one).
+      Call finish_task with status "success" once written.
+    user_prompt: |
+      {{parse_request.focus_note}}
+
+      Top-level directory summaries (each already folds in everything beneath it):
+      {{current_level_summaries.items}}
+    tools: [write_file]
+    finish_tool: finish_task
+    max_iterations: 4
+
+  # -------------------------------------------------------------------------
+  # Stage 6: Synthesis — report completion
+  # -------------------------------------------------------------------------
+  - name: synthesis
+    type: respond
+    message_suffix: |
+      [Codebase map complete. {{files.files | length}} files scanned under
+      {{parse_request.target_directory}} (truncated: {{files.truncated}}), folded up to
+      {{parse_request.max_fold_depth}} directory levels deep. Written to
+      {{parse_request.output_directory}}/: files.jsonl, directories.jsonl, overview.md.]
+
+      Tell the user the scan finished and where the output files are.
+
+finish_tools:
+  finish_parse_request:
+    description: "Submit the target directory, output directory, and optional focus note."
+    parameters:
+      target_directory:
+        type: string
+        description: "Directory to scan, relative to the workspace (default '.')."
+      output_directory:
+        type: string
+        description: "Directory to write the codebase map into, relative to the workspace (default 'docs/codebase-map')."
+      focus_note:
+        type: string
+        description: "One-sentence hint of what the user cares about, or empty string if none given."
+      max_fold_depth:
+        type: integer
+        description: "How many directory levels deep to fold bottom-up before rolling into the root summary. Default 6."
+
+  finish_summarize_chunk:
+    description: "Submit notes on what this one chunk of the file contains."
+    parameters:
+      notes:
+        type: string
+        description: "One or two sentences on what this chunk contains."
+      exports_seen:
+        type: array
+        description: "Symbols defined in this chunk that look like they'd be used elsewhere."
+        items:
+          type: string
+      dependencies_seen:
+        type: array
+        description: "Other modules/files this chunk references."
+        items:
+          type: string
+
+  finish_summarize_file:
+    description: "Submit this file's role, exported symbols, and key dependencies, folded from its chunk notes."
+    parameters:
+      role:
+        type: string
+        description: "One sentence: what this file is for."
+      exports:
+        type: array
+        description: "Names of functions/classes/symbols this file exposes to the rest of the codebase."
+        items:
+          type: string
+      key_dependencies:
+        type: array
+        description: "Other modules/files this file clearly depends on."
+        items:
+          type: string
+
+  finish_synthesize_directory:
+    description: "Submit this directory's purpose, representative files, and external dependencies."
+    parameters:
+      purpose:
+        type: string
+        description: "One or two sentences: what this directory is responsible for."
+      key_files:
+        type: array
+        description: "Paths of the 3-6 files that best represent this directory's purpose."
+        items:
+          type: string
+      notable_dependencies:
+        type: array
+        description: "Dependencies pointing outside this directory."
+        items:
+          type: string

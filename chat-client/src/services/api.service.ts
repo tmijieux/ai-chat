@@ -13,6 +13,8 @@ import {
   MessageForQuery,
   Workflow,
   SystemPromptTemplate,
+  TokenVisualizerHistoryMessage,
+  TokenVisualizerPiece,
 } from '../types/message-types'
 import { HttpClient } from '@angular/common/http'
 
@@ -236,5 +238,17 @@ export class ApiService {
 
   post_correct(text: string, language: string | null = 'fr') {
     return this.http.post<{ text: string }>(`${BASE_URL}/correct`, { text, language })
+  }
+
+  post_token_visualizer_insert_messages(
+    history: TokenVisualizerHistoryMessage[],
+    messages: TokenVisualizerHistoryMessage[],
+    systemPrompt: string | null,
+    toolNames: string[],
+  ) {
+    return this.http.post<{ system_tokens: TokenVisualizerPiece[] | null; tokens: TokenVisualizerPiece[] }>(
+      `${BASE_URL}/token-visualizer/insert-messages`,
+      { history, messages, system_prompt: systemPrompt, tool_names: toolNames },
+    )
   }
 }

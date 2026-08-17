@@ -111,10 +111,11 @@ def _read_gguf_kv(path: str) -> dict:
 
 _enc: tiktoken.Encoding | None = None
 _chat_template: str | None = None
+_special_token_ids: set[int] | None = None
 
 
 def _load() -> tuple[tiktoken.Encoding, str]:
-    global _enc, _chat_template
+    global _enc, _chat_template, _special_token_ids
     if _enc is not None and _chat_template is not None:
         return _enc, _chat_template
 
@@ -140,12 +141,22 @@ def _load() -> tuple[tiktoken.Encoding, str]:
         special_tokens=special_tokens,
     )
     _chat_template = chat_template_str
+    _special_token_ids = set(special_tokens.values())
     return _enc, _chat_template
 
 
 def warmup() -> None:
     """Eagerly load the tokenizer. Call once at backend startup (blocking)."""
     _load()
+
+
+def get_special_token_ids() -> set[int]:
+    """Token ids the GGUF vocab itself marks CONTROL or USER_DEFINED (tokenizer.ggml.token_type
+    3/4) — the same flag llama.cpp uses internally to decide whether a token is special. Reads
+    the model's own vocab metadata rather than an HTTP round trip per token."""
+    _load()
+    assert _special_token_ids is not None
+    return _special_token_ids
 
 
 def render_messages(messages: Sequence[LLMMessage], tools: list[ToolDict] | None, add_generation_prompt: bool = True) -> str:

@@ -7,15 +7,42 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from agent.file_utils import file_in_directory, resolve_workspace_path
+from agent.file_utils import file_in_directory, resolve_workspace_path, load_ignore_spec, is_path_ignored
 
 if TYPE_CHECKING:
     from agent.agent import AgentSession
 
 logger = logging.getLogger(__name__)
 
-CHUNK_FILE_DEFAULT_SIZE = 10
 CHUNK_JSON_ENTRIES_DEFAULT_SIZE = 10
+
+# chunk_file targets a token budget per chunk, estimated from character count (~4 chars/token for
+# English/code text) rather than a fixed line count — a fixed line count is a poor proxy for chunk
+# size since a single line can be a handful of characters or several thousand (minified code, a
+# long string literal, a big one-line JSON blob).
+CHUNK_FILE_TARGET_TOKENS = 12000
+CHUNK_FILE_CHARS_PER_TOKEN_ESTIMATE = 4
+CHUNK_FILE_MAX_CHUNK_CHARS = CHUNK_FILE_TARGET_TOKENS * CHUNK_FILE_CHARS_PER_TOKEN_ESTIMATE
+
+# Extensions treated as non-text for enumerate_files — no useful summary comes from reading these
+# as source, and several (images, archives) can be large enough to matter.
+_ENUMERATE_FILES_BINARY_EXTENSIONS = {
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".svg",
+    ".mp3", ".wav", ".ogg", ".flac", ".mp4", ".mov", ".avi", ".webm",
+    ".zip", ".tar", ".gz", ".7z", ".rar",
+    ".pdf", ".woff", ".woff2", ".ttf", ".eot", ".otf",
+    ".pyc", ".pyo", ".so", ".dll", ".exe", ".bin", ".wasm",
+    ".gguf", ".safetensors", ".onnx", ".pt", ".pth",
+    ".sqlite", ".sqlite3", ".db",
+}
+
+# Generated lockfiles: authored by tooling, not humans, and disproportionately large relative to
+# their information content — never worth a per-file summary.
+_ENUMERATE_FILES_LOCKFILE_NAMES = {
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+    "poetry.lock", "Pipfile.lock", "uv.lock",
+    "Cargo.lock", "composer.lock", "Gemfile.lock", "go.sum",
+}
 
 
 async def run_coordinator_action(
@@ -40,6 +67,10 @@ async def run_coordinator_action(
         return await _chunk_json_entries(inputs, working_directory)
     if action == "append_json_entries":
         return await _append_json_entries(inputs, working_directory)
+    if action == "enumerate_files":
+        return await _enumerate_files(inputs, working_directory)
+    if action == "append_jsonl_record":
+        return await _append_jsonl_record(inputs, working_directory)
     raise ValueError(f"Unknown coordinator action: {action!r}")
 
 
@@ -83,8 +114,22 @@ async def _run_compile(
     return {"success": proc.returncode == 0, "output": output}
 
 
+def _split_oversized_line(line: str, max_chars: int) -> list[str]:
+    """Split one line that alone exceeds the chunk budget into fixed-size character slices."""
+    return [line[i:i + max_chars] for i in range(0, len(line), max_chars)] or [""]
+
+
 async def _chunk_file(inputs: dict[str, Any], working_directory: str | None) -> list[dict]:
-    """Split a file into fixed-size line chunks. Returns [{index, start_line, end_line, text}], deterministically — no model involved."""
+    """Split a file into chunks targeting a token budget (estimated from character count, see
+    CHUNK_FILE_TARGET_TOKENS), not a fixed line count. Returns [{index, start_line, end_line,
+    text}], deterministically — no model involved.
+
+    Lines are packed into a chunk until the next line would push it over the budget, at which
+    point the chunk closes and a new one starts. A single line that alone exceeds the budget
+    (a long minified line, a big one-line JSON blob) is split into its own character-bounded
+    pieces rather than left in one oversized chunk — every piece keeps that line's own
+    start_line/end_line since it's still the same source line.
+    """
     path = inputs.get("path")
     if path is None or working_directory is None:
         return []
@@ -94,16 +139,50 @@ async def _chunk_file(inputs: dict[str, Any], working_directory: str | None) -> 
         raise ValueError(f"Reading outside workspace is forbidden: {path}")
 
     lines = Path(absolute_path).read_text(encoding="utf-8").splitlines()
-    chunks = []
-    for start in range(0, len(lines), CHUNK_FILE_DEFAULT_SIZE):
-        chunk_lines = lines[start:start + CHUNK_FILE_DEFAULT_SIZE]
+
+    chunks: list[dict] = []
+    current_lines: list[str] = []
+    current_chars = 0
+    current_start_line = 1
+
+    def flush(end_line: int) -> None:
+        nonlocal current_lines, current_chars, current_start_line
+        if len(current_lines) == 0:
+            return
         chunks.append({
-            "index": start // CHUNK_FILE_DEFAULT_SIZE,
-            "start_line": start + 1,
-            "end_line": start + len(chunk_lines),
-            "text": "\n".join(chunk_lines),
+            "index": len(chunks),
+            "start_line": current_start_line,
+            "end_line": end_line,
+            "text": "\n".join(current_lines),
         })
-    logger.info("[coordinator:chunk_file] %s -> %d chunks of up to %d lines", path, len(chunks), CHUNK_FILE_DEFAULT_SIZE)
+        current_lines = []
+        current_chars = 0
+
+    for line_number, line in enumerate(lines, start=1):
+        line_chars = len(line) + 1  # +1 for the newline packed back in via "\n".join
+
+        if line_chars > CHUNK_FILE_MAX_CHUNK_CHARS:
+            flush(line_number - 1)
+            current_start_line = line_number
+            for piece in _split_oversized_line(line, CHUNK_FILE_MAX_CHUNK_CHARS):
+                chunks.append({
+                    "index": len(chunks),
+                    "start_line": line_number,
+                    "end_line": line_number,
+                    "text": piece,
+                })
+            current_start_line = line_number + 1
+            continue
+
+        if len(current_lines) > 0 and current_chars + line_chars > CHUNK_FILE_MAX_CHUNK_CHARS:
+            flush(line_number - 1)
+            current_start_line = line_number
+
+        current_lines.append(line)
+        current_chars += line_chars
+
+    flush(len(lines))
+    logger.info("[coordinator:chunk_file] %s -> %d chunk(s) targeting ~%d chars each", path, len(chunks), CHUNK_FILE_MAX_CHUNK_CHARS)
     return chunks
 
 
@@ -137,6 +216,12 @@ async def _run_script(
     paths the same way an LLM stage would. If stdout is valid JSON it is also exposed as `data`,
     so a script can hand back structured values (e.g. a file list) for later stages to consume —
     otherwise `data` is None and only the raw text `output` is available.
+
+    A plain string arg (a path, a flag like "--apply") is passed through unchanged, exactly as
+    before. Anything else — a list, dict, None, bool, number, e.g. from a bare {{slot.field}} that
+    resolved to a real Python value rather than a string — is turned into JSON text via json.dumps
+    (None -> "null", a missing slot resolving to None included) so a script can always json.loads
+    a non-string arg rather than receiving a Python repr it can't parse.
     """
     script_rel = inputs.get("script")
     args = inputs.get("args") or []
@@ -147,8 +232,9 @@ async def _run_script(
     if not script_path.is_file():
         return {"success": False, "output": f"run_script: script not found: {script_path}", "data": None}
 
+    argv = [a if isinstance(a, str) else json.dumps(a, ensure_ascii=False) for a in args]
     proc = await asyncio.create_subprocess_exec(
-        sys.executable, str(script_path), *[str(a) for a in args],
+        sys.executable, str(script_path), *argv,
         cwd=working_directory,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
@@ -237,3 +323,79 @@ async def _append_json_entries(inputs: dict[str, Any], working_directory: str | 
     absolute_path.write_text(json.dumps(accumulated, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     logger.info("[coordinator:append_json_entries] %s -> wrote %d entries (total now %d)", path, len(keys), len(accumulated))
     return {"success": True, "written": len(keys), "expected": len(keys), "received": len(entries)}
+
+
+async def _enumerate_files(inputs: dict[str, Any], working_directory: str | None) -> list[dict]:
+    """Recursively list files under `root`, deterministically — no model involved.
+
+    Reuses the SAME gitignore/hardcoded-dir filtering glob_files already applies. Excludes
+    non-text/binary files (by extension) and generated lockfiles — everything else is included
+    regardless of size, since the workflow that consumes this always chunks rather than reading a
+    file whole. `exclude` (optional list of workspace-relative directory paths) additionally skips
+    anything under those directories — e.g. a workflow writing its own output back into the
+    scanned tree needs to exclude that output directory, or a rerun ends up documenting its own
+    previous output. Returns [{path, extension, size_bytes}], workspace-relative posix paths,
+    capped at `max_files` (default 300); a truncated result is reported honestly rather than
+    silently.
+    """
+    root = inputs.get("root") or "."
+    max_files = inputs.get("max_files") or 300
+    exclude = inputs.get("exclude") or []
+    if working_directory is None:
+        return []
+
+    absolute_root = resolve_workspace_path(root, working_directory)
+    if not file_in_directory(str(absolute_root), working_directory):
+        raise ValueError(f"Scanning outside workspace is forbidden: {root}")
+
+    exclude_roots = [resolve_workspace_path(e, working_directory) for e in exclude]
+    spec = load_ignore_spec(working_directory)
+
+    def _walk() -> list[dict]:
+        results = []
+        for p in sorted(absolute_root.rglob("*")):
+            if not p.is_file():
+                continue
+            if is_path_ignored(p, working_directory, spec):
+                continue
+            if any(p.is_relative_to(ex) for ex in exclude_roots):
+                continue
+            if p.suffix.lower() in _ENUMERATE_FILES_BINARY_EXTENSIONS:
+                continue
+            if p.name in _ENUMERATE_FILES_LOCKFILE_NAMES:
+                continue
+            results.append({
+                "path": p.relative_to(working_directory).as_posix(),
+                "extension": p.suffix,
+                "size_bytes": p.stat().st_size,
+            })
+        return results
+
+    files = await asyncio.to_thread(_walk)
+    truncated = len(files) > max_files
+    if truncated:
+        files = files[:max_files]
+    logger.info("[coordinator:enumerate_files] %s -> %d file(s)%s", root, len(files), " (truncated)" if truncated else "")
+    return {"files": files, "truncated": truncated}
+
+
+async def _append_jsonl_record(inputs: dict[str, Any], working_directory: str | None) -> dict:
+    """Append one compact JSON line to `path`, creating parent dirs if needed.
+
+    Generic on purpose (like append_text/append_json_entries): any workflow building a structured,
+    line-delimited log can use this, not just codebase mapping. No confirmation — same reasoning as
+    append_text, the file was already confirmed at creation.
+    """
+    path = inputs.get("path")
+    record = inputs.get("record")
+    if path is None or working_directory is None:
+        return {"success": False}
+
+    absolute_path = resolve_workspace_path(path, working_directory)
+    if not file_in_directory(str(absolute_path), working_directory):
+        raise ValueError(f"Writing outside workspace is forbidden: {path}")
+
+    absolute_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(absolute_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    return {"success": True}

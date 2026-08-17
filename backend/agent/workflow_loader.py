@@ -78,6 +78,14 @@ class WorkflowStageDefinition:
     # shared: skip this stage if condition is false (coordinator + loop inner stages)
     condition: str = ""
 
+    # shared: when this stage is a loop's inner stage, whether its result is included in that
+    # loop item's reported result (loop_item_exit's item_result, and the loop's own aggregated
+    # output slot). Default true. Set false for an inner stage whose output is only scratch data
+    # for later inner stages in the same iteration (e.g. a chunking pass consumed by a per-chunk
+    # summarize loop) — its raw output would otherwise leak into "what this item produced" for no
+    # reason other than an accidental slot-naming match.
+    include_in_item_result: bool = True
+
     # branch fields
     if_true: str = ""
     if_false: str = ""
@@ -163,6 +171,7 @@ def _parse_stage(data: dict, finish_tool_classes: dict[str, type[BaseFinishTool]
             max_iterations=data.get("max_iterations") if data.get("max_iterations") is not None else None,
             inject_turn_reminders=bool(data.get("inject_turn_reminders")),
             condition=data.get("condition") or "",
+            include_in_item_result=data.get("include_in_item_result", True),
         )
 
     if stage_type == "coordinator":
@@ -173,6 +182,7 @@ def _parse_stage(data: dict, finish_tool_classes: dict[str, type[BaseFinishTool]
             condition=data.get("condition") or "",
             action_input=data.get("input") or {},
             action_output=data.get("output") or "",
+            include_in_item_result=data.get("include_in_item_result", True),
         )
 
     if stage_type == "branch":
@@ -197,6 +207,7 @@ def _parse_stage(data: dict, finish_tool_classes: dict[str, type[BaseFinishTool]
             type="agent",
             workflow_ref=data.get("ref") or "",
             user_prompt=data.get("user_prompt") or "",
+            include_in_item_result=data.get("include_in_item_result", True),
         )
 
     if stage_type == "workflow":
@@ -207,6 +218,7 @@ def _parse_stage(data: dict, finish_tool_classes: dict[str, type[BaseFinishTool]
             sub_workflow_input=data.get("input") or {},
             skip_stages=data.get("skip_stages") or [],
             condition=data.get("condition") or "",
+            include_in_item_result=data.get("include_in_item_result", True),
         )
 
     if stage_type == "loop":
@@ -221,6 +233,7 @@ def _parse_stage(data: dict, finish_tool_classes: dict[str, type[BaseFinishTool]
             max_retries=data.get("max_retries") or 3,
             on_max_retries=data.get("on_max_retries") or "continue",
             on_retry=data.get("on_retry") or {},
+            include_in_item_result=data.get("include_in_item_result", True),
             loop_output=data.get("output") or "",
             inner_stages=inner_stages,
         )

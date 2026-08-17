@@ -13,4 +13,9 @@ export const routes: Routes = [
     loadComponent: () =>
       import('../components/settings/settings.component').then((m) => m.SettingsComponent),
   },
+  {
+    path: 'token-visualizer',
+    loadComponent: () =>
+      import('../components/token-visualizer/token-visualizer.component').then((m) => m.TokenVisualizerComponent),
+  },
 ]

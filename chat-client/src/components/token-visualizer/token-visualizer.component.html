@@ -1,0 +1,115 @@
+<div class="p-2 border-b border-gray-700 bg-gray-800 flex row items-center gap-3 flex-wrap">
+  <h1 class="text-sm font-extrabold tracking-wide text-white">Token Visualizer</h1>
+
+  <select
+    class="p-1 rounded bg-panel text-white text-xs"
+    title="System prompt (applies on the first turn only)"
+    [ngModel]="selectedSystemPromptId()"
+    (ngModelChange)="selectedSystemPromptId.set($event)"
+  >
+    <option value="">No system prompt</option>
+    @for (prompt of systemPrompts(); track prompt.id) {
+      <option [value]="prompt.id">{{ prompt.name }}</option>
+    }
+  </select>
+
+  <details class="text-xs text-gray-300" style="position: relative;">
+    <summary class="cursor-pointer select-none">Tools ({{ selectedToolNames().size }})</summary>
+    <div class="flex row gap-2 flex-wrap p-2 bg-panel rounded mt-1" style="position: absolute; z-index: 50; max-width: 30rem;">
+      @for (tool of agentTools(); track tool.name) {
+        <label class="text-xs text-gray-300 flex row items-center gap-1">
+          <input type="checkbox" [checked]="selectedToolNames().has(tool.name)" (change)="toggleTool(tool.name)" />
+          {{ tool.name }}
+        </label>
+      }
+    </div>
+  </details>
+
+  <details class="text-xs text-gray-300" style="position: relative;">
+    <summary class="cursor-pointer select-none">Simulate tool_call</summary>
+    <div class="flex row gap-2 items-start flex-wrap p-2 bg-panel rounded mt-1" style="position: absolute; z-index: 50;">
+      <select
+        class="p-1 rounded bg-panel-dark text-white text-xs"
+        [ngModel]="simulateToolName()"
+        (ngModelChange)="simulateToolName.set($event)"
+      >
+        <option value="">Select tool...</option>
+        @for (tool of agentTools(); track tool.name) {
+          <option [value]="tool.name">{{ tool.name }}</option>
+        }
+      </select>
+      <textarea
+        class="p-1 rounded bg-panel-dark text-white text-xs font-mono"
+        rows="2"
+        style="width: 14rem;"
+        placeholder="Arguments (JSON)"
+        [ngModel]="simulateToolArguments()"
+        (ngModelChange)="simulateToolArguments.set($event)"
+      ></textarea>
+      <textarea
+        class="p-1 rounded bg-panel-dark text-white text-xs font-mono"
+        rows="2"
+        style="width: 14rem;"
+        placeholder="Tool result content"
+        [ngModel]="simulateToolResult()"
+        (ngModelChange)="simulateToolResult.set($event)"
+      ></textarea>
+      <button
+        class="py-1 px-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-xs transition-all"
+        [disabled]="loading() || simulateToolName() === ''"
+        (click)="insertSimulatedToolCall()"
+      >
+        Insert
+      </button>
+      @if (simulateToolError(); as error) {
+        <div class="text-xs text-red-400" style="width: 100%;">{{ error }}</div>
+      }
+    </div>
+  </details>
+
+  <span class="flex-grow"></span>
+  <a routerLink="/chat" class="text-accent text-xs">← Back to chat</a>
+</div>
+
+<div class="flex-grow overflow-y-auto p-4 space-y-4">
+  @for (message of messages(); track $index) {
+    <div>
+      <div class="text-sm text-gray-400 mb-1">{{ message.displayLabel }}</div>
+      <div class="font-mono" style="white-space: pre-wrap; line-height: 1.6;">
+        @for (token of message.tokens; track $index) {
+          <span
+            class="token-span"
+            [class.token-special]="token.special"
+            [class]="tokenColorClass($index)"
+            [attr.data-token-tooltip]="tokenTooltipText(token)"
+            style="display: inline-block; min-width: 0.7em; padding: 0 2px; border: 1px solid rgba(0,0,0,0.35);"
+          >{{ tokenDisplayText(token.piece) }}</span>
+          @for (breakIndex of newlineBreaks(token.piece); track breakIndex) {
+            <br />
+          }
+        }
+      </div>
+    </div>
+  }
+  @if (loading()) {
+    <div class="text-sm text-gray-400 italic">generating...</div>
+  }
+</div>
+
+<div class="p-4 border-t border-gray-700 bg-gray-800 flex row gap-2">
+  <textarea
+    class="flex-grow p-2 rounded bg-panel text-white"
+    rows="2"
+    placeholder="Type a message..."
+    [ngModel]="inputText()"
+    (ngModelChange)="inputText.set($event)"
+    (keydown)="onInputKeydown($event)"
+  ></textarea>
+  <button
+    class="py-2 px-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-sm transition-all"
+    [disabled]="loading()"
+    (click)="send()"
+  >
+    Send
+  </button>
+</div>

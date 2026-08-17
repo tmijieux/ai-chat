@@ -362,6 +362,52 @@ button {
 .bg-tool-result { background-color: #111c18; }
 .border-tool-result { border: 1px solid #1e3a2e; }
 
+/* --- 13. TOKEN VISUALIZER UTILITIES --- */
+.token-color-0 { background-color: #4f46e5; }
+.token-color-1 { background-color: #0891b2; }
+.token-color-2 { background-color: #059669; }
+.token-color-3 { background-color: #ca8a04; }
+.token-color-4 { background-color: #dc2626; }
+.token-color-5 { background-color: #db2777; }
+.token-color-6 { background-color: #7c3aed; }
+.token-color-7 { background-color: #475569; }
+
+.token-span {
+  position: relative;
+  cursor: default;
+}
+
+.token-special {
+  outline: 2px dashed #facc15;
+  outline-offset: 1px;
+}
+
+.token-span::after {
+  content: attr(data-token-tooltip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 8rem;
+  background-color: #0b0f19;
+  color: #f9fafb;
+  border: 1px solid #374151;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-line;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  z-index: 100;
+  pointer-events: none;
+  visibility: hidden;
+  opacity: 0;
+}
+
+.token-span:hover::after {
+  visibility: visible;
+  opacity: 1;
+}
+
 /* --- 13. BADGE UTILITIES --- */
 .badge {
   display: inline-flex;
@@ -549,6 +595,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .wf-dot-running { background: #818cf8; animation: pulse 1.2s ease-in-out infinite; }
 .wf-dot-done    { background: #4ade80; }
 .wf-dot-failed  { background: #f87171; }
+.wf-dot-selected { box-shadow: 0 0 0 2px #f8fafc; }
 
 .wf-progress-track {
   flex: 1;

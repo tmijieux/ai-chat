@@ -539,6 +539,14 @@ class CustomWorkflowOrchestrator:
         stored in the loop_output slot, and streaming them again as a stage result would repeat
         every item's full output over the event stream.
         """
+        # self._loop_context is a single shared attribute, not a stack — when this loop is nested
+        # inside another loop's per-item dispatch, entering here sees the OUTER loop's current
+        # context. Restoring it (rather than hardcoding None) after each of THIS loop's items is
+        # what lets a stage dispatched after a nested loop still carry the outer loop's item
+        # number, and stops this loop's own item numbers (e.g. a chunk index) from leaking into
+        # sibling stages once this loop has finished.
+        enclosing_loop_context = self._loop_context
+
         items: list[Any]
         if stage.over != "":
             items = resolve_value(stage.over, slots) or []
@@ -559,6 +567,14 @@ class CustomWorkflowOrchestrator:
             # Reset on_retry slots to their default (empty string) before first attempt
             for slot_name in stage.on_retry:
                 slots[slot_name] = ""
+            # Clear each inner stage's own output slot before this item's first attempt. Slots
+            # are a single shared dict keyed by stage name across the whole run — if an inner
+            # stage never successfully completes for this item (it raised, or the item exhausted
+            # its retries before reaching that stage), its slot would otherwise still hold
+            # whatever the PREVIOUS item last wrote there, and _collect_inner_results would
+            # silently report that stale value as if it belonged to this item.
+            for inner in stage.inner_stages:
+                slots.pop(inner.name, None)
 
             item_success = False
             for attempt in range(attempt_total):
@@ -595,7 +611,15 @@ class CustomWorkflowOrchestrator:
                     break
 
             attempts_used = attempt + 1
-            self._loop_context = None
+            self._loop_context = enclosing_loop_context
+
+            # Snapshot exactly what this item produced — every inner stage's result, keyed by
+            # inner stage name — the same data _collect_inner_results feeds into the loop's own
+            # aggregated output slot. Sent here too so the run view can show a specific item's
+            # real result unambiguously (keyed by loop path + item_number, no guessing which
+            # execution_id "belongs" to this item), instead of trying to reconstruct it from the
+            # separate stage_enter/stage_exit stream after the fact.
+            item_result = _collect_inner_results(stage, slots, item, item_success) if stage.over != "" else None
 
             await session.emit({
                 "type": "loop_item_exit",
@@ -604,6 +628,7 @@ class CustomWorkflowOrchestrator:
                 "item_total": item_total,
                 "success": item_success,
                 "attempts_used": attempts_used,
+                "item_result": _truncate_stage_result(item_result),
             })
 
             if not item_success:
@@ -853,10 +878,16 @@ class _RespondStageSession:
 def _collect_inner_results(
     stage: WorkflowStageDefinition, slots: dict[str, Any], item: Any, success: bool
 ) -> dict:
-    """Snapshot inner stage finish results for one loop iteration."""
+    """Snapshot inner stage finish results for one loop iteration.
+
+    Skips any inner stage with include_in_item_result=False — scratch data meant only for other
+    inner stages in the same iteration (e.g. a chunking pass consumed by a per-chunk summarize
+    loop), not for "what this item produced" as seen by the loop's own aggregated output slot or
+    the loop_item_exit event the run view reads.
+    """
     result: dict = {"item": item, "success": success}
     for inner in stage.inner_stages:
-        if inner.name in slots:
+        if inner.include_in_item_result and inner.name in slots:
             result[inner.name] = slots[inner.name]
     return result
 

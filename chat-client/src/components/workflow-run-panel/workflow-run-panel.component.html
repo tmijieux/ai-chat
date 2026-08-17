@@ -21,7 +21,7 @@
         @let status = statusOf(node);
         <div
           class="flex items-center gap-2 px-3 py-1 border-b cursor-pointer bg-panel-hover"
-          [class.wf-row-selected]="state !== null && workflowSvc.selectedExecution()?.execution_id === state.execution_id"
+          [class.wf-row-selected]="isRowSelected(state)"
           [style.padding-left.rem]="0.75 + row.depth * 1.25"
           (click)="selectStage(node)"
         >
@@ -72,6 +72,7 @@
                 @for (item of items; track item.item_number) {
                   <span
                     [class]="dotClass(item)"
+                    [class.wf-dot-selected]="isDotSelected(node, item)"
                     [title]="dotTitle(item)"
                     (click)="selectLoopItem(node, item); $event.stopPropagation()"
                   ></span>
@@ -84,19 +85,22 @@
     </div>
 
     <!-- detail pane -->
-    @let selected = workflowSvc.selectedExecution();
+    @let detail = workflowSvc.selectedDetail();
     <div class="flex flex-col flex-1 min-h-0 min-w-0 border-t">
       <div class="flex items-center gap-2 px-3 py-1 bg-card border-b shrink-0">
-        <span class="text-10 font-semibold text-gray-300 font-mono">
-          {{ selected === null ? 'no stage selected' : selected.execution_id }}
-        </span>
-        @if (selected !== null) {
-          <span class="text-10 text-gray-500 font-mono">{{ selected.iteration_count }} iter</span>
-          @if (selected.response_tokens > 0) {
-            <span class="text-10 text-gray-500 font-mono">{{ selected.response_tokens | number }} generated</span>
+        @if (detail === null) {
+          <span class="text-10 font-semibold text-gray-300 font-mono">nothing selected</span>
+        } @else if (detail.kind === 'execution') {
+          <span class="text-10 font-semibold text-gray-300 font-mono">{{ detail.state.execution_id }}</span>
+          <span class="text-10 text-gray-500 font-mono">{{ detail.state.iteration_count }} iter</span>
+          @if (detail.state.response_tokens > 0) {
+            <span class="text-10 text-gray-500 font-mono">{{ detail.state.response_tokens | number }} generated</span>
           }
+        } @else {
+          <span class="text-10 font-semibold text-gray-300 font-mono">{{ detail.path }} — item {{ detail.item.item_number }}</span>
+          <span class="text-10 font-mono" [class]="statusClass(detail.item.status)">{{ statusGlyph(detail.item.status) }} {{ detail.item.status }}</span>
         }
-        @if (workflowSvc.selectedExecutionId() !== null) {
+        @if (workflowSvc.selectedExecutionId() !== null || workflowSvc.selectedLoopItem() !== null) {
           <button class="ml-auto text-10 text-indigo-400 cursor-pointer font-mono" (click)="followRunningStage()">
             follow running
           </button>
@@ -108,18 +112,36 @@
         class="flex-1 min-h-0 min-w-0 overflow-y-auto flex flex-col"
         (scroll)="onDetailScroll($event)"
       >
-        @if (selected === null) {
+        @if (detail === null) {
           <div class="flex items-center justify-center py-12 text-gray-500 text-xs italic">
-            Select a stage to see what it did
+            Select a stage or loop item to see what it did
           </div>
+        } @else if (detail.kind === 'loop_item') {
+          <!-- Frozen per-item result, keyed unambiguously by loop path + item number — never
+               whatever else happens to be streaming elsewhere in the run. -->
+          @if (detail.item.result === null) {
+            <div class="flex items-center justify-center py-12 text-gray-500 text-xs italic">
+              This item is still running — its result lands here once it finishes.
+            </div>
+          } @else {
+            <div class="px-3 py-1 border-y bg-card shrink-0">
+              <span class="text-10 text-gray-500 font-mono uppercase">loop variable</span>
+            </div>
+            <pre class="wf-pre text-11 text-gray-300 whitespace-pre-wrap m-0 px-3 py-2 shrink-0">{{ resultJson(loopItemVariable(detail)) }}</pre>
+
+            <div class="px-3 py-1 border-y bg-card shrink-0">
+              <span class="text-10 text-gray-500 font-mono uppercase">produced</span>
+            </div>
+            <pre class="wf-pre text-11 text-gray-300 whitespace-pre-wrap m-0 px-3 py-2 shrink-0">{{ resultJson(loopItemProduced(detail)) }}</pre>
+          }
         } @else {
-          @if (selected.detail_dropped) {
+          @if (detail.state.detail_dropped) {
             <div class="px-3 py-2 text-10 text-gray-500 italic">
               Activity for this stage was released to keep memory bounded — status and result below are still accurate.
             </div>
           }
 
-          @for (entry of selected.activity; track $index) {
+          @for (entry of detail.state.activity; track $index) {
             @switch (entry.kind) {
               @case ('thinking') {
                 <div class="px-3 py-1 border-b bg-card">
@@ -156,11 +178,11 @@
             }
           }
 
-          @if (selected.result !== null) {
+          @if (detail.state.result !== null) {
             <div class="px-3 py-1 border-y bg-card shrink-0">
               <span class="text-10 text-gray-500 font-mono uppercase">stage result</span>
             </div>
-            <pre class="wf-pre text-11 text-gray-300 whitespace-pre-wrap m-0 px-3 py-2 shrink-0">{{ resultJson(selected.result) }}</pre>
+            <pre class="wf-pre text-11 text-gray-300 whitespace-pre-wrap m-0 px-3 py-2 shrink-0">{{ resultJson(detail.state.result) }}</pre>
           }
         }
       </div>
