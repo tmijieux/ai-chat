@@ -1,10 +1,13 @@
 import { Injectable, computed, inject, signal } from '@angular/core'
+import { firstValueFrom } from 'rxjs'
 import { AgentService } from './agent.service'
+import { ApiService } from './api.service'
 import {
   AgentEvent,
   WorkflowActivityEntry,
   WorkflowLoopItemState,
   WorkflowRun,
+  WorkflowRunNode,
   WorkflowSelectedDetail,
   WorkflowStageState,
 } from '../types/message-types'
@@ -28,6 +31,7 @@ const ACTIVITY_RETAINED_EXECUTIONS = 11
 @Injectable({ providedIn: 'root' })
 export class WorkflowRunService {
   private agentSvc = inject(AgentService)
+  private apiSvc = inject(ApiService)
 
   private readonly _run = signal<WorkflowRun | null>(null)
   readonly run = this._run.asReadonly()
@@ -40,6 +44,28 @@ export class WorkflowRunService {
 
   /** Which loop item the detail pane shows — a dot click. Takes priority over selectedExecutionId. */
   readonly selectedLoopItem = signal<{ path: string; itemNumber: number } | null>(null)
+
+  /**
+   * On-disk address of a finished node currently selected for the detail pane (see ADR-0011) —
+   * null means the pane shows live/frozen in-memory state (selectedExecutionId/selectedLoopItem)
+   * instead. Takes priority over both when set.
+   */
+  readonly selectedFetchedAddress = signal<string[] | null>(null)
+
+  /** Persisted nodes fetched from disk, keyed by "/"-joined address. The top stage list IS the
+   * explorer (per user feedback — no separate children list in the detail pane): expanding a
+   * finished node fetches its content here and splices its children in as rows nested beneath it. */
+  private readonly _fetchedNodes = signal<Map<string, WorkflowRunNode>>(new Map())
+  readonly fetchedNodes = this._fetchedNodes.asReadonly()
+
+  /** Addresses currently expanded in the stage list — a row whose key is here has its fetched
+   * children spliced in as rows nested beneath it. */
+  private readonly _expandedAddresses = signal<Set<string>>(new Set())
+  readonly expandedAddresses = this._expandedAddresses.asReadonly()
+
+  /** Addresses with a fetch currently in flight, for a small loading indicator on that row. */
+  private readonly _pendingAddresses = signal<Set<string>>(new Set())
+  readonly pendingAddresses = this._pendingAddresses.asReadonly()
 
   /** Execution ids that still hold activity, oldest first — the ring buffer's order. */
   private activityOrder: string[] = []
@@ -76,13 +102,129 @@ export class WorkflowRunService {
     })
   }
 
+  /** Fetch (once — cached) and return a persisted node by address. */
+  private async ensureFetched(address: string[]): Promise<WorkflowRunNode | null> {
+    const run = this._run()
+    if (run === null) {
+      return null
+    }
+    const key = address.join('/')
+    const cached = this._fetchedNodes().get(key)
+    if (cached !== undefined) {
+      return cached
+    }
+    this._pendingAddresses.update((set) => new Set(set).add(key))
+    try {
+      const node = await firstValueFrom(
+        this.apiSvc.get_workflow_run_node(run.workflow_name, run.run_id, key),
+      )
+      this._fetchedNodes.update((map) => new Map(map).set(key, node))
+      return node
+    } finally {
+      this._pendingAddresses.update((set) => {
+        const next = new Set(set)
+        next.delete(key)
+        return next
+      })
+    }
+  }
+
+  getFetchedNode(address: string[]): WorkflowRunNode | null {
+    return this._fetchedNodes().get(address.join('/')) ?? null
+  }
+
+  isExpanded(address: string[]): boolean {
+    return this._expandedAddresses().has(address.join('/'))
+  }
+
+  isPending(address: string[]): boolean {
+    return this._pendingAddresses().has(address.join('/'))
+  }
+
+  /** Select a finished node for the detail pane — fetches it if not already cached. */
+  selectFetched(address: string[]): void {
+    this.selectedExecutionId.set(null)
+    this.selectedLoopItem.set(null)
+    this.selectedFetchedAddress.set(address)
+    this._pruneUnrelated(address)
+    void this.ensureFetched(address)
+  }
+
+  /**
+   * Only one branch of the tree is ever expanded at a time — not just among a single loop's own
+   * items, but tree-wide: selecting a plain top-level stage collapses whatever loop item was open
+   * elsewhere just as much as selecting a sibling item does. `address`'s own ancestors (so the
+   * branch you're drilling into doesn't collapse itself) and descendants (so re-selecting a node
+   * whose own child you'd already drilled into keeps that child visible) are kept; everything else
+   * goes.
+   */
+  private _pruneUnrelated(address: string[]): void {
+    const key = address.join('/')
+    this._expandedAddresses.update((set) => {
+      const next = new Set<string>()
+      for (const existing of set) {
+        if (existing === key || existing.startsWith(`${key}/`) || key.startsWith(`${existing}/`)) {
+          next.add(existing)
+        }
+      }
+      return next
+    })
+  }
+
+  /**
+   * Toggle whether a node's children are spliced into the stage list beneath it. Expanding one
+   * implicitly collapses whatever unrelated branch was open elsewhere (see _pruneUnrelated), so
+   * there's never ambiguity about which stages belong to which item, or a stale branch left open
+   * somewhere the user has since navigated away from.
+   */
+  toggleExpand(address: string[]): void {
+    const key = address.join('/')
+    if (this._expandedAddresses().has(key)) {
+      this._expandedAddresses.update((set) => {
+        const next = new Set<string>()
+        for (const existing of set) {
+          if (existing !== key && !existing.startsWith(`${key}/`)) {
+            next.add(existing)
+          }
+        }
+        return next
+      })
+      return
+    }
+    this._pruneUnrelated(address)
+    this._expandedAddresses.update((set) => new Set(set).add(key))
+    void this.ensureFetched(address)
+  }
+
+  /**
+   * Collapse whatever's expanded elsewhere in the tree relative to `address`, without expanding
+   * `address` itself — for selecting something that has nothing of its own to expand yet (a
+   * pending/still-running item, or a plain leaf stage), so a stale branch doesn't linger once
+   * you've moved on.
+   */
+  collapseSiblings(address: string[]): void {
+    this._pruneUnrelated(address)
+  }
+
+  /** Leave the fetched selection and go back to following the live run. */
+  followRunning(): void {
+    this.selectedFetchedAddress.set(null)
+    this.selectedLoopItem.set(null)
+    this.selectedExecutionId.set(null)
+  }
+
   private _handle(event: AgentEvent): void {
     if (event.type === 'workflow_start') {
       this.activityOrder = []
       this.selectedExecutionId.set(null)
       this.selectedLoopItem.set(null)
+      this.selectedFetchedAddress.set(null)
+      this._fetchedNodes.set(new Map())
+      this._expandedAddresses.set(new Set())
+      this._pendingAddresses.set(new Set())
       this._run.set({
         workflow_name: event.workflow_name,
+        run_id: event.run_id,
         status: 'running',
         started_at: Date.now(),
         finished_at: null,

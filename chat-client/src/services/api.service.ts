@@ -12,6 +12,7 @@ import {
   Message,
   MessageForQuery,
   Workflow,
+  WorkflowRunNode,
   SystemPromptTemplate,
   TokenVisualizerHistoryMessage,
   TokenVisualizerPiece,
@@ -208,6 +209,14 @@ export class ApiService {
 
   get_workflows() {
     return this.http.get<Workflow[]>(`${BASE_URL}/workflows`)
+  }
+
+  /** Fetch one persisted run-tree node — its own content plus a shallow list of its children. */
+  get_workflow_run_node(workflowName: string, runId: string, path: string) {
+    return this.http.get<WorkflowRunNode>(
+      `${BASE_URL}/workflow-runs/${workflowName}/${runId}/node`,
+      { params: { path } },
+    )
   }
 
   search_files(workspace: string, query: string) {

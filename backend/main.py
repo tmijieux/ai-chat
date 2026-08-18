@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from database import init_db
 from llm import backend
 import whisper_pipeline
-from routers import conversations, prompts, agents, utils, tokens, ws, stt, token_visualizer
+from routers import conversations, prompts, agents, utils, tokens, ws, stt, token_visualizer, workflow_runs
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +67,7 @@ app.include_router(tokens.router)
 app.include_router(ws.router)
 app.include_router(stt.router)
 app.include_router(token_visualizer.router)
+app.include_router(workflow_runs.router)
 
 
 @app.get("/api/status")

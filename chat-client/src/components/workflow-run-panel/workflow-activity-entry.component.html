@@ -1,0 +1,49 @@
+@switch (entry().kind) {
+  @case ('thinking') {
+    @let e = entry();
+    @if (e.kind === 'thinking') {
+      <div class="px-3 py-1 border-b bg-card">
+        <span class="text-10 text-gray-500 font-mono uppercase">thinking</span>
+      </div>
+      <pre class="wf-pre text-11 text-gray-500 whitespace-pre-wrap m-0 px-3 py-2 shrink-0">{{ e.text }}</pre>
+    }
+  }
+  @case ('content') {
+    @let e = entry();
+    @if (e.kind === 'content') {
+      <div class="px-3 py-1 border-b bg-card">
+        <span class="text-10 text-gray-500 font-mono uppercase">response</span>
+      </div>
+      <pre class="wf-pre text-11 text-gray-300 whitespace-pre-wrap m-0 px-3 py-2 shrink-0">{{ e.text }}</pre>
+    }
+  }
+  @case ('tool_call') {
+    @let e = entry();
+    @if (e.kind === 'tool_call') {
+      <div class="flex items-center gap-2 px-3 py-1 border-y bg-card shrink-0">
+        <span class="font-mono font-bold uppercase tracking-wide text-10 px-2 py-0-5 rounded ctx-badge-tool">
+          {{ e.tool_name }}
+        </span>
+      </div>
+      <pre class="wf-pre text-11 text-gray-500 whitespace-pre-wrap m-0 px-3 py-2 shrink-0">{{ e.args_text }}</pre>
+    }
+  }
+  @case ('tool_result') {
+    @let e = entry();
+    @if (e.kind === 'tool_result') {
+      <div class="flex items-center gap-2 px-3 py-1 border-y bg-card shrink-0">
+        <span class="text-10 text-gray-500 font-mono">result</span>
+        @if (e.log_message !== null) {
+          <span class="text-10 text-gray-300 font-mono truncate">{{ e.log_message }}</span>
+        }
+      </div>
+      <pre class="wf-pre text-11 text-gray-300 whitespace-pre-wrap m-0 px-3 py-2 shrink-0 ctx-bg-tool">{{ e.content }}</pre>
+    }
+  }
+  @case ('error') {
+    @let e = entry();
+    @if (e.kind === 'error') {
+      <pre class="wf-pre text-11 text-danger whitespace-pre-wrap m-0 px-3 py-2 shrink-0">⚠ {{ e.message }}</pre>
+    }
+  }
+}

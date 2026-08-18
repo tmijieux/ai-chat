@@ -179,7 +179,9 @@ export type ConversationTree = {
 // Workflow run view
 // ---------------------------------------------------------------------------
 
-export type WorkflowStageType = 'llm' | 'coordinator' | 'branch' | 'loop' | 'respond' | 'agent'
+/** 'script' is a coordinator stage whose action is run_script, relabeled at the backend's emission
+ * boundary (see custom_workflow.py's _display_stage_type) — not a distinct dispatch type. */
+export type WorkflowStageType = 'llm' | 'coordinator' | 'script' | 'branch' | 'loop' | 'respond' | 'agent'
 
 /** Static structure of one workflow stage, sent once up front so the plan can be drawn before it runs. */
 export type WorkflowNode = {
@@ -252,6 +254,8 @@ export type WorkflowSelectedDetail =
 
 export type WorkflowRun = {
   workflow_name: string
+  /** Identifies this run's persisted directory on disk (see GET /api/workflow-runs) — ADR-0011. */
+  run_id: string
   status: 'running' | 'done' | 'error'
   started_at: number
   /** Set when the run ends, so the elapsed display freezes instead of counting forever. */
@@ -266,6 +270,47 @@ export type WorkflowRun = {
   current_execution_id: string | null
   /** Tokens the whole run has put through the model — prompt + generated, summed over every iteration. */
   total_tokens_processed: number
+}
+
+/** One child in a fetched node's shallow children list — status only, not its own content. */
+export type WorkflowRunNodeChild = {
+  segment: string
+  /** 'loop_item' for a loop-item-number directory (e.g. "11"), which has no stage type of its own. */
+  stage_type: WorkflowStageType | 'loop_item' | null
+  status: WorkflowStageStatus | null
+}
+
+/** One persisted attempt's full transcript, as returned by GET /api/workflow-runs/.../node. */
+export type WorkflowRunNodeAttempt = {
+  execution_id: string
+  invocation_number: number
+  status: WorkflowStageStatus
+  stage_type: WorkflowStageType
+  item_number: number | null
+  item_total: number | null
+  attempt_number: number | null
+  attempt_total: number | null
+  iteration_count: number
+  context_tokens: number | null
+  response_tokens: number
+  result: unknown
+  duration_ms: number | null
+  activity: WorkflowActivityEntry[]
+}
+
+/**
+ * Response from GET /api/workflow-runs/{workflow_name}/{run_id}/node?path=... — one node's own
+ * persisted content plus a shallow (one level) list of its direct children, for the run view's
+ * click-to-drill-down navigation (ADR-0011). `path` is the on-disk address used to fetch it
+ * (segments joined by "/") — distinct from the engine's dotted stage path, since it interleaves
+ * loop item numbers.
+ */
+export type WorkflowRunNode = {
+  path: string
+  meta: { path: string; stage_type: WorkflowStageType; status: WorkflowStageStatus; attempt_count: number; attempt_total: number | null } | null
+  attempts: WorkflowRunNodeAttempt[]
+  item_result: { item_number: number; item_total: number; success: boolean; attempts_used: number; item_result: unknown } | null
+  children: WorkflowRunNodeChild[]
 }
 
 // ---------------------------------------------------------------------------
@@ -297,7 +342,7 @@ export type AgentEvent = (
   | { type: 'plan_proposal'; plan_id: string; plan: string }
   | { type: 'agent_question'; question_id: string; question: string; options?: string[] }
   | { type: 'mode_changed'; mode: ConversationMode }
-  | { type: 'workflow_start'; workflow_name: string; nodes: WorkflowNode[] }
+  | { type: 'workflow_start'; workflow_name: string; run_id: string; nodes: WorkflowNode[] }
   | {
       type: 'stage_enter'
       path: string

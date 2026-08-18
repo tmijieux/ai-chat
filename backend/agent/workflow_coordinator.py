@@ -31,7 +31,7 @@ _ENUMERATE_FILES_BINARY_EXTENSIONS = {
     ".mp3", ".wav", ".ogg", ".flac", ".mp4", ".mov", ".avi", ".webm",
     ".zip", ".tar", ".gz", ".7z", ".rar",
     ".pdf", ".woff", ".woff2", ".ttf", ".eot", ".otf",
-    ".pyc", ".pyo", ".so", ".dll", ".exe", ".bin", ".wasm",
+    ".pyc", ".pyo", ".o", ".a", ".so", ".dll", ".exe", ".bin", ".wasm",
     ".gguf", ".safetensors", ".onnx", ".pt", ".pth",
     ".sqlite", ".sqlite3", ".db",
 }
@@ -372,22 +372,30 @@ async def _enumerate_files(inputs: dict[str, Any], working_directory: str | None
         return results
 
     files = await asyncio.to_thread(_walk)
-    truncated = len(files) > max_files
-    if truncated:
-        files = files[:max_files]
+    # truncated = len(files) > max_files
+    # if truncated:
+    #     files = files[:max_files]
+    truncated = False
     logger.info("[coordinator:enumerate_files] %s -> %d file(s)%s", root, len(files), " (truncated)" if truncated else "")
     return {"files": files, "truncated": truncated}
 
 
 async def _append_jsonl_record(inputs: dict[str, Any], working_directory: str | None) -> dict:
-    """Append one compact JSON line to `path`, creating parent dirs if needed.
+    """Append one compact JSON line to `path`, or upsert by `key_field` if given.
 
     Generic on purpose (like append_text/append_json_entries): any workflow building a structured,
     line-delimited log can use this, not just codebase mapping. No confirmation — same reasoning as
     append_text, the file was already confirmed at creation.
+
+    `key_field` is optional. Omitted (default), this is a pure append — backward compatible with
+    existing workflows. When given, `record[key_field]` is used to find and replace any existing
+    line with the same key instead of duplicating it, rewriting the whole file; this is a
+    prerequisite for workflow resumability, where redoing a stage that already appended a row
+    (e.g. map-codebase's record_file) must not duplicate it.
     """
-    path = inputs.get("path")
+    path: str = inputs.get("path")
     record = inputs.get("record")
+    key_field = inputs.get("key_field")
     if path is None or working_directory is None:
         return {"success": False}
 
@@ -396,6 +404,30 @@ async def _append_jsonl_record(inputs: dict[str, Any], working_directory: str | 
         raise ValueError(f"Writing outside workspace is forbidden: {path}")
 
     absolute_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(absolute_path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    if key_field is None:
+        with open(absolute_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        return {"success": True}
+
+    key_value = record.get(key_field)
+    existing_lines: list[str] = []
+    if absolute_path.exists():
+        with open(absolute_path, "r", encoding="utf-8") as f:
+            existing_lines = [line for line in f.read().splitlines() if line != ""]
+
+    replaced = False
+    output_lines: list[str] = []
+    for line in existing_lines:
+        existing_record = json.loads(line)
+        if existing_record.get(key_field) == key_value:
+            output_lines.append(json.dumps(record, ensure_ascii=False))
+            replaced = True
+        else:
+            output_lines.append(line)
+    if not replaced:
+        output_lines.append(json.dumps(record, ensure_ascii=False))
+
+    with open(absolute_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(output_lines) + "\n")
     return {"success": True}

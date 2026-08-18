@@ -343,7 +343,9 @@ Workflow stages run in isolated sessions and are **not** part of the conversatio
 
 **Loops** render as a single row: a progress bar plus one status dot per item, so a loop over hundreds of items stays scannable instead of producing hundreds of rows. Retry attempts are shown on the stage currently running. Clicking a dot inspects that item.
 
-**Detail pane:** selecting a stage shows what happened inside it — thinking, tool calls with their arguments, tool results, and the stage's finish result. Full detail is kept for the most recent stage invocations only; older ones keep their status and result and say so, which bounds memory on long runs.
+**Detail pane:** selecting a stage shows what happened inside it — thinking, tool calls with their arguments, tool results, and the stage's finish result. The frontend keeps this in memory for the most recent stage invocations only, to bound memory on long runs — but every invocation's full detail is also persisted to disk as the run executes (see Persisted Run History below), so selecting an older invocation fetches it back on demand rather than showing only its status and result.
+
+**Persisted run history:** every workflow run writes its full execution history to disk as it happens — every stage invocation, at any nesting depth (including loop items and sub-workflow calls), with its complete detail: thinking, tool calls, tool results, and its result (or the absence of one, for a stage that failed without producing one). This is what lets the detail pane recover an older invocation's full content instead of only its status. It also lays the groundwork for resuming a stuck or aborted run later — not yet implemented, see `todo.md` — without needing to re-run everything from the start.
 
 By default the pane follows whichever stage is currently running, and auto-scrolls as activity streams in under the same rule as [[Chat Auto-scroll]]: scrolling up stops it so nothing jumps while reading, and returning to the bottom resumes it. Selecting a specific stage pins the pane to that stage; a control returns it to following the running one.
 

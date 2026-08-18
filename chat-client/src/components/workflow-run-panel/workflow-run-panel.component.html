@@ -13,82 +13,134 @@
       </span>
     </div>
 
-    <!-- stage rows -->
+    <!-- stage rows: this list IS the explorer — expanding a finished node splices its persisted
+         subtree in beneath it, right here, rather than opening a separate view. -->
     <div class="wf-stage-list flex flex-col">
-      @for (row of rows(); track row.node.path) {
-        @let node = row.node;
-        @let state = stateFor(node);
-        @let status = statusOf(node);
-        <div
-          class="flex items-center gap-2 px-3 py-1 border-b cursor-pointer bg-panel-hover"
-          [class.wf-row-selected]="isRowSelected(state)"
-          [style.padding-left.rem]="0.75 + row.depth * 1.25"
-          (click)="selectStage(node)"
-        >
-          <span class="font-mono text-11 w-4 text-center" [class]="statusClass(status)">{{ statusGlyph(status) }}</span>
-          <span class="font-mono text-11 text-gray-300 truncate">{{ node.name }}</span>
-          <span class="text-10 text-gray-500 font-mono">{{ node.type }}</span>
+      @for (row of rows(); track (row.kind === 'static' ? row.node.path : row.address.join('/'))) {
+        @if (row.kind === 'static') {
+          @let node = row.node;
+          @let state = stateFor(node);
+          @let status = statusOf(node);
+          <div
+            class="flex items-center gap-2 px-3 py-1 border-b cursor-pointer bg-panel-hover"
+            [class.wf-row-selected]="isStaticRowSelected(node, state)"
+            [style.padding-left.rem]="0.75 + row.depth * 1.25"
+            (click)="selectStage(node)"
+          >
+            <span class="font-mono text-11 w-4 text-center" [class]="statusClass(status)">{{ statusGlyph(status) }}</span>
+            <span class="font-mono text-11 text-gray-300 truncate">{{ node.name }}</span>
+            <span class="text-10 text-gray-500 font-mono">{{ node.type }}</span>
 
-          @if (state !== null && state.invocation_number > 1) {
-            <span class="text-10 text-gray-500 font-mono">#{{ state.invocation_number }}</span>
-          }
-          @if (state !== null && state.attempt_number !== null && state.attempt_number > 1) {
-            <span class="text-10 text-warning font-mono">attempt {{ state.attempt_number }}/{{ state.attempt_total }}</span>
-          }
-          @if (state !== null && state.item_number !== null) {
-            <span class="text-10 text-gray-500 font-mono">item {{ state.item_number }}/{{ state.item_total }}</span>
-          }
-
-          @if (state !== null && state.result !== null) {
-            <span class="text-10 text-gray-500 font-mono truncate">→ {{ resultSummary(state.result) }}</span>
-          }
-
-          <span class="ml-auto flex items-center gap-2 shrink-0">
-            @if (state !== null && state.context_tokens !== null) {
-              <span class="text-10 text-indigo-400 font-mono" title="Peak measured context of this stage's isolated sub-conversation">
-                ~{{ state.context_tokens | number }}t
-              </span>
+            @if (state !== null && state.invocation_number > 1) {
+              <span class="text-10 text-gray-500 font-mono">#{{ state.invocation_number }}</span>
             }
-            @if (state !== null && state.duration_ms !== null) {
-              <span class="text-10 text-gray-500 font-mono">{{ state.duration_ms }}ms</span>
+            @if (state !== null && state.attempt_number !== null && state.attempt_number > 1) {
+              <span class="text-10 text-warning font-mono">attempt {{ state.attempt_number }}/{{ state.attempt_total }}</span>
             }
-          </span>
-        </div>
+            @if (state !== null && state.item_number !== null) {
+              <span class="text-10 text-gray-500 font-mono">item {{ state.item_number }}/{{ state.item_total }}</span>
+            }
 
-        <!-- loop progress: one row per loop, never one row per item -->
-        @if (node.type === 'loop') {
-          @let items = loopItemsFor(node);
-          @if (items.length > 0) {
-            <div class="flex flex-col gap-1 px-3 py-2 border-b" [style.padding-left.rem]="0.75 + (row.depth + 1) * 1.25">
-              <div class="flex items-center gap-2">
-                <div class="wf-progress-track">
-                  <div class="wf-progress-fill" [style.width.%]="loopDonePercent(node)"></div>
-                </div>
-                <span class="text-10 text-gray-500 font-mono shrink-0">
-                  {{ loopSettledCount(node) }}/{{ items.length }}
+            @if (state !== null && state.result !== null) {
+              <span class="text-10 text-gray-500 font-mono truncate">→ {{ resultSummary(state.result) }}</span>
+            }
+
+            <span class="ml-auto flex items-center gap-2 shrink-0">
+              @if (state !== null && state.context_tokens !== null) {
+                <span class="text-10 text-indigo-400 font-mono" title="Peak measured context of this stage's isolated sub-conversation">
+                  ~{{ state.context_tokens | number }}t
                 </span>
+              }
+              @if (state !== null && state.duration_ms !== null) {
+                <span class="text-10 text-gray-500 font-mono">{{ state.duration_ms }}ms</span>
+              }
+            </span>
+          </div>
+
+          <!-- loop progress: one row per loop, never one row per item. Each dot expands that
+               item's own persisted subtree inline (rows below, at depth+1) once it's finished. -->
+          @if (node.type === 'loop') {
+            @let items = loopItemsFor(node);
+            @if (items.length > 0) {
+              <div class="flex flex-col gap-1 px-3 py-2 border-b" [style.padding-left.rem]="0.75 + (row.depth + 1) * 1.25">
+                <div class="flex items-center gap-2">
+                  <div class="wf-progress-track">
+                    <div class="wf-progress-fill" [style.width.%]="loopDonePercent(node)"></div>
+                  </div>
+                  <span class="text-10 text-gray-500 font-mono shrink-0">
+                    {{ loopSettledCount(node) }}/{{ items.length }}
+                  </span>
+                </div>
+                <div class="flex flex-wrap gap-1">
+                  @for (item of items; track item.item_number) {
+                    <span
+                      [class]="dotClass(item)"
+                      [class.wf-dot-selected]="isDotSelected(node, item)"
+                      [title]="dotTitle(item)"
+                      (click)="selectLoopItem(node, item); $event.stopPropagation()"
+                    ></span>
+                  }
+                </div>
               </div>
-              <div class="flex flex-wrap gap-1">
-                @for (item of items; track item.item_number) {
-                  <span
-                    [class]="dotClass(item)"
-                    [class.wf-dot-selected]="isDotSelected(node, item)"
-                    [title]="dotTitle(item)"
-                    (click)="selectLoopItem(node, item); $event.stopPropagation()"
-                  ></span>
-                }
+            }
+          }
+        } @else {
+          <div
+            class="flex items-center gap-2 px-3 py-1 border-b cursor-pointer bg-panel-hover"
+            [class.wf-row-selected]="isFetchedRowSelected(row.address)"
+            [style.padding-left.rem]="0.75 + row.depth * 1.25"
+            (click)="selectFetchedRow(row.address)"
+          >
+            <span class="font-mono text-11 w-3 text-center text-gray-500">{{ isFetchedRowExpanded(row.address) ? '▾' : '▸' }}</span>
+            <span class="font-mono text-11 w-4 text-center" [class]="statusClass(row.status ?? 'pending')">{{ statusGlyph(row.status ?? 'pending') }}</span>
+            <span class="font-mono text-11 text-gray-300 truncate">{{ fetchedRowLabel(row) }}</span>
+            @if (row.stageType !== null) {
+              <span class="text-10 text-gray-500 font-mono">{{ row.stageType }}</span>
+            }
+            @if (isFetchedRowPending(row.address)) {
+              <span class="ml-auto text-10 text-gray-500 font-mono italic">loading…</span>
+            }
+          </div>
+
+          <!-- a fetched loop's own dot-grid, laid out identically to a top-level loop's -->
+          @if (row.stageType === 'loop' && isFetchedRowExpanded(row.address)) {
+            @let items = fetchedLoopItems(row.address);
+            @if (items.length > 0) {
+              <div class="flex flex-col gap-1 px-3 py-2 border-b" [style.padding-left.rem]="0.75 + (row.depth + 1) * 1.25">
+                <div class="flex items-center gap-2">
+                  <div class="wf-progress-track">
+                    <div class="wf-progress-fill" [style.width.%]="fetchedLoopDonePercent(items)"></div>
+                  </div>
+                  <span class="text-10 text-gray-500 font-mono shrink-0">
+                    {{ fetchedLoopSettledCount(items) }}/{{ items.length }}
+                  </span>
+                </div>
+                <div class="flex flex-wrap gap-1">
+                  @for (item of items; track item.segment) {
+                    <span
+                      [class]="fetchedDotClass(item.status)"
+                      [class.wf-dot-selected]="isFetchedRowSelected(childAddress(row.address, item.segment))"
+                      [title]="fetchedDotTitle(item)"
+                      (click)="selectFetchedRow(childAddress(row.address, item.segment)); $event.stopPropagation()"
+                    ></span>
+                  }
+                </div>
               </div>
-            </div>
+            }
           }
         }
       }
     </div>
 
-    <!-- detail pane -->
+    <!-- detail pane: a pure content viewer for whatever single row is selected — never its own
+         explorer, that's the stage list above. -->
+    @let fetchedAddress = workflowSvc.selectedFetchedAddress();
     @let detail = workflowSvc.selectedDetail();
     <div class="flex flex-col flex-1 min-h-0 min-w-0 border-t">
-      <div class="flex items-center gap-2 px-3 py-1 bg-card border-b shrink-0">
-        @if (detail === null) {
+      <div class="flex items-center gap-2 px-3 py-1 bg-card border-b shrink-0 flex-wrap">
+        @if (fetchedAddress !== null) {
+          <span class="text-10 font-semibold text-gray-300 font-mono truncate">{{ fetchedAddress.join(' / ') }}</span>
+        } @else if (detail === null) {
           <span class="text-10 font-semibold text-gray-300 font-mono">nothing selected</span>
         } @else if (detail.kind === 'execution') {
           <span class="text-10 font-semibold text-gray-300 font-mono">{{ detail.state.execution_id }}</span>
@@ -100,7 +152,7 @@
           <span class="text-10 font-semibold text-gray-300 font-mono">{{ detail.path }} — item {{ detail.item.item_number }}</span>
           <span class="text-10 font-mono" [class]="statusClass(detail.item.status)">{{ statusGlyph(detail.item.status) }} {{ detail.item.status }}</span>
         }
-        @if (workflowSvc.selectedExecutionId() !== null || workflowSvc.selectedLoopItem() !== null) {
+        @if (fetchedAddress !== null || workflowSvc.selectedExecutionId() !== null || workflowSvc.selectedLoopItem() !== null) {
           <button class="ml-auto text-10 text-indigo-400 cursor-pointer font-mono" (click)="followRunningStage()">
             follow running
           </button>
@@ -112,7 +164,51 @@
         class="flex-1 min-h-0 min-w-0 overflow-y-auto flex flex-col"
         (scroll)="onDetailScroll($event)"
       >
-        @if (detail === null) {
+        @if (fetchedAddress !== null) {
+          @let fetchedNode = workflowSvc.getFetchedNode(fetchedAddress);
+          @if (fetchedNode === null) {
+            <div class="flex items-center justify-center py-12 text-gray-500 text-xs italic">
+              @if (isFetchedRowPending(fetchedAddress)) { Loading… } @else { Nothing recorded at this address. }
+            </div>
+          } @else {
+            @if (fetchedNode.item_result !== null) {
+              <div class="px-3 py-1 border-y bg-card shrink-0 flex items-center gap-2">
+                <span class="text-10 text-gray-500 font-mono uppercase">
+                  loop item {{ fetchedNode.item_result.item_number }}/{{ fetchedNode.item_result.item_total }}
+                </span>
+                <span class="text-10 font-mono" [class]="statusClass(fetchedNode.item_result.success ? 'done' : 'failed')">
+                  {{ statusGlyph(fetchedNode.item_result.success ? 'done' : 'failed') }}
+                  {{ fetchedNode.item_result.attempts_used }} attempt(s)
+                </span>
+              </div>
+              <pre class="wf-pre text-11 text-gray-300 whitespace-pre-wrap m-0 px-3 py-2 shrink-0">{{ resultJson(fetchedNode.item_result.item_result) }}</pre>
+            }
+
+            @for (attempt of fetchedNode.attempts; track attempt.execution_id) {
+              @if (fetchedNode.attempts.length > 1) {
+                <div class="px-3 py-1 border-y bg-card shrink-0">
+                  <span class="text-10 text-warning font-mono">attempt {{ attempt.attempt_number }}/{{ attempt.attempt_total }}</span>
+                  <span class="text-10 font-mono ml-2" [class]="statusClass(attempt.status)">{{ statusGlyph(attempt.status) }} {{ attempt.status }}</span>
+                </div>
+              }
+              @for (entry of attempt.activity; track $index) {
+                <app-workflow-activity-entry [entry]="entry" />
+              }
+              @if (attempt.result !== null) {
+                <div class="px-3 py-1 border-y bg-card shrink-0">
+                  <span class="text-10 text-gray-500 font-mono uppercase">stage result</span>
+                </div>
+                <pre class="wf-pre text-11 text-gray-300 whitespace-pre-wrap m-0 px-3 py-2 shrink-0">{{ resultJson(attempt.result) }}</pre>
+              }
+            }
+
+            @if (fetchedNode.attempts.length === 0 && fetchedNode.item_result === null) {
+              <div class="flex items-center justify-center py-12 text-gray-500 text-xs italic">
+                Nothing recorded for this node — expand it in the list above to see its children.
+              </div>
+            }
+          }
+        } @else if (detail === null) {
           <div class="flex items-center justify-center py-12 text-gray-500 text-xs italic">
             Select a stage or loop item to see what it did
           </div>
@@ -142,40 +238,7 @@
           }
 
           @for (entry of detail.state.activity; track $index) {
-            @switch (entry.kind) {
-              @case ('thinking') {
-                <div class="px-3 py-1 border-b bg-card">
-                  <span class="text-10 text-gray-500 font-mono uppercase">thinking</span>
-                </div>
-                <pre class="wf-pre text-11 text-gray-500 whitespace-pre-wrap m-0 px-3 py-2 shrink-0">{{ entry.text }}</pre>
-              }
-              @case ('content') {
-                <div class="px-3 py-1 border-b bg-card">
-                  <span class="text-10 text-gray-500 font-mono uppercase">response</span>
-                </div>
-                <pre class="wf-pre text-11 text-gray-300 whitespace-pre-wrap m-0 px-3 py-2 shrink-0">{{ entry.text }}</pre>
-              }
-              @case ('tool_call') {
-                <div class="flex items-center gap-2 px-3 py-1 border-y bg-card shrink-0">
-                  <span class="font-mono font-bold uppercase tracking-wide text-10 px-2 py-0-5 rounded ctx-badge-tool">
-                    {{ entry.tool_name }}
-                  </span>
-                </div>
-                <pre class="wf-pre text-11 text-gray-500 whitespace-pre-wrap m-0 px-3 py-2 shrink-0">{{ entry.args_text }}</pre>
-              }
-              @case ('tool_result') {
-                <div class="flex items-center gap-2 px-3 py-1 border-y bg-card shrink-0">
-                  <span class="text-10 text-gray-500 font-mono">result</span>
-                  @if (entry.log_message !== null) {
-                    <span class="text-10 text-gray-300 font-mono truncate">{{ entry.log_message }}</span>
-                  }
-                </div>
-                <pre class="wf-pre text-11 text-gray-300 whitespace-pre-wrap m-0 px-3 py-2 shrink-0 ctx-bg-tool">{{ entry.content }}</pre>
-              }
-              @case ('error') {
-                <pre class="wf-pre text-11 text-danger whitespace-pre-wrap m-0 px-3 py-2 shrink-0">⚠ {{ entry.message }}</pre>
-              }
-            }
+            <app-workflow-activity-entry [entry]="entry" />
           }
 
           @if (detail.state.result !== null) {

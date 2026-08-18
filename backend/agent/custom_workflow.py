@@ -24,6 +24,8 @@ from agent.workflow_loader import (
     _BUILTIN_FINISH_TOOL_CLASSES,
     load_workflow,
 )
+from agent.workflow_resume import reconstruct_slots
+from agent.workflow_run_recorder import WorkflowRunRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +179,18 @@ def _truncate_stage_result(result: Any) -> Any:
     return summary
 
 
+def _display_stage_type(stage: WorkflowStageDefinition) -> str:
+    """The stage type as shown in the run view: 'coordinator' is the engine's real dispatch
+    category for every deterministic action, but a run_script stage reads as its own kind of
+    thing to a workflow author, not generically "coordinator" alongside enumerate_files or
+    chunk_file — so it's relabeled 'script' wherever a stage's type is emitted or persisted. The
+    underlying WorkflowStageDefinition.type is untouched; this only affects what's displayed.
+    """
+    if stage.type == "coordinator" and stage.action == "run_script":
+        return "script"
+    return stage.type
+
+
 def _serialize_stage_nodes(
     stages: list[WorkflowStageDefinition], path_prefix: str = ""
 ) -> list[dict]:
@@ -198,7 +212,7 @@ def _serialize_stage_nodes(
         nodes.append({
             "path": path,
             "name": stage.name,
-            "type": stage.type,
+            "type": _display_stage_type(stage),
             "finish_tool": stage.finish_tool_name if stage.type == "llm" else None,
             "tools": stage.tools + stage.agents,
             "over": stage.over if stage.over != "" else None,
@@ -256,6 +270,13 @@ class CustomWorkflowOrchestrator:
         self._tools = tools or []
         self._loop_context: LoopContext | None = None
         self._invocation_counters: dict[str, int] = {}
+        # Ancestry of currently-active loop items, outermost first — (loop_path, item_number).
+        # Distinct from _loop_context (a single "innermost" slot for live event labels): this is a
+        # real stack, shared by reference into any sub-workflow orchestrator, because persisting a
+        # stage's on-disk address needs EVERY ancestor loop's item number at once, not just the
+        # innermost — see WorkflowRunRecorder.address_for.
+        self._active_item_stack: list[tuple[str, int]] = []
+        self._recorder: WorkflowRunRecorder | None = None
 
     async def run(self, session: AgentSession, user_message: str, messages: list[LLMMessage]) -> None:
         """Entry point — runs all workflow stages and emits events via session.
@@ -270,27 +291,108 @@ class CustomWorkflowOrchestrator:
             session.mode = self._workflow.mode
             logger.info("[workflow:%s] mode temporarily set to '%s'", self._workflow.name, self._workflow.mode)
         session.auto_safe_commands = list(self._workflow.auto_safe_commands)
+
+        run_id = uuid.uuid4().hex[:8]
+        # Same fallback _run_workflow applies to slots["user_message"] below — persisted here too
+        # (rather than the raw user_message) so a later resume reseeds the identical value.
+        effective_message = user_message if user_message.strip() != "" else f"/{self._workflow.name}"
+        self._recorder = WorkflowRunRecorder(self._workflow.name, run_id, user_message=effective_message)
+        recording_session = _RecordingSession(session, self._recorder, self._active_item_stack)
+
         await session.emit({
             "type": "workflow_start",
             "workflow_name": self._workflow.name,
+            "run_id": run_id,
             "nodes": _serialize_stage_nodes(self._workflow.stages),
         })
         try:
-            await self._run_workflow(session, user_message, messages)
+            await self._run_workflow(recording_session, user_message, messages)
         except asyncio.CancelledError:
             logger.info("[workflow:%s] aborted (CancelledError)", self._workflow.name)
+            self._recorder.mark_failed()
             await session.emit({"type": "error", "message": f"Workflow '{self._workflow.name}' was aborted"})
         except aiohttp.ClientConnectorError as exc:
             logger.error("[workflow:%s] LLM backend connection error: %s", self._workflow.name, exc)
+            self._recorder.mark_failed()
             await session.emit({"type": "error", "message": "LLM backend is not running"})
         except _WorkflowAbort as exc:
             logger.error("[workflow:%s] aborted: %s", self._workflow.name, exc)
+            self._recorder.mark_failed()
             await session.emit({"type": "error", "message": str(exc)})
         except Exception as exc:
             import traceback
             full_tb = traceback.format_exc()
             logger.exception("[workflow:%s] unexpected error", self._workflow.name)
+            self._recorder.mark_failed()
             await session.emit({"type": "error", "message": full_tb})
+        else:
+            self._recorder.mark_done()
+        finally:
+            session.mode = saved_mode
+            session.auto_safe_commands = saved_auto_safe_commands
+            if self._workflow.mode is not None:
+                logger.info("[workflow:%s] mode restored to '%s'", self._workflow.name, saved_mode)
+
+    async def resume(
+        self,
+        session: AgentSession,
+        run_id: str,
+        resume_address: list[str],
+        messages: list[LLMMessage],
+    ) -> None:
+        """Resume a previously persisted run in place (same run_id), continuing from
+        resume_address — see ADR-0011's "Deferred: resumability".
+
+        Mirrors .run() but reopens the existing run directory (WorkflowRunRecorder.load) instead
+        of creating one, and reconstructs the slot registry from disk (workflow_resume.
+        reconstruct_slots, which also recovers the original user_message from run.json) instead
+        of seeding it empty. Kept as its own method rather than merged into .run()/_run_workflow:
+        the two entry points differ in how the recorder and slots get built, and duplicating the
+        small mode-save/try-except-finally scaffold around that is simpler than threading a
+        conditional through the existing, working .run() path.
+        """
+        logger.info("[workflow:%s] resuming run %s from %s", self._workflow.name, run_id, resume_address)
+        saved_mode = session.mode
+        saved_auto_safe_commands = session.auto_safe_commands
+        if self._workflow.mode is not None:
+            session.mode = self._workflow.mode
+            logger.info("[workflow:%s] mode temporarily set to '%s'", self._workflow.name, self._workflow.mode)
+        session.auto_safe_commands = list(self._workflow.auto_safe_commands)
+
+        self._recorder = WorkflowRunRecorder.load(self._workflow.name, run_id)
+        recording_session = _RecordingSession(session, self._recorder, self._active_item_stack)
+        slots = reconstruct_slots(self._recorder._root, self._workflow, resume_address)
+
+        await session.emit({
+            "type": "workflow_start",
+            "workflow_name": self._workflow.name,
+            "run_id": run_id,
+            "nodes": _serialize_stage_nodes(self._workflow.stages),
+        })
+        try:
+            await self._run_stage_sequence(recording_session, messages, slots, resume_cursor=resume_address)
+            logger.info("[workflow:%s] all stages complete (resumed)", self._workflow.name)
+            await session.emit({"type": "done", "finished_without_response": False})
+        except asyncio.CancelledError:
+            logger.info("[workflow:%s] aborted (CancelledError)", self._workflow.name)
+            self._recorder.mark_failed()
+            await session.emit({"type": "error", "message": f"Workflow '{self._workflow.name}' was aborted"})
+        except aiohttp.ClientConnectorError as exc:
+            logger.error("[workflow:%s] LLM backend connection error: %s", self._workflow.name, exc)
+            self._recorder.mark_failed()
+            await session.emit({"type": "error", "message": "LLM backend is not running"})
+        except _WorkflowAbort as exc:
+            logger.error("[workflow:%s] aborted: %s", self._workflow.name, exc)
+            self._recorder.mark_failed()
+            await session.emit({"type": "error", "message": str(exc)})
+        except Exception as exc:
+            import traceback
+            full_tb = traceback.format_exc()
+            logger.exception("[workflow:%s] unexpected error", self._workflow.name)
+            self._recorder.mark_failed()
+            await session.emit({"type": "error", "message": full_tb})
+        else:
+            self._recorder.mark_done()
         finally:
             session.mode = saved_mode
             session.auto_safe_commands = saved_auto_safe_commands
@@ -315,6 +417,7 @@ class CustomWorkflowOrchestrator:
         skip_stage_names: frozenset[str] = frozenset(),
         path_prefix: str = "",
         outcome_sink: dict[str, Any] | None = None,
+        resume_cursor: list[str] | None = None,
     ) -> None:
         """Drive this orchestrator's own stages (`self._workflow.stages`) to completion.
 
@@ -327,16 +430,31 @@ class CustomWorkflowOrchestrator:
         dispatched here — each stage's own compact, display-ready result, as opposed to the full
         slot registry. Used by `_run_sub_workflow` so a sub-invocation can report a small summary
         of what it did instead of exposing its entire internal state to the caller.
+
+        `resume_cursor`, when given, is an on-disk address (see WorkflowRunRecorder.address_for)
+        naming where to start: everything before it in this stage list is assumed already
+        reconstructed into `slots` by workflow_resume.reconstruct_slots, so dispatch starts at the
+        named stage instead of index 0. Only that one stage receives the remainder of the cursor
+        (for a loop, which segment of its own item/inner-stage tree to resume into) — every stage
+        dispatched after it runs as an ordinary fresh dispatch.
         """
         stages = [s for s in self._workflow.stages if s.name not in skip_stage_names]
         stage_index = {s.name: i for i, s in enumerate(stages)}
         logger.info("[workflow:%s] %d stages: %s", self._workflow.name, len(stages), [s.name for s in stages])
-        current = 0
+
+        if resume_cursor is not None:
+            current = stage_index[resume_cursor[0]]
+            pending_cursor: list[str] | None = resume_cursor[1:]
+        else:
+            current = 0
+            pending_cursor = None
 
         while current < len(stages):
             stage = stages[current]
+            dispatch_cursor = pending_cursor
+            pending_cursor = None  # only the first stage dispatched here (the resume target) gets a cursor
             logger.info("[workflow:%s] dispatching stage '%s' (type=%s)", self._workflow.name, stage.name, stage.type)
-            outcome = await self._dispatch(stage, session, messages, slots, path_prefix=path_prefix)
+            outcome = await self._dispatch(stage, session, messages, slots, path_prefix=path_prefix, resume_cursor=dispatch_cursor)
             if outcome_sink is not None:
                 outcome_sink[stage.name] = outcome.result
             logger.info("[workflow:%s] stage '%s' done — slots keys: %s", self._workflow.name, stage.name, list(slots.keys()))
@@ -364,7 +482,7 @@ class CustomWorkflowOrchestrator:
             "type": "stage_enter",
             "path": path,
             "execution_id": execution_id,
-            "stage_type": stage.type,
+            "stage_type": _display_stage_type(stage),
             "invocation_number": self._invocation_counters[path],
             "item_number": None if loop_context is None else loop_context.item_number,
             "item_total": None if loop_context is None else loop_context.item_total,
@@ -381,14 +499,20 @@ class CustomWorkflowOrchestrator:
         result: Any,
         started_at: float | None,
     ) -> None:
-        """Announce that a stage invocation ended. started_at is None for stages that never ran."""
+        """Announce that a stage invocation ended. started_at is None for stages that never ran.
+
+        `result` is emitted in full, untruncated — the point of persisting it (ADR-0011) is to
+        keep what the live view can't afford to. Truncation for the websocket happens downstream,
+        in _RecordingSession.emit, on the copy actually forwarded to the real session — never on
+        what the recorder writes to disk.
+        """
         duration_ms = 0 if started_at is None else int((time.monotonic() - started_at) * 1000)
         await session.emit({
             "type": "stage_exit",
             "path": path,
             "execution_id": execution_id,
             "status": status,
-            "result": _truncate_stage_result(result),
+            "result": result,
             "duration_ms": duration_ms,
         })
 
@@ -399,6 +523,7 @@ class CustomWorkflowOrchestrator:
         messages: list[LLMMessage],
         slots: dict[str, Any],
         path_prefix: str = "",
+        resume_cursor: list[str] | None = None,
     ) -> StageOutcome:
         """Run one stage, bracketed by stage_enter / stage_exit events for the run view.
 
@@ -406,6 +531,9 @@ class CustomWorkflowOrchestrator:
         stage type reports the same lifecycle no matter which runner handles it. A runner that
         raises still reports stage_exit(failed) before the exception propagates — _run_loop relies
         on catching it to retry the item.
+
+        `resume_cursor` is only meaningful for a loop stage (see _run_loop) — every other stage
+        type is atomic from a resume's point of view and ignores it.
         """
         path = path_prefix + stage.name
         execution_id = self._next_execution_id(path)
@@ -421,7 +549,7 @@ class CustomWorkflowOrchestrator:
         await self._emit_stage_enter(session, stage, path, execution_id)
         started_at = time.monotonic()
         try:
-            outcome = await self._run_by_type(stage, session, messages, slots, path, execution_id)
+            outcome = await self._run_by_type(stage, session, messages, slots, path, execution_id, resume_cursor)
         except Exception:
             await self._emit_stage_exit(session, path, execution_id, "failed", None, started_at)
             raise
@@ -436,6 +564,7 @@ class CustomWorkflowOrchestrator:
         slots: dict[str, Any],
         path: str,
         execution_id: str,
+        resume_cursor: list[str] | None = None,
     ) -> StageOutcome:
         """Route a stage to the runner for its type and return what it produced."""
         if stage.type == "llm":
@@ -445,9 +574,9 @@ class CustomWorkflowOrchestrator:
         if stage.type == "branch":
             return self._resolve_branch(stage, slots)
         if stage.type == "loop":
-            return StageOutcome(result=await self._run_loop(stage, session, messages, slots, path))
+            return StageOutcome(result=await self._run_loop(stage, session, messages, slots, path, resume_cursor))
         if stage.type == "respond":
-            await self._run_respond(stage, session, messages, slots)
+            await self._run_respond(stage, session, messages, slots, execution_id)
             return StageOutcome()
         if stage.type == "agent":
             return StageOutcome(result=await self._run_isolated_agent(stage, session, slots, execution_id))
@@ -532,12 +661,27 @@ class CustomWorkflowOrchestrator:
         messages: list[LLMMessage],
         slots: dict[str, Any],
         path: str,
+        resume_cursor: list[str] | None = None,
     ) -> dict:
         """Run a loop stage: iterate over a list or repeat until exit_condition.
 
         Returns a compact tally rather than the aggregated per-item results: those are already
         stored in the loop_output slot, and streaming them again as a stage result would repeat
         every item's full output over the event stream.
+
+        `resume_cursor` is non-None only when THIS loop is on the resume path (it was threaded
+        down because this loop is the stage `resume_cursor` in _run_stage_sequence/an enclosing
+        loop's own resume target). An empty list means "resume at this loop itself" (start fresh
+        at item 1); a longer list's first segment is the item number to resume into, with any
+        remainder addressing an inner stage within that item. Items strictly before the resume
+        item are read back from their persisted item_result.json rather than redispatched — their
+        slot writes were already replayed by workflow_resume.reconstruct_slots before this run
+        started. Items after it are also read from disk when stage.assume_independent and a
+        result exists there; otherwise every item dispatches live, same as an ordinary run.
+        `resume_cursor is None` (this loop simply isn't on the resume path — either an ordinary
+        run, or this loop comes after the resume point in its own stage sequence) always
+        dispatches every item fresh, with no disk reuse at all: "everything after the resume
+        point" must be redone in full, never partially reused.
         """
         # self._loop_context is a single shared attribute, not a stack — when this loop is nested
         # inside another loop's per-item dispatch, entering here sees the OUTER loop's current
@@ -553,6 +697,16 @@ class CustomWorkflowOrchestrator:
         else:
             items = [None]  # single-item sentinel for non-list loops
 
+        if resume_cursor is None:
+            resume_item_number = None
+            loop_address = None
+        elif len(resume_cursor) == 0:
+            resume_item_number = 1
+            loop_address = None
+        else:
+            resume_item_number = int(resume_cursor[0])
+            loop_address = session._recorder.address_for(path, self._active_item_stack)
+
         aggregated: list[dict] = []
         item_total = len(items)
         attempt_total = stage.max_retries + 1
@@ -562,6 +716,26 @@ class CustomWorkflowOrchestrator:
 
         for item_index, item in enumerate(items):
             item_number = item_index + 1
+
+            if loop_address is not None and item_number != resume_item_number:
+                is_before_resume = item_number < resume_item_number
+                if is_before_resume or stage.assume_independent:
+                    item_payload = session._recorder.read_item_result(loop_address, item_number)
+                    if item_payload is not None:
+                        aggregated.append(item_payload["item_result"])
+                        if item_payload["success"]:
+                            succeeded_count += 1
+                        else:
+                            failed_count += 1
+                        continue
+                    # Nothing persisted for this item — either the original run never reached it
+                    # (item strictly before the resume point but somehow not on disk) or nothing
+                    # to reuse for an "after" item — fall through and dispatch it fresh below.
+
+            item_inner_cursor: list[str] | None = None
+            if resume_cursor is not None and item_number == resume_item_number and len(resume_cursor) > 1:
+                item_inner_cursor = resume_cursor[1:]
+
             if stage.over != "":
                 slots[stage.item_var] = item
             # Reset on_retry slots to their default (empty string) before first attempt
@@ -573,42 +747,71 @@ class CustomWorkflowOrchestrator:
             # its retries before reaching that stage), its slot would otherwise still hold
             # whatever the PREVIOUS item last wrote there, and _collect_inner_results would
             # silently report that stale value as if it belonged to this item.
-            for inner in stage.inner_stages:
-                slots.pop(inner.name, None)
+            #
+            # Skipped when resuming partway into this item's own inner stages: those slots were
+            # just populated from disk by workflow_resume.reconstruct_slots, and this item's own
+            # dispatch below starts at item_inner_cursor, not at its first inner stage.
+            if item_inner_cursor is None:
+                for inner in stage.inner_stages:
+                    slots.pop(inner.name, None)
 
             item_success = False
-            for attempt in range(attempt_total):
-                self._loop_context = LoopContext(
-                    item_number=item_number,
-                    item_total=item_total,
-                    attempt_number=attempt + 1,
-                    attempt_total=attempt_total,
-                )
-                if attempt > 0:
-                    logger.info("[workflow] loop '%s' item %d/%d — retry attempt %d/%d", stage.name, item_number, item_total, attempt + 1, attempt_total)
-                    for slot_name, template in stage.on_retry.items():
-                        slots[slot_name] = resolve_template(template, slots)
+            # Pushed for the whole item (every attempt), not per-attempt — a retry keeps the same
+            # item_number, and this stack exists so WorkflowRunRecorder can address a nested stage
+            # on disk by its full item ancestry (see _active_item_stack's docstring in __init__).
+            # try/finally guarantees the pop happens even when _WorkflowAbort escapes the item.
+            self._active_item_stack.append((path, item_number))
+            try:
+                for attempt in range(attempt_total):
+                    self._loop_context = LoopContext(
+                        item_number=item_number,
+                        item_total=item_total,
+                        attempt_number=attempt + 1,
+                        attempt_total=attempt_total,
+                    )
+                    if attempt > 0:
+                        logger.info("[workflow] loop '%s' item %d/%d — retry attempt %d/%d", stage.name, item_number, item_total, attempt + 1, attempt_total)
+                        for slot_name, template in stage.on_retry.items():
+                            slots[slot_name] = resolve_template(template, slots)
 
-                try:
-                    for inner in stage.inner_stages:
-                        await self._dispatch(inner, session, messages, slots, path_prefix=f"{path}.")
-                except _WorkflowAbort:
-                    # A condition (skip-condition or exit_condition) that failed to evaluate at all
-                    # is a workflow-definition bug, not a per-attempt failure — it will fail the
-                    # exact same way on every retry, so let it escape and abort the whole run
-                    # instead of burning every remaining attempt against a check that can never pass.
-                    raise
-                except Exception as exc:
-                    # An inner stage (e.g. the model failing to call its required finish tool)
-                    # raises instead of returning — treat that as a failed attempt so it goes
-                    # through the same retry path as a failed exit_condition, instead of
-                    # escaping the loop and aborting the whole workflow after one try.
-                    logger.warning("[workflow] loop '%s' item %d/%d attempt %d/%d raised: %s", stage.name, item_number, item_total, attempt + 1, attempt_total, exc)
-                    continue
+                    # A resumed item's inner_cursor only applies to its very first (re-entered)
+                    # attempt — a subsequent retry of the same item redoes every inner stage from
+                    # the start, same as an ordinary (non-resumed) retry always has.
+                    if attempt == 0 and item_inner_cursor is not None:
+                        start_index = next(
+                            index for index, inner in enumerate(stage.inner_stages)
+                            if inner.name == item_inner_cursor[0]
+                        )
+                        inner_stages_this_attempt = stage.inner_stages[start_index:]
+                        first_inner_cursor = item_inner_cursor[1:]
+                    else:
+                        inner_stages_this_attempt = stage.inner_stages
+                        first_inner_cursor = None
 
-                if evaluate_condition(stage.exit_condition, slots):
-                    item_success = True
-                    break
+                    try:
+                        for position, inner in enumerate(inner_stages_this_attempt):
+                            cursor = first_inner_cursor if position == 0 else None
+                            await self._dispatch(inner, session, messages, slots, path_prefix=f"{path}.", resume_cursor=cursor)
+                    except _WorkflowAbort:
+                        # A condition (skip-condition or exit_condition) that failed to evaluate at
+                        # all is a workflow-definition bug, not a per-attempt failure — it will fail
+                        # the exact same way on every retry, so let it escape and abort the whole
+                        # run instead of burning every remaining attempt against a check that can
+                        # never pass.
+                        raise
+                    except Exception as exc:
+                        # An inner stage (e.g. the model failing to call its required finish tool)
+                        # raises instead of returning — treat that as a failed attempt so it goes
+                        # through the same retry path as a failed exit_condition, instead of
+                        # escaping the loop and aborting the whole workflow after one try.
+                        logger.warning("[workflow] loop '%s' item %d/%d attempt %d/%d raised: %s", stage.name, item_number, item_total, attempt + 1, attempt_total, exc)
+                        continue
+
+                    if evaluate_condition(stage.exit_condition, slots):
+                        item_success = True
+                        break
+            finally:
+                self._active_item_stack.pop()
 
             attempts_used = attempt + 1
             self._loop_context = enclosing_loop_context
@@ -621,6 +824,8 @@ class CustomWorkflowOrchestrator:
             # separate stage_enter/stage_exit stream after the fact.
             item_result = _collect_inner_results(stage, slots, item, item_success) if stage.over != "" else None
 
+            # item_result is emitted in full here too, same reasoning as _emit_stage_exit's result —
+            # truncated only for the copy _RecordingSession forwards to the real session.
             await session.emit({
                 "type": "loop_item_exit",
                 "path": path,
@@ -628,7 +833,7 @@ class CustomWorkflowOrchestrator:
                 "item_total": item_total,
                 "success": item_success,
                 "attempts_used": attempts_used,
-                "item_result": _truncate_stage_result(item_result),
+                "item_result": item_result,
             })
 
             if not item_success:
@@ -659,6 +864,7 @@ class CustomWorkflowOrchestrator:
         session: AgentSession,
         messages: list[LLMMessage],
         slots: dict[str, Any],
+        execution_id: str,
     ) -> None:
         """Run the plain agent loop on the full conversation history.
 
@@ -700,7 +906,7 @@ class CustomWorkflowOrchestrator:
             })
 
         logger.info("[workflow] respond: calling run_agent with %d messages", len(working_messages))
-        respond_session = _RespondStageSession(session)
+        respond_session = _RespondStageSession(session, execution_id)
         await run_agent(respond_session, working_messages, ToolSet(tools=self._tools, extra_tools=None), self._working_directory)
         if respond_session.error_message is not None:
             logger.warning("[workflow] respond: run_agent errored: %s", respond_session.error_message)
@@ -777,6 +983,7 @@ class CustomWorkflowOrchestrator:
         sub_slots = _seed_sub_slots(stage.sub_workflow_input, slots)
         sub_orchestrator = CustomWorkflowOrchestrator(sub_def, self._working_directory, self._tools)
         sub_orchestrator._invocation_counters = self._invocation_counters
+        sub_orchestrator._active_item_stack = self._active_item_stack
 
         saved_mode = session.mode
         saved_auto_safe_commands = session.auto_safe_commands
@@ -843,6 +1050,52 @@ class _WorkflowAbort(Exception):
     """Raised to abort the entire workflow (e.g. compile fix loop exhausted)."""
 
 
+class _RecordingSession:
+    """Session proxy that persists stage lifecycle and activity events to WorkflowRunRecorder as
+    they pass through, then forwards to the real session — see ADR-0011.
+
+    Constructed once in CustomWorkflowOrchestrator.run() and used as the `session` argument passed
+    into _run_workflow, so it sits on the single funnel every event already flows through for the
+    whole call tree: run_stage's per-iteration forwarding (pipeline.py), a sub-workflow's own
+    dispatch (the same session object is threaded through unchanged in _run_sub_workflow), and
+    _RespondStageSession's forwarding all call .emit() on whatever session they were handed, which
+    is this proxy (or something wrapping it) for the entire life of one run.
+
+    stage_exit/loop_item_exit reach the recorder with their full, untruncated result/item_result
+    — that completeness is the entire point of persisting them (ADR-0011) — but the copy actually
+    forwarded to the real session (and from there, the websocket) still gets _truncate_stage_result
+    applied, same as before this recorder existed (ADR-0009): the live view was never meant to
+    carry a huge payload verbatim, only the persisted copy needed to stop being lossy.
+    """
+
+    def __init__(
+        self,
+        real_session: AgentSession,
+        recorder: WorkflowRunRecorder,
+        active_item_stack: list[tuple[str, int]],
+    ) -> None:
+        self._real = real_session
+        self._recorder = recorder
+        self._active_item_stack = active_item_stack
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+    async def emit(self, event: dict) -> None:
+        event_type = event.get("type")
+        if event_type == "stage_enter":
+            self._recorder.on_stage_enter(event, self._active_item_stack)
+        elif event_type == "stage_exit":
+            self._recorder.on_stage_exit(event, self._active_item_stack)
+            event = {**event, "result": _truncate_stage_result(event["result"])}
+        elif event_type == "loop_item_exit":
+            self._recorder.on_loop_item_exit(event, self._active_item_stack)
+            event = {**event, "item_result": _truncate_stage_result(event["item_result"])}
+        elif event.get("_workflow_execution") is not None:
+            self._recorder.on_activity(event["_workflow_execution"], event)
+        await self._real.emit(event)
+
+
 class _RespondStageSession:
     """Session proxy wrapped around a respond stage's run_agent call.
 
@@ -857,8 +1110,9 @@ class _RespondStageSession:
     meant to stream straight into the conversation.
     """
 
-    def __init__(self, real_session: AgentSession) -> None:
+    def __init__(self, real_session: AgentSession, execution_id: str) -> None:
         self._real = real_session
+        self._execution_id = execution_id
         self.finished_without_response = False
         self.error_message: str | None = None
 
@@ -872,6 +1126,12 @@ class _RespondStageSession:
         if event.get("type") == "error":
             self.error_message = event.get("message")
             return
+        # A respond stage's own thinking/content/tool-call events come from run_agent directly,
+        # not run_stage — so unlike an llm/agent stage, nothing has stamped _workflow_execution on
+        # them yet. Stamp it here so WorkflowRunRecorder (via _RecordingSession, further down this
+        # session chain) can persist this stage's transcript the same as any other stage type.
+        if event.get("_workflow_execution") is None:
+            event = {**event, "_workflow_execution": self._execution_id}
         await self._real.emit(event)
 
 

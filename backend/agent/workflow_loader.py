@@ -112,6 +112,7 @@ class WorkflowStageDefinition:
     on_retry: dict[str, str] = field(default_factory=dict)  # slot_name → template expression
     max_retries: int = 3
     loop_output: str = ""            # slot name to store aggregated loop results
+    assume_independent: bool = True  # on resume, skip sibling items whose disk result still stands
     inner_stages: list[WorkflowStageDefinition] = field(default_factory=list)
 
 
@@ -235,6 +236,7 @@ def _parse_stage(data: dict, finish_tool_classes: dict[str, type[BaseFinishTool]
             on_retry=data.get("on_retry") or {},
             include_in_item_result=data.get("include_in_item_result", True),
             loop_output=data.get("output") or "",
+            assume_independent=data.get("assume_independent", True),
             inner_stages=inner_stages,
         )
 

@@ -208,6 +208,7 @@ stages:
             role: "{{summarize_file.role}}"
             exports: "{{summarize_file.exports}}"
             key_dependencies: "{{summarize_file.key_dependencies}}"
+          key_field: path
         output: record_file
 
   # -------------------------------------------------------------------------
@@ -243,6 +244,11 @@ stages:
     max_retries: 1
     on_max_retries: continue
     exit_condition: "True"
+    # Each item's synthesize_loop reads current_level_summaries, the slot the PREVIOUS item's
+    # synthesize_loop just wrote (see the depth-indexed fold note at the top of this file) — items
+    # are not independent, so resuming mid-loop must redo every item from the resume point forward
+    # rather than reusing later items' persisted results as-is.
+    assume_independent: false
 
     stages:
       - name: merge_level
@@ -304,6 +310,7 @@ stages:
                 purpose: "{{synthesize_directory.purpose}}"
                 key_files: "{{synthesize_directory.key_files}}"
                 notable_dependencies: "{{synthesize_directory.notable_dependencies}}"
+              key_field: directory
             output: record_directory
 
   # -------------------------------------------------------------------------
