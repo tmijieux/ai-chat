@@ -466,6 +466,11 @@
               </button>
               @if (openMenuId() === msg.id) {
                 <div class="msg-menu">
+                  @if (msg.kind === 'user' && msg.workflow_name && msg.workflow_run_id) {
+                    <button (click)="onReopenWorkflowRun(msg.workflow_name, msg.workflow_run_id)">
+                      Reopen workflow run
+                    </button>
+                  }
                   <button (click)="onDeleteMessage(msg.id, false)">Delete message</button>
                   @if (msg.has_children) {
                     <button class="danger" (click)="onDeleteMessage(msg.id, true)">

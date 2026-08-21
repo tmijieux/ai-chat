@@ -119,6 +119,8 @@ def _msg_dict(m: db.Message) -> dict[str, Any]:
         "tool_calls": json.loads(m.tool_calls) if m.tool_calls else None,
         "is_degenerate": bool(m.is_degenerate),
         "compressed_token_count": m.compressed_token_count,
+        "workflow_name": m.workflow_name,
+        "workflow_run_id": m.workflow_run_id,
     }
 
 

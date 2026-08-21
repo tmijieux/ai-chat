@@ -254,12 +254,42 @@ export class WorkflowRunPanelComponent implements OnDestroy {
     return 'wf-dot wf-dot-pending'
   }
 
+  /** A top-level loop's own dot grid. Live runs get this from run.loop_items as items complete;
+   * a run reopened from disk (ADR-0011's "Deferred: resumability") never populates that, so it
+   * falls back to whatever workflowSvc.openPersistedRun already fetched for this loop's own
+   * address — same disk data the fetched-row rendering elsewhere in this component already uses. */
   loopItemsFor(node: WorkflowNode): WorkflowLoopItemState[] {
     const run = this.workflowSvc.run()
     if (run === null) {
       return []
     }
-    return run.loop_items[node.path] ?? []
+    const live = run.loop_items[node.path]
+    if (live !== undefined) {
+      return live
+    }
+    const fetched = this.workflowSvc.getFetchedNode(node.path.split('.'))
+    if (fetched === null) {
+      return []
+    }
+    const dispatchedItems = fetched.children.filter((child) => child.stage_type === 'loop_item')
+    // Any dispatched item knows the loop's real item_total (routers/workflow_runs.py) — a run
+    // stopped or failed partway through only ever has directories for the items that actually
+    // ran, so without this the grid would silently shrink to "however many happened to finish"
+    // instead of showing every remaining item as still pending.
+    const itemTotal = dispatchedItems.reduce((max, child) => Math.max(max, child.item_total ?? 0), dispatchedItems.length)
+    const byItemNumber = new Map(dispatchedItems.map((child) => [Number(child.segment), child]))
+    return Array.from({ length: itemTotal }, (_unused, index) => {
+      const itemNumber = index + 1
+      const child = byItemNumber.get(itemNumber)
+      return {
+        item_number: itemNumber,
+        // A loop item is never itself "skipped" (only stages are) — WorkflowLoopItemState's
+        // status union has no such case, so fold it into 'pending' defensively.
+        status: child === undefined || child.status === null || child.status === 'skipped' ? 'pending' : child.status,
+        attempts_used: 0,
+        result: null,
+      }
+    })
   }
 
   loopDonePercent(node: WorkflowNode): number {

@@ -269,6 +269,21 @@ async def update_message_token_count(
     return {"ok": True}
 
 
+@router.patch("/api/messages/{id}/workflow-run")
+async def update_message_workflow_run(
+    id: str, body: ld.UpdateWorkflowRun, sess: AsyncSession = Depends(get_db_session)
+):
+    """Link a message to the workflow run it started, once the engine's run_id is known — the
+    frontend calls this on the 'workflow_start' event (see ADR-0011's "Deferred: resumability")."""
+    msg = (await sess.scalars(select(db.Message).where(db.Message.id == id))).first()
+    if msg is None:
+        raise HTTPException(404)
+    msg.workflow_name = body.workflow_name
+    msg.workflow_run_id = body.workflow_run_id
+    await sess.flush()
+    return {"ok": True}
+
+
 @router.put("/api/messages/{id}/branch")
 async def branch_message(
     id: str, body: ld.EditMessageContent, sess: AsyncSession = Depends(get_db_session)

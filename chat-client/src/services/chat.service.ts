@@ -717,6 +717,23 @@ export class ChatService {
             resolved: false,
           },
         ])
+      } else if (event.type === 'workflow_start') {
+        // Links the user message that started this run to the engine's run_id, so "Reopen
+        // workflow run" can find it again after a page reload (ADR-0011's "Deferred:
+        // resumability") — mirrors ctx_update's patchedUserMessage pattern below, but this event
+        // only ever arrives once per run so there's no re-entrancy to guard against.
+        const workflowName = event.workflow_name
+        const runId = event.run_id
+        enqueue(async () => {
+          await firstValueFrom(this.api.patch_message_workflow_run(userMessageId, workflowName, runId))
+          this._messages.update((msgs) =>
+            msgs.map((m) =>
+              m.id === userMessageId && m.kind === 'user'
+                ? { ...m, workflow_name: workflowName, workflow_run_id: runId }
+                : m,
+            ),
+          )
+        })
       } else if (event.type === 'mode_changed') {
         const newSettings = { ...this._conversationSettings(), mode: event.mode }
         this.updateConversationSettings(newSettings).subscribe()
@@ -890,6 +907,8 @@ export class ChatService {
           token_count: m.token_count,
           token_delta: m.token_delta,
           context_excluded: m.context_excluded,
+          workflow_name: m.workflow_name,
+          workflow_run_id: m.workflow_run_id,
           ...siblingMeta,
         })
       } else if (m.role === 'assistant') {

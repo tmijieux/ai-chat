@@ -13,6 +13,7 @@ import {
   MessageForQuery,
   Workflow,
   WorkflowRunNode,
+  WorkflowRunStatusResponse,
   SystemPromptTemplate,
   TokenVisualizerHistoryMessage,
   TokenVisualizerPiece,
@@ -217,6 +218,20 @@ export class ApiService {
       `${BASE_URL}/workflow-runs/${workflowName}/${runId}/node`,
       { params: { path } },
     )
+  }
+
+  /** Fetch a run's own top-level status (running/done/failed/stopped) — used to reopen a past
+   * run into the run view from the message that started it (ADR-0011's "Deferred: resumability"). */
+  get_workflow_run_status(workflowName: string, runId: string) {
+    return this.http.get<WorkflowRunStatusResponse>(`${BASE_URL}/workflow-runs/${workflowName}/${runId}`)
+  }
+
+  /** Link a message to the workflow run it started, once the engine's run_id is known. */
+  patch_message_workflow_run(msgId: string, workflowName: string, workflowRunId: string) {
+    return this.http.patch(`${BASE_URL}/messages/${msgId}/workflow-run`, {
+      workflow_name: workflowName,
+      workflow_run_id: workflowRunId,
+    })
   }
 
   search_files(workspace: string, query: string) {

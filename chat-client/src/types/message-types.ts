@@ -43,6 +43,11 @@ export type Message = {
   has_children?: boolean
   images?: ImageAttachment[]
   is_degenerate?: boolean
+  /** Set on the user message that started a workflow run, once the engine's run_id is known
+   * (see ChatService's 'workflow_start' handling) — lets the run view be reopened after a
+   * reload. Both null/undefined for a message that isn't a workflow invocation. */
+  workflow_name?: string | null
+  workflow_run_id?: string | null
 }
 
 export type ApiDone =
@@ -278,6 +283,11 @@ export type WorkflowRunNodeChild = {
   /** 'loop_item' for a loop-item-number directory (e.g. "11"), which has no stage type of its own. */
   stage_type: WorkflowStageType | 'loop_item' | null
   status: WorkflowStageStatus | null
+  /** Set for a 'loop_item' child — the loop's real item count, known from the moment any item
+   * dispatches. Lets a run reopened from disk draw every pending dot up front (see
+   * workflow-run-panel.component.ts's loopItemsFor), not just the ones that ran before a stop or
+   * failure cut the loop short. Undefined/null for a plain stage child. */
+  item_total?: number | null
 }
 
 /** One persisted attempt's full transcript, as returned by GET /api/workflow-runs/.../node. */
@@ -311,6 +321,18 @@ export type WorkflowRunNode = {
   attempts: WorkflowRunNodeAttempt[]
   item_result: { item_number: number; item_total: number; success: boolean; attempts_used: number; item_result: unknown } | null
   children: WorkflowRunNodeChild[]
+}
+
+/** Response from GET /api/workflow-runs/{workflow_name}/{run_id} — the run's own top-level
+ * status, as WorkflowRunRecorder._write_run_meta persists it into run.json. */
+export type WorkflowRunStatusResponse = {
+  run_id: string
+  status: 'running' | 'done' | 'failed' | 'stopped'
+  user_message: string
+  failed_path?: string
+  /** The declared stage tree, persisted alongside status (see WorkflowRunRecorder._nodes) so a
+   * run reopened from disk can draw the whole plan up front, same as the live view does. */
+  nodes: WorkflowNode[]
 }
 
 // ---------------------------------------------------------------------------
@@ -410,6 +432,10 @@ export type DisplayMessage =
       token_count?: number | null
       token_delta?: number | null
       context_excluded?: boolean
+      /** Set once the workflow this message started has an engine run_id — drives the "Reopen
+       * workflow run" message action, which stays hidden until both are non-null. */
+      workflow_name?: string | null
+      workflow_run_id?: string | null
     } & SiblingMeta)
   | ({
       kind: 'assistant'

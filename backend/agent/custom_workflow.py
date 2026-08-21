@@ -296,14 +296,15 @@ class CustomWorkflowOrchestrator:
         # Same fallback _run_workflow applies to slots["user_message"] below — persisted here too
         # (rather than the raw user_message) so a later resume reseeds the identical value.
         effective_message = user_message if user_message.strip() != "" else f"/{self._workflow.name}"
-        self._recorder = WorkflowRunRecorder(self._workflow.name, run_id, user_message=effective_message)
+        nodes = _serialize_stage_nodes(self._workflow.stages)
+        self._recorder = WorkflowRunRecorder(self._workflow.name, run_id, user_message=effective_message, nodes=nodes)
         recording_session = _RecordingSession(session, self._recorder, self._active_item_stack)
 
         await session.emit({
             "type": "workflow_start",
             "workflow_name": self._workflow.name,
             "run_id": run_id,
-            "nodes": _serialize_stage_nodes(self._workflow.stages),
+            "nodes": nodes,
         })
         try:
             await self._run_workflow(recording_session, user_message, messages)

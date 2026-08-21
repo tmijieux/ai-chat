@@ -19,7 +19,7 @@
 
 - **`respond` stage redesign** — full plan saved at `docs/handoff_respond_stage_redesign.md`. Fixes a real bug (workflow run view stuck flashing on the respond/synthesis stage, plus a context-overflow crash in `sync-locale-directory`) by making "does this respond stage talk to the user or just produce a value" a fact of the orchestrator's context (top-level vs. nested sub-workflow) instead of something the YAML declares or the backend has to paper over with a session proxy. Supersedes the interim fix already committed in `66049aa`.
 
-- **Resumable/editable workflow runs** — builds on ADR-0011 (persisted run history). Design worked out, not yet implemented. See handoff doc for details.
+- **Resumable/editable workflow runs** — builds on ADR-0011 (persisted run history). Design worked out at `~/.claude/plans/enumerated-rolling-bee.md` (4 phases). Done: engine core (slot reconstruction, `assume_independent`), the stop button giving a run a real "stopped" state instead of hanging, and reopening a past run from the message that started it after a page reload. Still open: the actual "Resume from here" trigger UX (phase 4) — the engine can resume in place but nothing in the UI calls it yet.
 
 - **map-codebase: file-list preview before the scan loop starts** — deferred out of the ADR-0011 work, not started. See handoff doc for details.
 

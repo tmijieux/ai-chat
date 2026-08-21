@@ -10,6 +10,7 @@ import {
   WorkflowRunNode,
   WorkflowSelectedDetail,
   WorkflowStageState,
+  WorkflowStageType,
 } from '../types/message-types'
 
 /**
@@ -211,6 +212,79 @@ export class WorkflowRunService {
     this.selectedFetchedAddress.set(null)
     this.selectedLoopItem.set(null)
     this.selectedExecutionId.set(null)
+  }
+
+  /**
+   * Reopen a past run from disk — independent of the live event stream, so the run view survives
+   * a page reload (ADR-0011's "Deferred: resumability"). There is no live execution_by_id here,
+   * so it's synthesized from the root's persisted children (one disk fetch) purely so the
+   * existing static-row rendering — built for the live view — works unchanged for a top-level
+   * stage's status and click-to-select. A top-level loop's own dot grid needs its own children
+   * fetched too (loopItemsFor in workflow-run-panel.component.ts falls back to disk for that);
+   * everything deeper than one level already goes through the existing fetched-row browsing that
+   * ADR-0011 built for live runs, so no further special-casing is needed past this point.
+   */
+  async openPersistedRun(workflowName: string, runId: string): Promise<void> {
+    const status = await firstValueFrom(this.apiSvc.get_workflow_run_status(workflowName, runId))
+    this.activityOrder = []
+    this.selectedExecutionId.set(null)
+    this.selectedLoopItem.set(null)
+    this.selectedFetchedAddress.set(null)
+    this._fetchedNodes.set(new Map())
+    this._expandedAddresses.set(new Set())
+    this._pendingAddresses.set(new Set())
+    this._run.set({
+      workflow_name: workflowName,
+      run_id: runId,
+      status: status.status === 'failed' ? 'error' : status.status,
+      started_at: Date.now(),
+      finished_at: status.status === 'running' ? null : Date.now(),
+      nodes: status.nodes,
+      execution_by_id: {},
+      latest_execution_by_path: {},
+      loop_items: {},
+      current_execution_id: null,
+      total_tokens_processed: 0,
+    })
+    this.viewOpen.set(true)
+
+    const root = await this.ensureFetched([])
+    if (root === null) {
+      return
+    }
+    const executionById: Record<string, WorkflowStageState> = {}
+    const latestExecutionByPath: Record<string, string> = {}
+    for (const child of root.children) {
+      if (child.status === null) {
+        continue
+      }
+      const executionId = `disk:${child.segment}`
+      executionById[executionId] = {
+        path: child.segment,
+        execution_id: executionId,
+        status: child.status,
+        stage_type: (child.stage_type ?? 'coordinator') as WorkflowStageType,
+        invocation_number: 1,
+        item_number: null,
+        item_total: null,
+        attempt_number: null,
+        attempt_total: null,
+        iteration_count: 0,
+        context_tokens: null,
+        response_tokens: 0,
+        result: null,
+        duration_ms: null,
+        activity: [],
+        detail_dropped: true,
+      }
+      latestExecutionByPath[child.segment] = executionId
+      if (child.stage_type === 'loop') {
+        void this.ensureFetched([child.segment])
+      }
+    }
+    this._run.update((run) =>
+      run === null ? null : { ...run, execution_by_id: executionById, latest_execution_by_path: latestExecutionByPath },
+    )
   }
 
   private _handle(event: AgentEvent): void {

@@ -358,6 +358,13 @@ export class ChatComponent implements OnDestroy {
     await this.chatSvc.deleteMessage(msgId, subtree)
   }
 
+  /** Reopens a past workflow run from disk — the run view survives a page reload this way, since
+   * it's otherwise built purely from the live event stream (ADR-0011's "Deferred: resumability"). */
+  async onReopenWorkflowRun(workflowName: string, workflowRunId: string): Promise<void> {
+    this.openMenuId.set(null)
+    await this.workflowSvc.openPersistedRun(workflowName, workflowRunId)
+  }
+
   // -------------------------------------------------------------------------
   // Sibling navigation
   // -------------------------------------------------------------------------

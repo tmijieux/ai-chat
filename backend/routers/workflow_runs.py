@@ -85,6 +85,7 @@ async def get_workflow_run_node(workflow_name: str, run_id: str, path: str = "")
         child_item_result = _read_json(child / "item_result.json")
         if child_item_result is None:
             child_status = None
+            item_total = None
         else:
             # "status" distinguishes a stopped item from a genuinely failed one (see
             # WorkflowRunRecorder.on_loop_item_exit); a run persisted before that field existed
@@ -92,10 +93,15 @@ async def get_workflow_run_node(workflow_name: str, run_id: str, path: str = "")
             child_status = child_item_result.get("status")
             if child_status is None:
                 child_status = "done" if child_item_result.get("success") else "failed"
+            # Any dispatched item knows the loop's real item_total — surfaced here so a run
+            # reopened from disk (no live loop_items) can still draw every pending dot up front,
+            # not just the ones that happened to run before a stop/failure cut the loop short.
+            item_total = child_item_result.get("item_total")
         entries.append((int(child.name), {
             "segment": child.name,
             "stage_type": "loop_item",
             "status": child_status,
+            "item_total": item_total,
         }))
     entries.sort(key=lambda entry: entry[0])
     children = [child for _sort_key, child in entries]

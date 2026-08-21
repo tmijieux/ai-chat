@@ -27,6 +27,13 @@ class UpdateTokenCount(BaseModel):
     token_delta: int | None = None
 
 
+class UpdateWorkflowRun(BaseModel):
+    """Links a message to the workflow run it started, once the engine's run_id is known —
+    see ADR-0011's "Deferred: resumability" and PATCH /api/messages/{id}/workflow-run."""
+    workflow_name: str
+    workflow_run_id: str
+
+
 class Conversation(BaseModel):
     messages: list[Message]
 

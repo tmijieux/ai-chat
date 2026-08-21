@@ -47,7 +47,7 @@ class WorkflowRunRecorder:
     same run directory.
     """
 
-    def __init__(self, workflow_name: str, run_id: str, user_message: str = "") -> None:
+    def __init__(self, workflow_name: str, run_id: str, user_message: str = "", nodes: list[dict] | None = None) -> None:
         self.run_id = run_id
         self._root = WORKFLOW_RUNS_DIR / workflow_name / run_id
         self._root.mkdir(parents=True, exist_ok=True)
@@ -56,6 +56,11 @@ class WorkflowRunRecorder:
         # Persisted into run.json (see _write_run_meta) so a resumed run can reseed
         # slots["user_message"] from disk without the caller supplying it again.
         self._user_message = user_message
+        # The declared stage tree (custom_workflow._serialize_stage_nodes), persisted alongside
+        # status so a run reopened from disk (no live workflow_start event) can still draw the
+        # whole plan up front, same as the live view does — see routers/workflow_runs.py's status
+        # endpoint and workflow-run.service.ts's openPersistedRun.
+        self._nodes = nodes if nodes is not None else []
         # First-seen order of each address among its own siblings — directory names sort
         # alphabetically ("chunk_notes_loop" before "chunk_the_file"), which has nothing to do
         # with declared/execution order, so meta.json carries this instead for the read side to
@@ -71,11 +76,11 @@ class WorkflowRunRecorder:
         Reconstructs `_sequence_by_address`/`_next_sequence_by_parent` from every stage's
         meta.json so redispatched stages keep their original `sequence` and any genuinely new
         siblings still get correctly incrementing ones, and recovers the original `user_message`
-        from run.json so the caller doesn't have to supply it again.
+        and declared `nodes` tree from run.json so the caller doesn't have to supply them again.
         """
         root = WORKFLOW_RUNS_DIR / workflow_name / run_id
         run_meta = json.loads((root / "run.json").read_text(encoding="utf-8"))
-        instance = cls(workflow_name, run_id, user_message=run_meta.get("user_message", ""))
+        instance = cls(workflow_name, run_id, user_message=run_meta.get("user_message", ""), nodes=run_meta.get("nodes"))
         for meta_path in root.rglob("meta.json"):
             address = meta_path.parent.relative_to(root).as_posix().split("/")
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -105,7 +110,12 @@ class WorkflowRunRecorder:
         self._write_run_meta(status="stopped", failed_path=self.last_failed_address)
 
     def _write_run_meta(self, status: str, failed_path: str | None = None) -> None:
-        payload: dict[str, Any] = {"run_id": self.run_id, "status": status, "user_message": self._user_message}
+        payload: dict[str, Any] = {
+            "run_id": self.run_id,
+            "status": status,
+            "user_message": self._user_message,
+            "nodes": self._nodes,
+        }
         if failed_path is not None:
             payload["failed_path"] = failed_path
         (self._root / "run.json").write_text(

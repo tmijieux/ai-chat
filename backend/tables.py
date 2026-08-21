@@ -38,6 +38,11 @@ class Message(Base):
     is_degenerate = column(Boolean, nullable=False, default=False)
     # JSON blob for working memory messages (role=context_summary): structured sections persisted for folding
     working_memory_json = column(Text, nullable=True)
+    # Set on the user message that started a workflow run, once the engine's run_id is known —
+    # lets the run view be reopened from disk after a page reload (ADR-0011's "Deferred:
+    # resumability"). Both null for a message that isn't a workflow invocation.
+    workflow_name = column(String, nullable=True)
+    workflow_run_id = column(String, nullable=True)
 
 
 class Image(Base):
