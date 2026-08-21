@@ -446,6 +446,7 @@ class CustomWorkflowOrchestrator:
         if resume_cursor is not None:
             current = stage_index[resume_cursor[0]]
             pending_cursor: list[str] | None = resume_cursor[1:]
+            await self._replay_stages_before_resume(session, stages[:current], path_prefix)
         else:
             current = 0
             pending_cursor = None
@@ -467,6 +468,70 @@ class CustomWorkflowOrchestrator:
                 current = stage_index[jump_to]
             else:
                 current += 1
+
+    async def _replay_stages_before_resume(
+        self, session: AgentSession, stages: list[WorkflowStageDefinition], path_prefix: str
+    ) -> None:
+        """Re-tell the live event stream about every stage in `stages` — everything before the
+        resume point at this level, already reconstructed into `slots` by
+        `workflow_resume.reconstruct_slots` — so the frontend's live view (execution_by_id,
+        loop_items) knows they're actually done instead of defaulting every one of them to "not
+        started" once a fresh resume overwrites the run's live state with an empty one. Reuses
+        each stage's own originally-persisted execution_id/invocation_number rather than
+        allocating new ones — these invocations already happened and are being narrated, not
+        redispatched.
+
+        A stage never reached in the original run (a `skip_condition`'d branch never taken) has
+        nothing recorded and is silently left out — there is nothing to narrate. A stage that
+        finished as a `loop` also gets every one of its own items replayed the same way
+        `_run_loop`'s own disk-reuse path does.
+        """
+        for stage in stages:
+            path = path_prefix + stage.name
+            address = self._recorder.address_for(path, self._active_item_stack)
+            attempt_info = self._recorder.read_stage_attempt(address)
+            if attempt_info is None:
+                continue
+            meta, attempt = attempt_info
+            self._invocation_counters[path] = max(
+                self._invocation_counters.get(path, 0), attempt["invocation_number"]
+            )
+            await session.emit({
+                "type": "stage_enter",
+                "path": path,
+                "execution_id": attempt["execution_id"],
+                "stage_type": attempt["stage_type"],
+                "invocation_number": attempt["invocation_number"],
+                "item_number": attempt["item_number"],
+                "item_total": attempt["item_total"],
+                "attempt_number": attempt["attempt_number"],
+                "attempt_total": attempt["attempt_total"],
+            })
+            await session.emit({
+                "type": "stage_exit",
+                "path": path,
+                "execution_id": attempt["execution_id"],
+                "status": meta["status"],
+                "result": attempt["result"],
+                "duration_ms": attempt["duration_ms"],
+            })
+            if stage.type == "loop":
+                for item_number in self._recorder.list_item_numbers(address):
+                    await self._replay_loop_item(session, path, address, item_number)
+
+    async def _replay_loop_item(
+        self, session: AgentSession, path: str, loop_address: list[str], item_number: int
+    ) -> dict | None:
+        """Read one loop item's persisted result and re-emit it as `loop_item_exit` — a faithful
+        replay of what already happened, not a guess. Used both when a resumed loop reuses an
+        item instead of redispatching it (`_run_loop`) and when replaying a whole loop that
+        finished entirely before the resume point (`_replay_stages_before_resume`). Returns the
+        raw payload for the caller's own aggregate bookkeeping, or `None` if nothing is recorded.
+        """
+        item_payload = self._recorder.read_item_result(loop_address, item_number)
+        if item_payload is not None:
+            await session.emit({"type": "loop_item_exit", "path": path, **item_payload})
+        return item_payload
 
     def _next_execution_id(self, path: str) -> str:
         """Allocate a unique id for one invocation of a stage path (e.g. 'translate_loop.translate_chunk#41')."""
@@ -727,21 +792,16 @@ class CustomWorkflowOrchestrator:
             if loop_address is not None and item_number != resume_item_number:
                 is_before_resume = item_number < resume_item_number
                 if is_before_resume or stage.assume_independent:
-                    item_payload = session._recorder.read_item_result(loop_address, item_number)
+                    # Reused from disk, not redispatched — _replay_loop_item re-emits the item's
+                    # original loop_item_exit so the live view learns it's actually done instead
+                    # of defaulting it to a "pending, no result" placeholder forever.
+                    item_payload = await self._replay_loop_item(session, path, loop_address, item_number)
                     if item_payload is not None:
                         aggregated.append(item_payload["item_result"])
                         if item_payload["success"]:
                             succeeded_count += 1
                         else:
                             failed_count += 1
-                        # Reused from disk, not redispatched — but the live view only ever learns
-                        # about an item through this event, so without re-emitting it here a
-                        # reused item's dot stays at its default "pending, no result" placeholder
-                        # forever, even though it's actually long since settled. item_payload is
-                        # exactly the same shape this event originally wrote to disk (see
-                        # WorkflowRunRecorder.on_loop_item_exit), so this re-emit is a faithful
-                        # replay, not a guess.
-                        await session.emit({"type": "loop_item_exit", "path": path, **item_payload})
                         continue
                     # Nothing persisted for this item — either the original run never reached it
                     # (item strictly before the resume point but somehow not on disk) or nothing

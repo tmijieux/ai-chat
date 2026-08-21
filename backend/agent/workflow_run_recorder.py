@@ -165,6 +165,32 @@ class WorkflowRunRecorder:
             return None
         return json.loads(item_result_path.read_text(encoding="utf-8"))
 
+    def list_item_numbers(self, address: list[str]) -> list[int]:
+        """Every item-number directory recorded under a loop's own address, sorted numerically —
+        used to replay a whole loop's items (CustomWorkflowOrchestrator._replay_stages_before_resume).
+        """
+        loop_dir = self._root.joinpath(*address)
+        if not loop_dir.is_dir():
+            return []
+        return sorted(int(child.name) for child in loop_dir.iterdir() if child.is_dir() and child.name.isdigit())
+
+    def read_stage_attempt(self, address: list[str]) -> tuple[dict, dict] | None:
+        """Read one stage instance's own meta.json plus its latest attempt file — used to replay
+        an already-completed stage's stage_enter/stage_exit when resuming (see
+        CustomWorkflowOrchestrator._replay_stages_before_resume). None if nothing is recorded at
+        this address (e.g. a stage whose skip condition kept it from ever running).
+        """
+        node_dir = self._root.joinpath(*address)
+        meta_path = node_dir / "meta.json"
+        if not meta_path.exists():
+            return None
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        attempt_path = node_dir / f"attempt_{meta['attempt_count']}.json"
+        if not attempt_path.exists():
+            return None
+        attempt = json.loads(attempt_path.read_text(encoding="utf-8"))
+        return meta, attempt
+
     def _sequence_for(self, address: list[str]) -> int:
         key = "/".join(address)
         if key in self._sequence_by_address:
