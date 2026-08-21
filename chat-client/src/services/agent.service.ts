@@ -41,7 +41,7 @@ export class AgentService {
     this.ws.onmessage = (ev) => {
       const event: AgentEvent = JSON.parse(ev.data)
       this._events$.next(event)
-      if (event.type === 'done' || event.type === 'error') {
+      if (event.type === 'done' || event.type === 'error' || event.type === 'stopped') {
         this._running.set(false)
       }
     }
@@ -93,6 +93,9 @@ export class AgentService {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: 'abort' }))
     }
-    this._running.set(false)
+    // Not flipped here: the backend needs a moment to actually unwind the in-flight stage and
+    // emit its terminating event ('stopped', now that the workflow engine reliably produces one —
+    // see custom_workflow.py's CancelledError handling). Flipping this immediately let the chat
+    // input re-enable while the run panel behind it was still showing stale "running" state.
   }
 }

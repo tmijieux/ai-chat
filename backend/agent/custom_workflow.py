@@ -308,9 +308,9 @@ class CustomWorkflowOrchestrator:
         try:
             await self._run_workflow(recording_session, user_message, messages)
         except asyncio.CancelledError:
-            logger.info("[workflow:%s] aborted (CancelledError)", self._workflow.name)
-            self._recorder.mark_failed()
-            await session.emit({"type": "error", "message": f"Workflow '{self._workflow.name}' was aborted"})
+            logger.info("[workflow:%s] stopped by user (CancelledError)", self._workflow.name)
+            self._recorder.mark_stopped()
+            await session.emit({"type": "stopped"})
         except aiohttp.ClientConnectorError as exc:
             logger.error("[workflow:%s] LLM backend connection error: %s", self._workflow.name, exc)
             self._recorder.mark_failed()
@@ -374,9 +374,9 @@ class CustomWorkflowOrchestrator:
             logger.info("[workflow:%s] all stages complete (resumed)", self._workflow.name)
             await session.emit({"type": "done", "finished_without_response": False})
         except asyncio.CancelledError:
-            logger.info("[workflow:%s] aborted (CancelledError)", self._workflow.name)
-            self._recorder.mark_failed()
-            await session.emit({"type": "error", "message": f"Workflow '{self._workflow.name}' was aborted"})
+            logger.info("[workflow:%s] stopped by user (CancelledError)", self._workflow.name)
+            self._recorder.mark_stopped()
+            await session.emit({"type": "stopped"})
         except aiohttp.ClientConnectorError as exc:
             logger.error("[workflow:%s] LLM backend connection error: %s", self._workflow.name, exc)
             self._recorder.mark_failed()
@@ -550,6 +550,12 @@ class CustomWorkflowOrchestrator:
         started_at = time.monotonic()
         try:
             outcome = await self._run_by_type(stage, session, messages, slots, path, execution_id, resume_cursor)
+        except asyncio.CancelledError:
+            # CancelledError is a BaseException, not an Exception — without this branch it skips
+            # the exit-emit entirely, leaving this invocation's meta.json/live row stuck at
+            # "running" forever (the run view keeps it spinning even though nothing is happening).
+            await self._emit_stage_exit(session, path, execution_id, "stopped", None, started_at)
+            raise
         except Exception:
             await self._emit_stage_exit(session, path, execution_id, "failed", None, started_at)
             raise
@@ -756,6 +762,12 @@ class CustomWorkflowOrchestrator:
                     slots.pop(inner.name, None)
 
             item_success = False
+            # Set when the item's dispatch is cancelled (stop button) rather than merely failing —
+            # the item must still be closed out below (its dot stops spinning) but must not be
+            # retried or treated as an on_max_retries failure; the original CancelledError is
+            # re-raised once the item is closed out, so it keeps propagating up to abort the loop
+            # and the whole workflow, same as it would have without this loop catching it at all.
+            cancelled_exc: asyncio.CancelledError | None = None
             # Pushed for the whole item (every attempt), not per-attempt — a retry keeps the same
             # item_number, and this stack exists so WorkflowRunRecorder can address a nested stage
             # on disk by its full item ancestry (see _active_item_stack's docstring in __init__).
@@ -799,6 +811,14 @@ class CustomWorkflowOrchestrator:
                         # run instead of burning every remaining attempt against a check that can
                         # never pass.
                         raise
+                    except asyncio.CancelledError as exc:
+                        # The inner _dispatch already emitted its own stage_exit(stopped) for
+                        # whichever inner stage was actually in flight — this item as a whole still
+                        # needs its own loop_item_exit below so its dot stops spinning too. Stop
+                        # attempting (not a retry-then-continue case) and fall out of the attempt
+                        # loop to close the item out.
+                        cancelled_exc = exc
+                        break
                     except Exception as exc:
                         # An inner stage (e.g. the model failing to call its required finish tool)
                         # raises instead of returning — treat that as a failed attempt so it goes
@@ -824,6 +844,11 @@ class CustomWorkflowOrchestrator:
             # separate stage_enter/stage_exit stream after the fact.
             item_result = _collect_inner_results(stage, slots, item, item_success) if stage.over != "" else None
 
+            # "status" is the item's own real terminal state — distinct from "success" (a plain
+            # bool the aggregate/resume logic still keys off) because a stopped item must render
+            # differently from a genuinely failed one, same as stage_exit's status string.
+            item_status = "stopped" if cancelled_exc is not None else ("done" if item_success else "failed")
+
             # item_result is emitted in full here too, same reasoning as _emit_stage_exit's result —
             # truncated only for the copy _RecordingSession forwards to the real session.
             await session.emit({
@@ -832,9 +857,16 @@ class CustomWorkflowOrchestrator:
                 "item_number": item_number,
                 "item_total": item_total,
                 "success": item_success,
+                "status": item_status,
                 "attempts_used": attempts_used,
                 "item_result": item_result,
             })
+
+            if cancelled_exc is not None:
+                # The item is closed out above; the loop (and the whole workflow) is being torn
+                # down, so — same as any other uncaught exception escaping this loop — the
+                # remaining items and the aggregate write below are skipped.
+                raise cancelled_exc
 
             if not item_success:
                 if stage.on_max_retries == "abort_workflow":

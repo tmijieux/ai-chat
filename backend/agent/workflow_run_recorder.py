@@ -97,6 +97,13 @@ class WorkflowRunRecorder:
     def mark_failed(self) -> None:
         self._write_run_meta(status="failed", failed_path=self.last_failed_address)
 
+    def mark_stopped(self) -> None:
+        """User-requested cancellation, distinct from `mark_failed` so a stopped run doesn't look
+        like a crash. `last_failed_address` doubles as the resume point here too — see
+        `on_stage_exit`, which now tracks it for a "stopped" stage the same way as a failed one.
+        """
+        self._write_run_meta(status="stopped", failed_path=self.last_failed_address)
+
     def _write_run_meta(self, status: str, failed_path: str | None = None) -> None:
         payload: dict[str, Any] = {"run_id": self.run_id, "status": status, "user_message": self._user_message}
         if failed_path is not None:
@@ -189,7 +196,7 @@ class WorkflowRunRecorder:
         directory = self._dir_for(address)
         self._write_meta(directory, address, record)
         self._write_attempt(directory, record)
-        if record.status == "failed":
+        if record.status in ("failed", "stopped"):
             self.last_failed_address = "/".join(address)
 
     def on_loop_item_exit(self, event: dict, active_item_stack: list[tuple[str, int]]) -> None:
@@ -199,6 +206,7 @@ class WorkflowRunRecorder:
             "item_number": event["item_number"],
             "item_total": event["item_total"],
             "success": event["success"],
+            "status": event["status"],
             "attempts_used": event["attempts_used"],
             "item_result": event["item_result"],
         }

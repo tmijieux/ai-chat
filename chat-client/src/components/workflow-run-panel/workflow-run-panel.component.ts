@@ -161,7 +161,7 @@ export class WorkflowRunPanelComponent implements OnDestroy {
         rows.push(...this._buildStaticRows(node.children, depth + 1, isFollowing))
       }
       for (const item of items) {
-        if (item.status !== 'done' && item.status !== 'failed') {
+        if (item.status !== 'done' && item.status !== 'failed' && item.status !== 'stopped') {
           continue
         }
         const address = [...node.path.split('.'), String(item.item_number)]
@@ -233,6 +233,7 @@ export class WorkflowRunPanelComponent implements OnDestroy {
     if (status === 'done') { return '✓' }
     if (status === 'failed') { return '✗' }
     if (status === 'skipped') { return '⊘' }
+    if (status === 'stopped') { return '■' }
     return '○'
   }
 
@@ -241,6 +242,7 @@ export class WorkflowRunPanelComponent implements OnDestroy {
     if (status === 'done') { return 'wf-status-done' }
     if (status === 'failed') { return 'wf-status-failed' }
     if (status === 'skipped') { return 'wf-status-skipped' }
+    if (status === 'stopped') { return 'wf-status-stopped' }
     return 'wf-status-pending'
   }
 
@@ -248,6 +250,7 @@ export class WorkflowRunPanelComponent implements OnDestroy {
     if (item.status === 'running') { return 'wf-dot wf-dot-running' }
     if (item.status === 'done') { return 'wf-dot wf-dot-done' }
     if (item.status === 'failed') { return 'wf-dot wf-dot-failed' }
+    if (item.status === 'stopped') { return 'wf-dot wf-dot-stopped' }
     return 'wf-dot wf-dot-pending'
   }
 
@@ -264,12 +267,12 @@ export class WorkflowRunPanelComponent implements OnDestroy {
     if (items.length === 0) {
       return 0
     }
-    const settled = items.filter((item) => item.status === 'done' || item.status === 'failed').length
+    const settled = items.filter((item) => item.status === 'done' || item.status === 'failed' || item.status === 'stopped').length
     return Math.round((settled / items.length) * 100)
   }
 
   loopSettledCount(node: WorkflowNode): number {
-    return this.loopItemsFor(node).filter((item) => item.status === 'done' || item.status === 'failed').length
+    return this.loopItemsFor(node).filter((item) => item.status === 'done' || item.status === 'failed' || item.status === 'stopped').length
   }
 
   dotTitle(item: WorkflowLoopItemState): string {
@@ -400,7 +403,7 @@ export class WorkflowRunPanelComponent implements OnDestroy {
    * on disk yet, so it falls back to the existing live "loop_item" rendering. */
   selectLoopItem(node: WorkflowNode, item: WorkflowLoopItemState): void {
     const address = [...node.path.split('.'), String(item.item_number)]
-    if (item.status === 'done' || item.status === 'failed') {
+    if (item.status === 'done' || item.status === 'failed' || item.status === 'stopped') {
       this.workflowSvc.selectFetched(address)
       this.workflowSvc.toggleExpand(address)
       return
@@ -430,7 +433,7 @@ export class WorkflowRunPanelComponent implements OnDestroy {
   }
 
   fetchedLoopSettledCount(items: { status: WorkflowStageStatus | null }[]): number {
-    return items.filter((item) => item.status === 'done' || item.status === 'failed').length
+    return items.filter((item) => item.status === 'done' || item.status === 'failed' || item.status === 'stopped').length
   }
 
   fetchedLoopDonePercent(items: { status: WorkflowStageStatus | null }[]): number {
@@ -442,6 +445,7 @@ export class WorkflowRunPanelComponent implements OnDestroy {
 
   fetchedDotClass(status: WorkflowStageStatus | null): string {
     if (status === 'failed') { return 'wf-dot wf-dot-failed' }
+    if (status === 'stopped') { return 'wf-dot wf-dot-stopped' }
     if (status === 'done') { return 'wf-dot wf-dot-done' }
     return 'wf-dot wf-dot-pending'
   }

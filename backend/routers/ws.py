@@ -158,11 +158,11 @@ async def _run_agent_event_loop(
         while True:
             event = await session.outbound.get()
             await websocket.send_json(event)
-            # Only a top-level done/error ends the run. Events tagged with _pipeline_stage come
-            # from a workflow sub-stage: a stage failing (e.g. not calling its finish tool) is
+            # Only a top-level done/error/stopped ends the run. Events tagged with _pipeline_stage
+            # come from a workflow sub-stage: a stage failing (e.g. not calling its finish tool) is
             # recoverable and about to be retried by the loop, so treating it as terminal here
             # would cancel the whole workflow mid-retry.
-            if event["type"] in ("done", "error") and event.get("_pipeline_stage") is None:
+            if event["type"] in ("done", "error", "stopped") and event.get("_pipeline_stage") is None:
                 return
 
     send_task = asyncio.create_task(_send_events_from_agent_to_frontend())

@@ -83,10 +83,19 @@ async def get_workflow_run_node(workflow_name: str, run_id: str, path: str = "")
         # than meta.json, which only stage directories have. Sorted numerically by item number,
         # not the directory name string ("10" sorts before "2" as text).
         child_item_result = _read_json(child / "item_result.json")
+        if child_item_result is None:
+            child_status = None
+        else:
+            # "status" distinguishes a stopped item from a genuinely failed one (see
+            # WorkflowRunRecorder.on_loop_item_exit); a run persisted before that field existed
+            # falls back to the plain success/fail derivation.
+            child_status = child_item_result.get("status")
+            if child_status is None:
+                child_status = "done" if child_item_result.get("success") else "failed"
         entries.append((int(child.name), {
             "segment": child.name,
             "stage_type": "loop_item",
-            "status": None if child_item_result is None else ("done" if child_item_result.get("success") else "failed"),
+            "status": child_status,
         }))
     entries.sort(key=lambda entry: entry[0])
     children = [child for _sort_key, child in entries]

@@ -196,7 +196,7 @@ export type WorkflowNode = {
   children: WorkflowNode[]
 }
 
-export type WorkflowStageStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+export type WorkflowStageStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped' | 'stopped'
 
 /** One piece of activity produced inside a stage, in arrival order. */
 export type WorkflowActivityEntry =
@@ -231,7 +231,7 @@ export type WorkflowStageState = {
 
 export type WorkflowLoopItemState = {
   item_number: number
-  status: 'pending' | 'running' | 'done' | 'failed'
+  status: 'pending' | 'running' | 'done' | 'failed' | 'stopped'
   attempts_used: number
   /**
    * What this item actually produced: {item: <the loop variable>, success, <inner stage name>:
@@ -256,7 +256,7 @@ export type WorkflowRun = {
   workflow_name: string
   /** Identifies this run's persisted directory on disk (see GET /api/workflow-runs) — ADR-0011. */
   run_id: string
-  status: 'running' | 'done' | 'error'
+  status: 'running' | 'done' | 'error' | 'stopped'
   started_at: number
   /** Set when the run ends, so the elapsed display freezes instead of counting forever. */
   finished_at: number | null
@@ -358,7 +358,7 @@ export type AgentEvent = (
       type: 'stage_exit'
       path: string
       execution_id: string
-      status: 'done' | 'failed' | 'skipped'
+      status: 'done' | 'failed' | 'skipped' | 'stopped'
       result: unknown
       duration_ms: number
     }
@@ -368,11 +368,13 @@ export type AgentEvent = (
       item_number: number
       item_total: number
       success: boolean
+      status: 'done' | 'failed' | 'stopped'
       attempts_used: number
       item_result: unknown
     }
   | { type: 'done'; finished_without_response?: boolean }
   | { type: 'error'; message: string }
+  | { type: 'stopped' }
 ) & { _pipeline_stage?: string; _workflow_execution?: string }
 
 export type AgentEventType = AgentEvent['type']

@@ -262,13 +262,14 @@ export class WorkflowRunService {
       this._onLoopItemExit(event)
       return
     }
-    if ((event.type === 'done' || event.type === 'error') && event._pipeline_stage === undefined) {
+    if ((event.type === 'done' || event.type === 'error' || event.type === 'stopped') && event._pipeline_stage === undefined) {
+      const status = event.type === 'done' ? 'done' : event.type === 'stopped' ? 'stopped' : 'error'
       this._run.update((run) =>
         run === null
           ? null
           : {
               ...run,
-              status: event.type === 'done' ? 'done' : 'error',
+              status,
               finished_at: Date.now(),
               current_execution_id: null,
             },
@@ -343,7 +344,7 @@ export class WorkflowRunService {
         item.item_number === event.item_number
           ? {
               item_number: item.item_number,
-              status: event.success ? ('done' as const) : ('failed' as const),
+              status: event.status,
               attempts_used: event.attempts_used,
               result: event.item_result,
             }

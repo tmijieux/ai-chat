@@ -323,11 +323,20 @@ async def run_stage(
         # _run_stage_loop is an independent task, so cancelling whoever awaits this stage does not
         # touch it: the CancelledError surfaces at the queue read above and unwinds past here while
         # the loop keeps driving the LLM. That orphaned task was why aborting a run (or reloading
-        # the page) left the in-flight generation running to completion. Not awaited — we are
-        # already unwinding, and stopping it is what matters.
+        # the page) left the in-flight generation running to completion.
         if not loop_task.done():
             logger.info("[pipeline:%s] stage abandoned — cancelling its loop task", numbered_name)
             loop_task.cancel()
+            # Await it (swallowing the CancelledError we just requested) instead of firing and
+            # forgetting — an un-awaited task that ends in a real exception (not a clean cancel)
+            # is never retrieved by anyone, so asyncio logs it later as a stray "Task exception
+            # was never retrieved" traceback, disconnected in time from the stop that caused it.
+            try:
+                await loop_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("[pipeline:%s] abandoned loop task raised during cancellation", numbered_name)
 
     if sub_session.finish_result is None:
         msg = f"[pipeline:{numbered_name}] stage did not call its finish tool — aborting"

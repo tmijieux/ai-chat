@@ -581,6 +581,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .wf-status-done    { color: #4ade80; }
 .wf-status-failed  { color: #f87171; }
 .wf-status-skipped { color: #6b7280; }
+.wf-status-stopped { color: #fbbf24; }
 .wf-row-selected   { background-color: #1e293b; }
 
 /* Loop item grid: one dot per item, so hundreds of items stay scannable. */
@@ -595,6 +596,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .wf-dot-running { background: #818cf8; animation: pulse 1.2s ease-in-out infinite; }
 .wf-dot-done    { background: #4ade80; }
 .wf-dot-failed  { background: #f87171; }
+.wf-dot-stopped { background: #fbbf24; }
 .wf-dot-selected { box-shadow: 0 0 0 2px #f8fafc; }
 
 .wf-progress-track {
