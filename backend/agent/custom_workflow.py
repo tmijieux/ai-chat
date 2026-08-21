@@ -734,6 +734,14 @@ class CustomWorkflowOrchestrator:
                             succeeded_count += 1
                         else:
                             failed_count += 1
+                        # Reused from disk, not redispatched — but the live view only ever learns
+                        # about an item through this event, so without re-emitting it here a
+                        # reused item's dot stays at its default "pending, no result" placeholder
+                        # forever, even though it's actually long since settled. item_payload is
+                        # exactly the same shape this event originally wrote to disk (see
+                        # WorkflowRunRecorder.on_loop_item_exit), so this re-emit is a faithful
+                        # replay, not a guess.
+                        await session.emit({"type": "loop_item_exit", "path": path, **item_payload})
                         continue
                     # Nothing persisted for this item — either the original run never reached it
                     # (item strictly before the resume point but somehow not on disk) or nothing
