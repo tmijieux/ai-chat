@@ -27,4 +27,6 @@ Considered making the frontend always render from the persisted tree, live run i
 
 ## Deferred: resumability
 
-This ADR covers persistence and browsability only. Actually resuming a stuck or aborted run — reconstructing the slot registry from disk, letting the operator edit a completed node's result or skip a stage, and re-executing forward from an explicit point, with loop siblings treated as independent and thus skippable by default — was designed alongside this but is deliberately not built yet, pending validation that the persisted format holds up in practice first. See `todo.md`.
+This ADR covers persistence and browsability only. Actually resuming a stuck or aborted run — reconstructing the slot registry from disk, letting the operator edit a completed node's result or skip a stage, and re-executing forward from an explicit point, with loop siblings treated as independent and thus skippable by default — was designed alongside this but was deliberately not built yet, pending validation that the persisted format held up in practice first.
+
+**Update:** validated and built, across 4 phases — see `~/.claude/plans/enumerated-rolling-bee.md` for the implementation plan and `CONTEXT.md`'s "Resuming a run" for the user-facing behavior.

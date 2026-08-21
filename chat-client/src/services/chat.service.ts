@@ -361,6 +361,22 @@ export class ChatService {
     this.agentSvc.abort()
   }
 
+  /** Resume a stopped/failed workflow run from the given on-disk address (ADR-0011's "Deferred:
+   * resumability") — finds the message that originally started this run so streamed activity,
+   * and a possible final respond-stage answer, files under the same turn a fresh run would use. */
+  resumeWorkflowRun(workflowName: string, runId: string, address: string[]): void {
+    const convId = this._conversationId()
+    if (convId === undefined) {
+      return
+    }
+    const triggeringMessage = this._messages().find((m) => m.kind === 'user' && m.workflow_run_id === runId)
+    if (triggeringMessage === undefined) {
+      return
+    }
+    this._subscribeToAgentEvents(triggeringMessage.id)
+    this.agentSvc.startResume(convId, workflowName, runId, address)
+  }
+
   acceptPlan(planId: string, payload: { status: string; mode?: string; comment?: string; feedback?: string }): void {
     this.agentSvc.acceptPlan(planId, payload)
     const resolution = payload.status === 'accepted'

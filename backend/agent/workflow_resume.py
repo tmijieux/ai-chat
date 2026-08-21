@@ -71,6 +71,38 @@ def next_address_after(run_root: Path, address: list[str]) -> list[str] | None:
     return next_address_after(run_root, address[:-1])
 
 
+def _status_at(run_root: Path, address: list[str]) -> str | None:
+    """Read one node's own persisted status — `meta.json` for a stage, `item_result.json` for a
+    loop item (same distinction `next_address_after` makes) — or `None` if nothing is recorded
+    there at all.
+    """
+    node_dir = run_root.joinpath(*address)
+    meta = _read_json(node_dir / "meta.json")
+    if meta is not None:
+        return meta.get("status")
+    item_result = _read_json(node_dir / "item_result.json")
+    if item_result is not None:
+        status = item_result.get("status")
+        if status is not None:
+            return status
+        return "done" if item_result.get("success") else "failed"
+    return None
+
+
+def resolve_resume_address(run_root: Path, selected_address: list[str]) -> list[str] | None:
+    """Translate a user-selected node's address into where dispatch should actually resume,
+    based on that node's own persisted status (see ADR-0011's "Deferred: resumability" and the
+    resumable-workflow-runs plan's Phase 4): a `failed`/`stopped` node — nothing trustworthy
+    persisted there — is redone in place (its own address, unchanged); a `done`/`skipped` node
+    resumes with whatever ran after it (`next_address_after`). Returns `None` if there's nothing
+    left to resume (the selected node was the last thing in the whole run and it's done).
+    """
+    status = _status_at(run_root, selected_address)
+    if status in ("failed", "stopped"):
+        return selected_address
+    return next_address_after(run_root, selected_address)
+
+
 def _walk_stages(
     directory: Path,
     stage_defs: list[WorkflowStageDefinition],

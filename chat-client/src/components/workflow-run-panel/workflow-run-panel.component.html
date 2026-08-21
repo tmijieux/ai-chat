@@ -153,9 +153,16 @@
           <span class="text-10 font-mono" [class]="statusClass(detail.item.status)">{{ statusGlyph(detail.item.status) }} {{ detail.item.status }}</span>
         }
         @if (fetchedAddress !== null || workflowSvc.selectedExecutionId() !== null || workflowSvc.selectedLoopItem() !== null) {
-          <button class="ml-auto text-10 text-indigo-400 cursor-pointer font-mono" (click)="followRunningStage()">
-            follow running
-          </button>
+          <div class="ml-auto flex items-center gap-2">
+            @if (canResumeFromHere()) {
+              <button class="text-10 text-emerald-400 cursor-pointer font-mono" (click)="resumeFromHere()">
+                resume from here
+              </button>
+            }
+            <button class="text-10 text-indigo-400 cursor-pointer font-mono" (click)="followRunningStage()">
+              follow running
+            </button>
+          </div>
         }
       </div>
 

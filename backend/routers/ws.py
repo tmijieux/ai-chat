@@ -14,6 +14,8 @@ from agent.compress import apply_db_compressions
 from agent.pipeline import PipelineOrchestrator
 from agent.workflow_loader import load_workflow
 from agent.custom_workflow import CustomWorkflowOrchestrator
+from agent.workflow_resume import resolve_resume_address
+from agent.workflow_run_recorder import WORKFLOW_RUNS_DIR
 from agent.tools import TOOL_REGISTRY, PLAN_MODE_TOOLS, CONVERSATIONAL_TOOLS, get_ollama_tool_list
 from agent.compress import build_inference_context
 from conv_helpers import (
@@ -114,8 +116,19 @@ def _create_agent_task(
     user_message: str,
     messages: list[LLMMessage],
     toolset: ToolSet,
+    resume_run_id: str | None = None,
+    resume_address: list[str] | None = None,
 ) -> asyncio.Task:
-    """Dispatch either a named workflow or the standard agentic loop as an asyncio task."""
+    """Dispatch either a named workflow (fresh or resumed) or the standard agentic loop as an
+    asyncio task.
+
+    `resume_run_id`/`resume_address` (workflow path only — resume is always a workflow concept)
+    trigger `orchestrator.resume(...)` instead of `.run(...)`, continuing a previously
+    stopped/failed run in place over this same websocket rather than starting a fresh one — see
+    ADR-0011's "Deferred: resumability". `resume_address` is the address the user *selected*, not
+    necessarily where dispatch actually resumes: `resolve_resume_address` translates a done node
+    into "resume after it" first.
+    """
     if workflow_name is not None:
         workflows_dir = Path(__file__).parent.parent / "workflows"
         flat_path = workflows_dir / f"{workflow_name}.yaml"
@@ -123,6 +136,18 @@ def _create_agent_task(
         workflow_path = flat_path if flat_path.exists() else dir_path
         workflow_def = load_workflow(workflow_path)
         orchestrator = CustomWorkflowOrchestrator(workflow_def, working_directory, toolset.tools)
+        if resume_run_id is not None:
+            assert resume_address is not None
+            run_root = WORKFLOW_RUNS_DIR / workflow_name / resume_run_id
+            resolved_address = resolve_resume_address(run_root, resume_address)
+            if resolved_address is None:
+                async def _nothing_to_resume() -> None:
+                    await session.emit({
+                        "type": "error",
+                        "message": "Nothing to resume — the run already completed past this point.",
+                    })
+                return asyncio.create_task(_nothing_to_resume())
+            return asyncio.create_task(orchestrator.resume(session, resume_run_id, resolved_address, messages))
         return asyncio.create_task(orchestrator.run(session, user_message, messages))
     else:
         return asyncio.create_task(run_agent(session, messages, toolset, working_directory))
@@ -184,6 +209,8 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
         conversation_id: str | None = init_data.get("conversation_id")
         user_message_id: str | None = init_data.get("user_message_id")
         workflow_name: str | None = init_data.get("workflow_name") or None
+        resume_run_id: str | None = init_data.get("resume_run_id")
+        resume_address: list[str] | None = init_data.get("resume_address")
 
         conv_branch = await _load_conversation_branch(sess, conversation_id)
         settings = _parse_conv_settings(conv_branch.conv) if conv_branch.conv is not None else ld.ConversationSettings()
@@ -195,7 +222,9 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
         tool_set = _build_tool_set(settings.mode, active_tool_names)
 
         messages = await build_inference_context(conv_branch.branch, settings.active_prompt_id, sess)
-        if user_message_id is None:
+        # A resume never has a new message to append — it continues a run whose original message
+        # is already the last thing in this branch.
+        if user_message_id is None and resume_run_id is None:
             messages.append({"role": "user", "content": user_message})
 
         session = AgentSession()
@@ -207,7 +236,8 @@ async def agent_websocket(websocket: WebSocket, sess: AsyncSession = Depends(get
 
         agent_task = _create_agent_task(
             session, workflow_name, settings.working_directory,
-            user_message, messages, tool_set
+            user_message, messages, tool_set,
+            resume_run_id=resume_run_id, resume_address=resume_address,
         )
         await _run_agent_event_loop(websocket, session, agent_task)
 

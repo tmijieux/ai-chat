@@ -10,6 +10,7 @@ import {
   untracked,
 } from '@angular/core'
 import { CommonModule } from '@angular/common'
+import { ChatService } from '../../services/chat.service'
 import { WorkflowRunService } from '../../services/workflow-run.service'
 import { WorkflowActivityEntryComponent } from './workflow-activity-entry.component'
 import {
@@ -49,6 +50,7 @@ const RESULT_VALUE_MAX_CHARS = 48
 })
 export class WorkflowRunPanelComponent implements OnDestroy {
   readonly workflowSvc = inject(WorkflowRunService)
+  private readonly chatSvc = inject(ChatService)
 
   /** Ticks once a second so the elapsed display advances while the run is live. */
   private readonly now = signal(Date.now())
@@ -486,5 +488,25 @@ export class WorkflowRunPanelComponent implements OnDestroy {
 
   followRunningStage(): void {
     this.workflowSvc.followRunning()
+  }
+
+  /** "Resume from here" only makes sense once the run has actually stopped moving forward on its
+   * own (not while it's still 'running') and something with a real on-disk address is selected —
+   * see the resumable-workflow-runs plan's Phase 4. */
+  readonly canResumeFromHere = computed(() => {
+    const run = this.workflowSvc.run()
+    if (run === null || (run.status !== 'stopped' && run.status !== 'error')) {
+      return false
+    }
+    return this.workflowSvc.selectedFetchedAddress() !== null
+  })
+
+  resumeFromHere(): void {
+    const run = this.workflowSvc.run()
+    const address = this.workflowSvc.selectedFetchedAddress()
+    if (run === null || address === null) {
+      return
+    }
+    this.chatSvc.resumeWorkflowRun(run.workflow_name, run.run_id, address)
   }
 }

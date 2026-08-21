@@ -26,16 +26,32 @@ export class AgentService {
   public readonly events$: Observable<AgentEvent> = this._events$.asObservable()
 
   start(userMessage: string, conversationId?: string, userMessageId?: string, mode: AgentMode = 'classic', workflowName?: string): void {
+    this._openSocket(mode, {
+      message: userMessage,
+      conversation_id: conversationId ?? null,
+      user_message_id: userMessageId ?? null,
+      workflow_name: workflowName ?? null,
+    })
+  }
+
+  /** Resume a previously stopped/failed workflow run in place, continuing from resumeAddress —
+   * see ADR-0011's "Deferred: resumability". Goes through the same live event stream as a fresh
+   * run (not a fire-and-forget REST call), so the panel updates identically either way. */
+  startResume(conversationId: string, workflowName: string, resumeRunId: string, resumeAddress: string[]): void {
+    this._openSocket('classic', {
+      conversation_id: conversationId,
+      workflow_name: workflowName,
+      resume_run_id: resumeRunId,
+      resume_address: resumeAddress,
+    })
+  }
+
+  private _openSocket(mode: AgentMode, initPayload: Record<string, unknown>): void {
     this._running.set(true)
     this.ws = new WebSocket(wsUrl(mode))
 
     this.ws.onopen = () => {
-      this.ws!.send(JSON.stringify({
-        message: userMessage,
-        conversation_id: conversationId ?? null,
-        user_message_id: userMessageId ?? null,
-        workflow_name: workflowName ?? null,
-      }))
+      this.ws!.send(JSON.stringify(initPayload))
     }
 
     this.ws.onmessage = (ev) => {
