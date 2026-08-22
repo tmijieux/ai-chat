@@ -15,9 +15,22 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
+
+from agent.agent import OutboundEvent, OutboundStageEnterEvent, OutboundStageExitEvent, OutboundLoopItemExitEvent
 
 WORKFLOW_RUNS_DIR = Path(__file__).parent.parent / "workflow_runs"
+
+
+class LoopItemResultPayload(TypedDict):
+    """One loop item's persisted item_result.json — written by on_loop_item_exit, read back
+    by read_item_result. Matches the loop_item_exit event's own fields minus type/path."""
+    item_number: int
+    item_total: int
+    success: bool
+    status: str
+    attempts_used: int
+    item_result: Any
 
 
 @dataclass
@@ -152,7 +165,7 @@ class WorkflowRunRecorder:
         directory.mkdir(parents=True, exist_ok=True)
         return directory
 
-    def read_item_result(self, address: list[str], item_number: int) -> dict | None:
+    def read_item_result(self, address: list[str], item_number: int) -> LoopItemResultPayload | None:
         """Read one loop item's persisted item_result.json in full (item_number, item_total,
         success, attempts_used, item_result), or None if this item was never recorded.
 
@@ -205,7 +218,7 @@ class WorkflowRunRecorder:
     # Event handlers — called from the recording session proxy in custom_workflow.py
     # ------------------------------------------------------------------
 
-    def on_stage_enter(self, event: dict, active_item_stack: list[tuple[str, int]]) -> None:
+    def on_stage_enter(self, event: OutboundStageEnterEvent, active_item_stack: list[tuple[str, int]]) -> None:
         record = _InvocationRecord(
             path=event["path"],
             execution_id=event["execution_id"],
@@ -221,7 +234,7 @@ class WorkflowRunRecorder:
         directory = self._dir_for(address)
         self._write_meta(directory, address, record)
 
-    def on_stage_exit(self, event: dict, active_item_stack: list[tuple[str, int]]) -> None:
+    def on_stage_exit(self, event: OutboundStageExitEvent, active_item_stack: list[tuple[str, int]]) -> None:
         record = self._invocations.pop(event["execution_id"], None)
         if record is None:
             return
@@ -235,10 +248,10 @@ class WorkflowRunRecorder:
         if record.status in ("failed", "stopped"):
             self.last_failed_address = "/".join(address)
 
-    def on_loop_item_exit(self, event: dict, active_item_stack: list[tuple[str, int]]) -> None:
+    def on_loop_item_exit(self, event: OutboundLoopItemExitEvent, active_item_stack: list[tuple[str, int]]) -> None:
         address = self.address_for(event["path"], active_item_stack) + [str(event["item_number"])]
         directory = self._dir_for(address)
-        payload = {
+        payload: LoopItemResultPayload = {
             "item_number": event["item_number"],
             "item_total": event["item_total"],
             "success": event["success"],
@@ -250,7 +263,7 @@ class WorkflowRunRecorder:
             json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
         )
 
-    def on_activity(self, execution_id: str, event: dict) -> None:
+    def on_activity(self, execution_id: str, event: OutboundEvent) -> None:
         record = self._invocations.get(execution_id)
         if record is None:
             return
@@ -297,20 +310,19 @@ class WorkflowRunRecorder:
         )
 
 
-def _fold_activity(record: _InvocationRecord, event: dict) -> None:
+def _fold_activity(record: _InvocationRecord, event: OutboundEvent) -> None:
     """Fold one streamed event into `record.activity`, mirroring the frontend's own grouping in
     workflow-run.service.ts's _onStageActivity — kept in lockstep so a persisted attempt_N.json is
     structurally identical to what the live view already builds.
     """
-    event_type = event.get("type")
-
-    if event_type == "iteration_end":
+    if event["type"] == "iteration_end":
         record.iteration_count += 1
         record.context_tokens = event.get("prompt_tokens")
         record.response_tokens += event.get("response_tokens", 0)
         return
 
-    if event_type in ("thinking", "content"):
+    if event["type"] in ("thinking", "content"):
+        event_type = event["type"]
         text = event.get("content")
         if text is None or text == "":
             return
@@ -321,7 +333,7 @@ def _fold_activity(record: _InvocationRecord, event: dict) -> None:
             record.activity.append({"kind": event_type, "text": text})
         return
 
-    if event_type == "tool_call_start":
+    if event["type"] == "tool_call_start":
         tool_id = event.get("tool_id")
         entry = {"kind": "tool_call", "tool_id": tool_id, "tool_name": event.get("tool_name"), "args_text": ""}
         for index, existing in enumerate(record.activity):
@@ -331,13 +343,13 @@ def _fold_activity(record: _InvocationRecord, event: dict) -> None:
         record.activity.append(entry)
         return
 
-    if event_type == "tool_call_raw":
+    if event["type"] == "tool_call_raw":
         if len(record.activity) == 0 or record.activity[-1].get("kind") != "tool_call":
             return
         record.activity[-1]["args_text"] += event.get("fragment", "")
         return
 
-    if event_type == "tool_call_chunk":
+    if event["type"] == "tool_call_chunk":
         tool_id = event.get("tool_id")
         chunk = event.get("chunk", "")
         for entry in record.activity:
@@ -345,7 +357,7 @@ def _fold_activity(record: _InvocationRecord, event: dict) -> None:
                 entry["args_text"] += chunk
         return
 
-    if event_type == "tool_result":
+    if event["type"] == "tool_result":
         record.activity.append({
             "kind": "tool_result",
             "tool_id": event.get("tool_id"),
@@ -355,5 +367,5 @@ def _fold_activity(record: _InvocationRecord, event: dict) -> None:
         })
         return
 
-    if event_type == "error":
+    if event["type"] == "error":
         record.activity.append({"kind": "error", "message": event.get("message")})

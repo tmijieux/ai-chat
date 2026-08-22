@@ -37,10 +37,12 @@ def _read_yn(prompt: str) -> str:
             return answer
         print("Please enter 'y' or 'n'.")
 
-from agent.agent import AgentSession, run_agent
+from agent.agent import AgentSession, OutboundEvent, run_agent
+from conv_helpers import ToolSet
 from message_types import LLMMessage
 from agent.pipeline import PipelineOrchestrator
 from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
+from agent.tools.base import ToolDict
 from llm import backend
 
 GREY   = "\033[90m"
@@ -53,7 +55,7 @@ RESET  = "\033[0m"
 _active_stage: list[str | None] = [None]  # mutable cell to track current stage across calls
 
 
-def _print_event(event: dict) -> None:
+def _print_event(event: OutboundEvent) -> None:
     """Print a single agent event. Prints a stage header when the pipeline stage changes."""
     stage = event.get("_pipeline_stage")
 
@@ -66,18 +68,17 @@ def _print_event(event: dict) -> None:
 
     stage_prefix = f"{GREY}[{stage}]{RESET} " if stage is not None else ""
 
-    t = event["type"]
-    if t == "thinking":
+    if event["type"] == "thinking":
         print(f"{GREY}{event.get('content', '')}{RESET}", end="", flush=True)
-    elif t == "content":
+    elif event["type"] == "content":
         print(event.get("content", ""), end="", flush=True)
-    elif t == "tool_call_start":
+    elif event["type"] == "tool_call_start":
         print(f"\n{stage_prefix}{YELLOW}[{event.get('tool_name', '')}] ", end="", flush=True)
-    elif t == "tool_call_chunk":
+    elif event["type"] == "tool_call_chunk":
         print(f"{YELLOW}{event.get('chunk', '')}{RESET}", end="", flush=True)
-    elif t == "tool_call":
+    elif event["type"] == "tool_call":
         print(flush=True)  # newline after tool call args finish streaming
-    elif t == "pipeline_summary":
+    elif event["type"] == "pipeline_summary":
         label = event.get("label", "")
         content = event.get("content", "")
         notes = event.get("notes")
@@ -85,7 +86,7 @@ def _print_event(event: dict) -> None:
         print(content)
         if notes:
             print(f"{GREY}{notes}{RESET}")
-    elif t == "tool_result":
+    elif event["type"] == "tool_result":
         content = event.get("content", "")
         tool_name = event.get("tool_name", "")
         try:
@@ -103,22 +104,22 @@ def _print_event(event: dict) -> None:
         else:
             preview = content[:300] + ("…" if len(content) > 300 else "")
             print(f"\n{stage_prefix}{CYAN}→ {preview}{RESET}")
-    elif t == "iteration_end":
+    elif event["type"] == "iteration_end":
         print(f"\n{stage_prefix}{GREY}[{event.get('prompt_tokens', 0)} prompt tokens]{RESET}")
-    elif t == "error":
+    elif event["type"] == "error":
         print(f"\n{RED}[error] {event.get('message')}{RESET}")
-    elif t == "done":
+    elif event["type"] == "done":
         print()
 
 
 async def _run_turn(
     messages: list[LLMMessage],
-    tools: list[dict],
+    tools: list[ToolDict],
     working_directory: str | None,
 ) -> None:
     """Classic agent turn — mutates messages in-place with the assistant response."""
     session = AgentSession()
-    agent_task = asyncio.create_task(run_agent(session, messages, tools, working_directory))
+    agent_task = asyncio.create_task(run_agent(session, messages, ToolSet(tools=tools, extra_tools=None), working_directory))
 
     while True:
         event = await session.outbound.get()
@@ -141,7 +142,7 @@ async def _run_turn(
 
 async def _run_pipeline_turn(
     messages: list[LLMMessage],
-    tools: list[dict],
+    tools: list[ToolDict],
     working_directory: str | None,
 ) -> None:
     """Pipeline turn — stage headers print when the stage changes. History is not carried forward."""

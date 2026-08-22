@@ -1,4 +1,5 @@
 from .base import BaseTool, tool_error
+from message_types import LLMMessage
 from tool_result_types import SummarizeSubtaskResult, ToolResult
 from typing import TYPE_CHECKING
 
@@ -38,13 +39,13 @@ class SummarizeSubtaskTool(BaseTool):
         if not task or not content:
             return tool_error(self.name, "Both 'task' and 'content' are required")
 
-        messages = [
+        messages: list[LLMMessage] = [
             {"role": "system", "content": f"Task: {task}\nProvide a concise summary of the user message focused on the task above."},
             {"role": "user", "content": content},
         ]
         try:
             summary = ""
-            async for event in backend.stream_completion(messages, [], temperature=0.1):
+            async for event in backend.stream_completion(backend.prepare_messages(messages), [], temperature=0.1):
                 if event["type"] == "content":
                     summary += event["content"]
             return SummarizeSubtaskResult(

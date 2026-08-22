@@ -17,7 +17,7 @@ class BaseFinishTool(BaseTool):
         """Return a short label for logging."""
         return f"{self.name}()"
 
-    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> dict:
+    async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> ToolResult:
         """Store args on the session so run_stage() can detect stage completion."""
         session.finish_result = args
         return {"tool": self.name, "status": "success"}

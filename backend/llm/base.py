@@ -2,7 +2,7 @@ import re
 from abc import ABC, abstractmethod
 from typing import AsyncIterator, Sequence, TypedDict, Literal, Union
 
-from message_types import LLMMessage
+from message_types import LLMMessage, PreparedMessages
 
 
 class ContentEvent(TypedDict):
@@ -135,7 +135,7 @@ class LLMBackend(ABC):
     async def check_or_raise(self) -> None: ...
 
     @abstractmethod
-    async def count_tokens(self, messages: Sequence[LLMMessage], tools: list) -> int: ...
+    async def count_tokens(self, messages: PreparedMessages, tools: list) -> int: ...
 
     @abstractmethod
     async def count_text_tokens(self, text: str) -> int: ...
@@ -143,7 +143,7 @@ class LLMBackend(ABC):
     @abstractmethod
     async def stream_completion(
         self,
-        messages: Sequence[LLMMessage],
+        messages: PreparedMessages,
         tools: list,
         temperature: float,
         max_tokens: int | None = None,
@@ -153,6 +153,7 @@ class LLMBackend(ABC):
         raise NotImplementedError
         yield  # type: ignore[misc]
 
-    def prepare_messages(self, messages: Sequence[LLMMessage]) -> Sequence[LLMMessage]:
+    @abstractmethod
+    def prepare_messages(self, messages: Sequence[LLMMessage]) -> PreparedMessages:
         """Convert internal message format to whatever this backend expects on the wire."""
-        return messages
+        ...

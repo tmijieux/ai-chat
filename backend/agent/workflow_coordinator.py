@@ -5,7 +5,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from agent.file_utils import file_in_directory, resolve_workspace_path, load_ignore_spec, is_path_ignored
 
@@ -13,6 +13,17 @@ if TYPE_CHECKING:
     from agent.agent import AgentSession
 
 logger = logging.getLogger(__name__)
+
+
+class EnumeratedFile(TypedDict):
+    path: str
+    extension: str
+    size_bytes: int
+
+
+class EnumerateFilesResult(TypedDict):
+    files: list[EnumeratedFile]
+    truncated: bool
 
 CHUNK_JSON_ENTRIES_DEFAULT_SIZE = 10
 
@@ -325,7 +336,7 @@ async def _append_json_entries(inputs: dict[str, Any], working_directory: str | 
     return {"success": True, "written": len(keys), "expected": len(keys), "received": len(entries)}
 
 
-async def _enumerate_files(inputs: dict[str, Any], working_directory: str | None) -> list[dict]:
+async def _enumerate_files(inputs: dict[str, Any], working_directory: str | None) -> EnumerateFilesResult:
     """Recursively list files under `root`, deterministically — no model involved.
 
     Reuses the SAME gitignore/hardcoded-dir filtering glob_files already applies. Excludes
@@ -334,15 +345,15 @@ async def _enumerate_files(inputs: dict[str, Any], working_directory: str | None
     file whole. `exclude` (optional list of workspace-relative directory paths) additionally skips
     anything under those directories — e.g. a workflow writing its own output back into the
     scanned tree needs to exclude that output directory, or a rerun ends up documenting its own
-    previous output. Returns [{path, extension, size_bytes}], workspace-relative posix paths,
-    capped at `max_files` (default 300); a truncated result is reported honestly rather than
-    silently.
+    previous output. Returns {files: [{path, extension, size_bytes}], truncated: bool},
+    workspace-relative posix paths, capped at `max_files` (default 300); a truncated result is
+    reported honestly rather than silently.
     """
     root = inputs.get("root") or "."
     max_files = inputs.get("max_files") or 300
     exclude = inputs.get("exclude") or []
     if working_directory is None:
-        return []
+        return {"files": [], "truncated": False}
 
     absolute_root = resolve_workspace_path(root, working_directory)
     if not file_in_directory(str(absolute_root), working_directory):
@@ -351,8 +362,8 @@ async def _enumerate_files(inputs: dict[str, Any], working_directory: str | None
     exclude_roots = [resolve_workspace_path(e, working_directory) for e in exclude]
     spec = load_ignore_spec(working_directory)
 
-    def _walk() -> list[dict]:
-        results = []
+    def _walk() -> list[EnumeratedFile]:
+        results: list[EnumeratedFile] = []
         for p in sorted(absolute_root.rglob("*")):
             if not p.is_file():
                 continue
@@ -393,10 +404,10 @@ async def _append_jsonl_record(inputs: dict[str, Any], working_directory: str | 
     prerequisite for workflow resumability, where redoing a stage that already appended a row
     (e.g. map-codebase's record_file) must not duplicate it.
     """
-    path: str = inputs.get("path")
+    path: str | None = inputs.get("path")
     record = inputs.get("record")
     key_field = inputs.get("key_field")
-    if path is None or working_directory is None:
+    if path is None or record is None or working_directory is None:
         return {"success": False}
 
     absolute_path = resolve_workspace_path(path, working_directory)

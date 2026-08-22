@@ -59,10 +59,12 @@ def next_address_after(run_root: Path, address: list[str]) -> list[str] | None:
         if index + 1 < len(item_numbers):
             return address[:-1] + [str(item_numbers[index + 1])]
     else:
-        siblings = sorted(
-            (_read_json(meta_path)["sequence"], meta_path.parent.name)
-            for meta_path in parent_dir.glob("*/meta.json")
-        )
+        def _sequence_and_name(meta_path: Path) -> tuple[int, str]:
+            meta = _read_json(meta_path)
+            assert meta is not None, f"{meta_path} vanished between glob and read"
+            return meta["sequence"], meta_path.parent.name
+
+        siblings = sorted(_sequence_and_name(meta_path) for meta_path in parent_dir.glob("*/meta.json"))
         names = [name for _, name in siblings]
         index = names.index(this_name)
         if index + 1 < len(names):
@@ -120,6 +122,7 @@ def _walk_stages(
     entries: list[tuple[int, str, dict]] = []
     for meta_path in directory.glob("*/meta.json"):
         meta = _read_json(meta_path)
+        assert meta is not None, f"{meta_path} vanished between glob and read"
         entries.append((meta["sequence"], meta_path.parent.name, meta))
     entries.sort(key=lambda entry: entry[0])
 
@@ -130,9 +133,9 @@ def _walk_stages(
                 stage = stage_by_name[name]
                 _walk_loop_items(directory / name, stage, resume_address[1:], slots)
             return
-        stage = stage_by_name.get(name)
-        if stage is not None:
-            _replay_stage(directory / name, stage, meta, slots)
+        matched_stage = stage_by_name.get(name)
+        if matched_stage is not None:
+            _replay_stage(directory / name, matched_stage, meta, slots)
 
 
 def _walk_loop_items(

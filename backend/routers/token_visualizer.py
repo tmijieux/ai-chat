@@ -12,7 +12,9 @@ from pydantic import BaseModel
 
 import tokenizer
 from agent.tools import get_ollama_tool_list
+from agent.tools.base import ToolDict
 from llm.llama_server import LLAMA_BASE_URL, LLAMA_COMPLETION_URL
+from message_types import PreparedLLMMessage
 
 LLAMA_APPLY_TEMPLATE_URL = f"{LLAMA_BASE_URL}/apply-template"
 LLAMA_TOKENIZE_URL = f"{LLAMA_BASE_URL}/tokenize"
@@ -23,18 +25,19 @@ logger = logging.getLogger(__name__)
 
 
 class TokenVisualizerTurnRequest(BaseModel):
-    # Raw OpenAI-shaped messages (role, content, and — for simulated tool turns —
-    # tool_calls / tool_call_id / name) — passed straight through to llama-server's
-    # own /apply-template, which already knows how to render every one of those fields.
-    history: list[dict[str, Any]]
+    # Pydantic validates each entry against PreparedLLMMessage (role/content required,
+    # tool_calls/tool_call_id optional); a legacy field like "name" the debug page may still send
+    # on a simulated tool-role message is silently dropped, not rejected — harmless since
+    # llama.cpp's own parser accepts its absence and this project's chat template never renders it.
+    history: list[PreparedLLMMessage]
     message: str
     system_prompt: str | None = None
     tool_names: list[str] = []
 
 
 class TokenVisualizerInsertRequest(BaseModel):
-    history: list[dict[str, Any]]
-    messages: list[dict[str, Any]]
+    history: list[PreparedLLMMessage]
+    messages: list[PreparedLLMMessage]
     system_prompt: str | None = None
     tool_names: list[str] = []
 
@@ -45,7 +48,7 @@ def _ndjson_event(event: dict) -> bytes:
 
 
 async def _apply_template(
-    http: aiohttp.ClientSession, messages: list[dict], add_generation_prompt: bool, tools: list[dict]
+    http: aiohttp.ClientSession, messages: list[PreparedLLMMessage], add_generation_prompt: bool, tools: list[ToolDict]
 ) -> str:
     """Render a message list through llama-server's own chat template."""
     body: dict[str, Any] = {"messages": messages, "add_generation_prompt": add_generation_prompt}
@@ -69,7 +72,7 @@ async def _tokenize_with_special_flags(
     ]
 
 
-def _effective_system_prompt(system_prompt: str | None, tools: list[dict]) -> str | None:
+def _effective_system_prompt(system_prompt: str | None, tools: list[ToolDict]) -> str | None:
     """llama.cpp's chat template only renders tool definitions when visiting a system-role
     message slot. Without one, selected tools would silently vanish from the prompt even
     though they're still sent in the request body's `tools` field — so force an (empty)
@@ -79,10 +82,11 @@ def _effective_system_prompt(system_prompt: str | None, tools: list[dict]) -> st
     return system_prompt
 
 
-def _with_system_prompt(system_prompt: str | None, history: list[dict]) -> list[dict]:
+def _with_system_prompt(system_prompt: str | None, history: list[PreparedLLMMessage]) -> list[PreparedLLMMessage]:
     if system_prompt is None:
         return history
-    return [{"role": "system", "content": system_prompt}] + history
+    system_message: PreparedLLMMessage = {"role": "system", "content": system_prompt}
+    return [system_message] + history
 
 
 # llama.cpp's chat template has two conditions that make calling /apply-template with
@@ -97,10 +101,10 @@ def _with_system_prompt(system_prompt: str | None, history: list[dict]) -> list[
 # message renders identically as a trailing suffix regardless of what precedes it (with/without
 # history, system prompt, or tools), so appending one and trimming its own isolated length
 # recovers the correctly-closed rendering in both cases.
-_BOUNDARY_PROBE_MESSAGE = {"role": "user", "content": " TOKEN_VISUALIZER_PROBE "}
+_BOUNDARY_PROBE_MESSAGE: PreparedLLMMessage = {"role": "user", "content": " TOKEN_VISUALIZER_PROBE "}
 
 
-async def _render_closed(http: aiohttp.ClientSession, messages: list[dict], tools: list[dict]) -> str:
+async def _render_closed(http: aiohttp.ClientSession, messages: list[PreparedLLMMessage], tools: list[ToolDict]) -> str:
     """Render `messages` as a complete, closed prompt via llama.cpp's own template — safe even
     when the last message is 'assistant' or there's no user message at all, unlike calling
     /apply-template on it directly."""
@@ -120,7 +124,7 @@ async def token_visualizer_turn(request: TokenVisualizerTurnRequest):
     all via llama-server's own /apply-template, /tokenize, and /completion endpoints. Streams
     newline-delimited JSON events to the frontend as each assistant token is generated."""
     history = request.history
-    user_message = {"role": "user", "content": request.message}
+    user_message: PreparedLLMMessage = {"role": "user", "content": request.message}
     tools = get_ollama_tool_list(request.tool_names)
     special_token_ids = tokenizer.get_special_token_ids()
     effective_system_prompt = _effective_system_prompt(request.system_prompt, tools)

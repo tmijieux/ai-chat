@@ -1,41 +1,52 @@
-from typing import TypedDict, NotRequired
+from typing import TypedDict, NotRequired, Literal
+
+
+class DiffLine(TypedDict):
+    """One line of a unified diff preview shown to the user before an edit_file confirmation.
+    'header' lines (@@ ... @@) have no source line number; the other three types always do."""
+    type: Literal["header", "removed", "added", "context"]
+    text: str
+    line: NotRequired[int | None]
 
 
 class ToolResult(TypedDict):
-    """Base envelope for every tool result. tool_call_id is added by the framework after execute() returns."""
+    """Base envelope for every tool result. tool_call_id is added by the framework after
+    execute() returns. path is here (not on each subtype) because every file/directory-scoped
+    tool's error result wants to reference the path it was operating on, even before its own
+    subtype-specific result is ever constructed — see tool_error()'s path parameter. summary is
+    here because compress.py substitutes a {tool, status: "compressed", summary, tool_call_id}
+    placeholder for ANY tool's result once compressed — tool-agnostic by design, not owned by
+    any one subtype."""
     tool: str
     status: str
     tool_call_id: NotRequired[str]
     error: NotRequired[dict]
     reason: NotRequired[str]
+    path: NotRequired[str]
+    summary: NotRequired[str]
 
 
 class ReadFileResult(ToolResult):
     """Result of read_file: the file path and its full text content."""
-    path: NotRequired[str]
     file_content: NotRequired[str]
 
 
 class WriteFileResult(ToolResult):
     """Result of write_file: the path that was written."""
-    path: NotRequired[str]
 
 
 class EditFileResult(ToolResult):
     """Result of edit_file: the path that was edited."""
-    path: NotRequired[str]
 
 
 class ListDirectoryResult(ToolResult):
     """Result of list_directory: the path and a text listing of its entries."""
-    path: NotRequired[str]
     content: NotRequired[str]
 
 
 class GlobFilesResult(ToolResult):
     """Result of glob_files: matched file paths and their count."""
     pattern: NotRequired[str]
-    path: NotRequired[str]
     files: NotRequired[list[str]]
     file_count: NotRequired[int]
     result_id: NotRequired[str]
@@ -44,7 +55,6 @@ class GlobFilesResult(ToolResult):
 class GrepFilesResult(ToolResult):
     """Result of grep_files: per-file match objects with metadata."""
     pattern: NotRequired[str]
-    path: NotRequired[str]
     glob_pattern: NotRequired[str]
     result_id: NotRequired[str]
     matches: NotRequired[list[dict]]
@@ -77,7 +87,6 @@ class ReadFileRangeResult(ToolResult):
 
 class ExploreCodebaseResult(ToolResult):
     """Result of explore_codebase: a natural-language summary and matching code snippets."""
-    summary: NotRequired[str]
     snippets: NotRequired[list[dict]]
 
 
@@ -95,7 +104,6 @@ class ProposePlanResult(ToolResult):
 
 class SummarizeSubtaskResult(ToolResult):
     """Result of summarize_subtask: the generated summary text."""
-    summary: NotRequired[str]
 
 
 class SubagentResult(ToolResult):

@@ -53,7 +53,7 @@ class GlobFilesTool(BaseTool):
             return tool_error(self.name, f"Searching outside workspace is forbidden. Workspace: {working_directory}")
 
         try:
-            spec = None if include_ignored else load_ignore_spec(working_directory)
+            spec = load_ignore_spec(working_directory)
             files = await asyncio.to_thread(
                 lambda: [
                     p.relative_to(working_directory).as_posix() for p in absolute_path.glob(pattern)

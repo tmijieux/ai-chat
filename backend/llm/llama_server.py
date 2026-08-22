@@ -10,7 +10,7 @@ import aiohttp
 from fastapi import HTTPException
 
 from tokenizer import render_messages
-from message_types import LLMMessage
+from message_types import LLMMessage, PreparedLLMMessage, PreparedMessages, ToolCall, PreparedToolCall
 from .base import (
     LLMBackend, StreamEvent, ThinkingParser,
     ContentEvent, ThinkingEvent, ToolCallStartEvent, ToolCallArgEvent, ToolCallRawEvent, DoneEvent,
@@ -48,6 +48,21 @@ _THINK_BLOCK_RULE = (
     'think-block ::= "<think>" "\\n"? ([^<] | "<" [^/] | "</" [^t] | "</t" [^h] | "</th" [^i] '
     '| "</thi" [^n] | "</thin" [^k] | "</think" [^>])* "\\n"? "</think>" "\\n"? "\\n"?'
 )
+
+
+def _to_prepared_tool_call(tc: ToolCall, index: int) -> PreparedToolCall:
+    """Build the OpenAI wire-format tool call llama.cpp's server requires: `type` is mandatory
+    (its parser throws if absent from message history), and arguments must be the JSON-encoded
+    string OpenAI's wire format uses, not the internal dict representation."""
+    arguments = tc["function"]["arguments"]
+    return {
+        "id": tc.get("id", f"tc-{index}"),
+        "type": "function",
+        "function": {
+            "name": tc["function"]["name"],
+            "arguments": json.dumps(arguments) if isinstance(arguments, dict) else arguments,
+        },
+    }
 
 
 def _cast_tool_call_arguments(parsed_calls: list[dict], tools_by_name: dict[str, dict]) -> list[tuple[str, dict]]:
@@ -140,7 +155,7 @@ class LlamaServerBackend(LLMBackend):
                 pass
         raise HTTPException(status_code=503, detail="llama-server is not running")
 
-    async def count_tokens(self, messages: Sequence[LLMMessage], tools: list) -> int:
+    async def count_tokens(self, messages: PreparedMessages, tools: list) -> int:
         rendered = render_messages(messages, tools)
         return await self.count_text_tokens(rendered)
 
@@ -154,49 +169,39 @@ class LlamaServerBackend(LLMBackend):
                 data = await r.json()
                 return len(data["tokens"])
 
-    def prepare_messages(self, messages: Sequence[LLMMessage]) -> Sequence[LLMMessage]:
+    def prepare_messages(self, messages: Sequence[LLMMessage]) -> Sequence[PreparedLLMMessage]:
         """Convert internal format to OpenAI wire format for llama-server."""
-        result = []
+        result: list[PreparedLLMMessage] = []
         for m in messages:
-            msg: dict = {"role": m["role"], "content": m.get("content", "")}
+            msg: PreparedLLMMessage = {"role": m["role"], "content": m.get("content", "")}
 
             if "tool_calls" in m:
-                msg["tool_calls"] = [
-                    {
-                        "id": tc.get("id", f"tc-{i}"),
-                        "type": "function",
-                        "function": {
-                            "name": tc["function"]["name"],
-                            # arguments must be a JSON string in OpenAI format
-                            "arguments": (
-                                json.dumps(tc["function"]["arguments"])
-                                if isinstance(tc["function"]["arguments"], dict)
-                                else tc["function"]["arguments"]
-                            ),
-                        },
-                    }
-                    for i, tc in enumerate(m["tool_calls"])
-                ]
+                msg["tool_calls"] = [_to_prepared_tool_call(tc, i) for i, tc in enumerate(m["tool_calls"])]
 
             if m["role"] == "tool":
-                # OpenAI requires tool_call_id as a top-level field on tool messages
-                try:
-                    raw = m.get("content")
-                    if not isinstance(raw, str):
-                        raise ValueError(f"tool message has non-string content: {type(raw)}")
-                    content_data = json.loads(raw)
-                    tool_call_id = content_data.get("tool_call_id")
-                    if tool_call_id:
-                        msg["tool_call_id"] = tool_call_id
-                except (json.JSONDecodeError, ValueError):
-                    pass
+                # OpenAI requires tool_call_id as a top-level field on tool messages. A caller
+                # with plain-text tool content sets LLMMessage.tool_call_id directly; an ordinary
+                # tool result instead carries it embedded in its JSON content (ToolResult.tool_call_id).
+                if "tool_call_id" in m:
+                    msg["tool_call_id"] = m["tool_call_id"]
+                else:
+                    try:
+                        raw = m.get("content")
+                        if not isinstance(raw, str):
+                            raise ValueError(f"tool message has non-string content: {type(raw)}")
+                        content_data = json.loads(raw)
+                        tool_call_id = content_data.get("tool_call_id")
+                        if tool_call_id:
+                            msg["tool_call_id"] = tool_call_id
+                    except (json.JSONDecodeError, ValueError):
+                        pass
 
             result.append(msg)
         return result
 
     async def stream_completion(
         self,
-        messages: Sequence[LLMMessage],
+        messages: PreparedMessages,
         tools: list,
         temperature: float,
         max_tokens: int | None = None,
@@ -227,7 +232,7 @@ class LlamaServerBackend(LLMBackend):
 
     async def _stream_completion_legacy(
         self,
-        messages: Sequence[LLMMessage],
+        messages: PreparedMessages,
         tools: list,
         temperature: float,
         max_tokens: int | None = None,
@@ -345,7 +350,7 @@ class LlamaServerBackend(LLMBackend):
 
     async def _stream_completion_think_gated(
         self,
-        messages: Sequence[LLMMessage],
+        messages: PreparedMessages,
         tools: list,
         temperature: float,
         max_tokens: int | None,
@@ -606,7 +611,7 @@ class LlamaServerBackend(LLMBackend):
 
     async def _force_tool_call(
         self,
-        messages: Sequence[LLMMessage],
+        messages: PreparedMessages,
         tools: list,
         tool_choice: dict | str,
         max_tokens: int | None,

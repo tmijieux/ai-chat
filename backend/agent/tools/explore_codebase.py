@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import TYPE_CHECKING
 from .base import BaseTool, tool_error
+from message_types import LLMMessage
 from tool_result_types import ExploreCodebaseResult, ToolResult
 
 if TYPE_CHECKING:
@@ -72,7 +73,7 @@ class ExploreCodebaseTool(BaseTool):
         from agent.pipeline import run_stage
         from agent.finish_tools import FinishExplore
 
-        messages = [
+        messages: list[LLMMessage] = [
             {"role": "system", "content": _EXPLORE_SYSTEM},
             {"role": "user", "content": query},
         ]

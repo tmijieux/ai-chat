@@ -5,17 +5,18 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import select
 
 from database import AsyncSession
 import tables as db
 from llm.base import LLMBackend
-from message_types import LLMMessage, TrackedMessage
+from message_types import LLMMessage, TrackedMessage, ToolCall
 from tool_result_types import (
     GlobFilesResult,
     GrepFilesResult,
+    ListDirectoryResult,
     ReadFileResult,
     RunShellResult,
     SearchWebResult,
@@ -79,7 +80,13 @@ def _following_thinking(all_messages: list[TrackedMessage], tool_id: str) -> str
 
         if m.get("role") == "assistant":
             assert isinstance(m["content"], str)
-            text: str = m["thinking"] or m["content"] or ""
+            thinking = m.get("thinking")
+            if thinking is not None and thinking != "":
+                text = thinking
+            elif m["content"] != "":
+                text = m["content"]
+            else:
+                text = ""
             return text[:600]
     return ""
 
@@ -89,13 +96,13 @@ def _key_args(result: ToolResult) -> str:
     if tool in ("read_file", "list_directory"):
         return repr(result.get("path", ""))
     if tool == "glob_files":
-        return repr(result.get("pattern", ""))
+        return repr(cast(GlobFilesResult, result).get("pattern", ""))
     if tool == "grep_files":
-        return repr(result.get("pattern", ""))
+        return repr(cast(GrepFilesResult, result).get("pattern", ""))
     if tool == "run_shell":
-        return repr((result.get("command") or "")[:80])
+        return repr((cast(RunShellResult, result).get("command") or "")[:80])
     if tool == "search_web":
-        return repr((result.get("query") or "")[:80])
+        return repr((cast(SearchWebResult, result).get("query") or "")[:80])
     return ""
 
 
@@ -103,22 +110,23 @@ def _result_metadata(result: ToolResult) -> dict[str, Any]:
     tool = result.get("tool", "")
     meta: dict[str,str|int] = {"status": result.get("status", "unknown")}
     if tool == "glob_files":
-        meta["file_count"] = result.get("file_count", 0)
+        meta["file_count"] = cast(GlobFilesResult, result).get("file_count", 0)
     elif tool == "grep_files":
-        matches = result.get("matches", [])
+        matches = cast(GrepFilesResult, result).get("matches", [])
         meta["match_count"] = len(matches) if isinstance(matches, list) else 0
     elif tool == "list_directory":
-        content = result.get("content") or ""
+        content = cast(ListDirectoryResult, result).get("content") or ""
         meta["entry_count"] = len(content.splitlines())
     elif tool == "read_file":
-        content = result.get("file_content") or ""
+        content = cast(ReadFileResult, result).get("file_content") or ""
         meta["line_count"] = len(content.splitlines())
     elif tool == "run_shell":
-        meta["exit_code"] = result.get("exit_code", 0)
-        output = (result.get("output") or "") + (result.get("stderr") or "")
+        shell_result = cast(RunShellResult, result)
+        meta["exit_code"] = shell_result.get("exit_code", 0)
+        output = (shell_result.get("output") or "") + (shell_result.get("stderr") or "")
         meta["line_count"] = len(output.splitlines())
     elif tool == "search_web":
-        results_list = result.get("results") or []
+        results_list = cast(SearchWebResult, result).get("results") or []
         meta["result_count"] = len(results_list)
         meta["total_chars"] = sum(len(r.get("content") or "") for r in results_list)
     return meta
@@ -185,7 +193,7 @@ async def _llm_complete(prompt: str, backend: LLMBackend, system: str | None = N
     period — Qwen3 thinking models sometimes place the answer there.
     Thinking is disabled (budget_tokens=0) to avoid wasting tokens on reasoning.
     """
-    messages = []
+    messages: list[LLMMessage] = []
     if system is not None:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
@@ -263,7 +271,7 @@ _REPORT_CLASSIFICATION_TOOL = {
 
 async def _llm_classify(prompt: str, backend: LLMBackend, system: str) -> dict:
     """Call the LLM and return the parsed report_classification tool call arguments."""
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+    messages: list[LLMMessage] = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
     prepared = backend.prepare_messages(messages)
     tool_args_str = ""
     async for event in backend.stream_completion(
@@ -693,44 +701,48 @@ async def _apply_compression_label(
 
     if label == "summarize":
         if tool == "read_file":
-            return await _summarize_file(result, backend)
+            return await _summarize_file(cast(ReadFileResult, result), backend)
         if tool == "search_web":
-            return await _summarize_search_results(result, backend)
+            return await _summarize_search_results(cast(SearchWebResult, result), backend)
         if tool == "run_shell":
-            return await _summarize_shell_output(result, backend)
+            return await _summarize_shell_output(cast(RunShellResult, result), backend)
         if tool == "glob_files":
-            return _compact_glob_result(result)
+            return _compact_glob_result(cast(GlobFilesResult, result))
         if tool == "grep_files":
-            return _compact_grep_result(result)
+            return _compact_grep_result(cast(GrepFilesResult, result))
         logger.info("summarize → done for %s", tool)
         return _compact_summary(result)
 
     if label == "keep":
         if tool == "read_file":
-            file_content = result.get("file_content") or ""
+            read_file_result = cast(ReadFileResult, result)
+            file_content = read_file_result.get("file_content") or ""
             if len(file_content) > KEEP_SUMMARIZE_THRESHOLD_CHARS:
                 logger.info("keep read_file over threshold (%d chars) → summarizing", len(file_content))
-                return await _summarize_file(result, backend)
+                return await _summarize_file(read_file_result, backend)
         elif tool == "search_web":
-            results_list = result.get("results") or []
+            search_result = cast(SearchWebResult, result)
+            results_list = search_result.get("results") or []
             total_chars = sum(len(r.get("content") or "") for r in results_list)
             if total_chars > KEEP_SUMMARIZE_THRESHOLD_CHARS:
                 logger.info("keep search_web over threshold (%d chars) → summarizing", total_chars)
-                return await _summarize_search_results(result, backend)
+                return await _summarize_search_results(search_result, backend)
         elif tool == "run_shell":
-            raw_output = result.get("output") or (result.get("error") or {}).get("message") or ""
+            shell_result = cast(RunShellResult, result)
+            raw_output = shell_result.get("output") or (shell_result.get("error") or {}).get("message") or ""
             if len(raw_output) > KEEP_SUMMARIZE_THRESHOLD_CHARS:
                 logger.info("keep run_shell over threshold (%d chars) → summarizing", len(raw_output))
-                return await _summarize_shell_output(result, backend)
+                return await _summarize_shell_output(shell_result, backend)
         elif tool == "glob_files":
-            files = result.get("files") or []
+            glob_result = cast(GlobFilesResult, result)
+            files = glob_result.get("files") or []
             if len(files) > _GLOB_MAX_FILES:
                 logger.info("keep glob_files over %d files → truncating", _GLOB_MAX_FILES)
-                return _compact_glob_result(result)
+                return _compact_glob_result(glob_result)
         elif tool == "grep_files":
             if content_len > _GREP_MAX_CHARS:
                 logger.info("keep grep_files over threshold (%d chars) → truncating", content_len)
-                return _compact_grep_result(result)
+                return _compact_grep_result(cast(GrepFilesResult, result))
 
     return None
 
@@ -780,8 +792,13 @@ async def compress_messages(
     for p in pairs:
         label = labels.get(p.message_id, "drop")
         msg = candidate_messages[p.index]
+        raw_content = msg.get("content")
+        if isinstance(raw_content, str) and raw_content != "":
+            content = raw_content
+        else:
+            content = "{}"
         try:
-            result = json.loads(msg.get("content") or "{}")
+            result = json.loads(content)
         except (json.JSONDecodeError, ValueError):
             continue
 
@@ -894,10 +911,14 @@ def build_digest(snapshots: list[MessageSnapshot]) -> list[DigestEntry]:
             if snapshot.compressed_summary is not None and snapshot.compressed_summary != "":
                 content = snapshot.compressed_summary[:_DIGEST_PIECE_MAX_CHARS]
             else:
+                if snapshot.content is None or snapshot.content == "":
+                    content_json = "{}"
+                else:
+                    content_json = snapshot.content
                 try:
-                    result = json.loads(snapshot.content or "{}")
+                    result: ToolResult = json.loads(content_json)
                 except (json.JSONDecodeError, ValueError):
-                    result = {}
+                    result = {"tool": "", "status": ""}
                 content = _compact_summary(result)
             if content != "":
                 entries.append(DigestEntry(role="tool", content=content))
@@ -1042,7 +1063,7 @@ async def _classify_conversation_messages(
     messages_block = "[\n" + ",\n".join(input_lines) + "\n]"
     prompt = "Messages to classify:\n" + messages_block
 
-    llm_messages = [
+    llm_messages: list[LLMMessage] = [
         {"role": "system", "content": _CONV_CLASSIFIER_SYSTEM},
         {"role": "user", "content": prompt},
     ]
@@ -1070,7 +1091,7 @@ async def _classify_conversation_messages(
             + json.dumps(untagged_ids)
             + "\nInclude ONLY the missing IDs in your report_conversation_classification call."
         )
-        retry_llm_messages = [
+        retry_llm_messages: list[LLMMessage] = [
             {"role": "system", "content": _CONV_CLASSIFIER_SYSTEM},
             {"role": "user", "content": retry_prompt},
         ]
@@ -1241,10 +1262,9 @@ def assemble_message(
             content = f"<think>{m.thinking}</think>{content}"
         try:
             stored_calls = json.loads(m.tool_calls)
-            tool_calls_for_context = [
+            tool_calls_for_context: list[ToolCall] = [
                 {
                     "id": tc.get("id", f"tc-{i}"),
-                    "type": "function",
                     "function": {"name": tc["name"], "arguments": tc.get("args", {})},
                 }
                 for i, tc in enumerate(stored_calls)

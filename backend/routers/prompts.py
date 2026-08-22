@@ -44,8 +44,8 @@ async def _compute_prompt_token_count(content: str) -> int:
     """Count tokens contributed by this system prompt (with vs without)."""
     tools: list = []
     system_msg: LLMMessage = {"role": "system", "content": content}
-    with_prompt = await backend.count_tokens([system_msg] + _DUMMY_USER, tools)
-    baseline = await backend.count_tokens(_DUMMY_USER, tools)
+    with_prompt = await backend.count_tokens(backend.prepare_messages([system_msg] + _DUMMY_USER), tools)
+    baseline = await backend.count_tokens(backend.prepare_messages(_DUMMY_USER), tools)
     return with_prompt - baseline
 
 

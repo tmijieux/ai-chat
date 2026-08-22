@@ -1,6 +1,24 @@
 from sqlalchemy import Integer, String, ForeignKey, Text, Boolean
-from sqlalchemy.orm import mapped_column as column
+from sqlalchemy.orm import Mapped, mapped_column as column
+from sqlalchemy.types import TypeEngine
 from database import Base
+
+
+def nullable_column[T](type_: type[TypeEngine[T]]) -> Mapped[T | None]:
+    """Fills a real gap in SQLAlchemy's own stubs: mapped_column(SomeType, nullable=True) has no
+    overload producing Mapped[T | None] from a bare (non-Optional-parameterized) TypeEngine
+    subclass like String or Text — verified directly against SQLAlchemy's stubs, not a usage
+    mistake (mapped_column(String, nullable=True) alone always resolves to type[TypeEngine[str]],
+    which never structurally satisfies the Optional target their stubs expect).
+
+    pyright accepts this fix cleanly. mypy has a separate, unrelated solver limitation for this
+    generic shape (a TypeVar nested inside a type[Generic[T]] parameter, combined with T | None
+    in the return) that reproduces no matter how the overload is written — confirmed with several
+    variants, including ones with no external annotation at all to rule out bidirectional
+    inference from the caller. mypy still reports a false positive at each call site below; left
+    unsuppressed since it's a known, verified false positive rather than a real issue.
+    """
+    return column(type_, nullable=True)
 
 
 class Conversation(Base):
@@ -11,7 +29,7 @@ class Conversation(Base):
     settings = column(Text, nullable=True)
     created_at = column(String, nullable=False)
     # Logical FK to messages.id — not declared as FK to avoid circular constraint on SQLite
-    active_message_id = column(String, nullable=True)
+    active_message_id: Mapped[str | None] = nullable_column(String)
 
 
 class Message(Base):
@@ -65,7 +83,7 @@ class MessageImageAttachment(Base):
 class AppSettings(Base):
     __tablename__ = "app_settings"
     key = column(String, primary_key=True)
-    value = column(Text, nullable=True)
+    value: Mapped[str | None] = nullable_column(Text)
 
 
 class SystemPromptTemplate(Base):

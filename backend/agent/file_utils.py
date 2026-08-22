@@ -4,7 +4,7 @@ import pathspec
 # Directories that are always ignored regardless of .gitignore
 _HARDCODED_IGNORE_DIRS = {
     "venv", ".venv", "node_modules", ".git", "__pycache__",
-    "dist", "build", ".tox",
+    "dist", "build", ".tox", ".cache"
 }
 
 

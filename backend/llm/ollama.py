@@ -9,7 +9,7 @@ import aiohttp
 from fastapi import HTTPException
 
 from tokenizer import count_tokens, warmup as warmup_tokenizer
-from message_types import LLMMessage
+from message_types import LLMMessage, PreparedOllamaMessage, PreparedOllamaToolCall, PreparedMessages, ToolCall
 from .base import (
     LLMBackend, StreamEvent,
     ContentEvent, ThinkingEvent, ToolCallStartEvent, ToolCallArgEvent, DoneEvent,
@@ -22,6 +22,13 @@ OLLAMA_CHAT_URL = f"{OLLAMA_BASE_URL}/api/chat"
 CTX_LIMIT = 2**14
 
 logger = logging.getLogger(__name__)
+
+
+def _to_prepared_ollama_tool_call(tc: ToolCall) -> PreparedOllamaToolCall:
+    """Rebuild a ToolCall for Ollama's wire format: id + function only, dropping internal-only
+    markers like _recovered that must not reach the wire. Unlike llama.cpp's wire format,
+    Ollama keeps arguments as a dict and has no `type` field."""
+    return {"id": tc["id"], "function": tc["function"]}
 
 
 class OllamaBackend(LLMBackend):
@@ -71,25 +78,26 @@ class OllamaBackend(LLMBackend):
                 pass
         raise HTTPException(status_code=503, detail="Ollama is not running")
 
-    async def count_tokens(self, messages: Sequence[LLMMessage], tools: list) -> int:
+    async def count_tokens(self, messages: PreparedMessages, tools: list) -> int:
         return count_tokens(messages, tools)
 
     async def count_text_tokens(self, text: str) -> int:
         """Count tokens for raw text by wrapping it in a dummy user message."""
-        return count_tokens([{"role": "user", "content": text}], [])
+        dummy_message: PreparedOllamaMessage = {"role": "user", "content": text}
+        return count_tokens([dummy_message], [])
 
-    def prepare_messages(self, messages: Sequence[LLMMessage]) -> Sequence[LLMMessage]:
-        result = []
+    def prepare_messages(self, messages: Sequence[LLMMessage]) -> Sequence[PreparedOllamaMessage]:
+        result: list[PreparedOllamaMessage] = []
         for m in messages:
-            msg: dict = {"role": m["role"], "content": m.get("content", "")}
+            msg: PreparedOllamaMessage = {"role": m["role"], "content": m.get("content", "")}
             if "tool_calls" in m:
-                msg["tool_calls"] = m["tool_calls"]
+                msg["tool_calls"] = [_to_prepared_ollama_tool_call(tc) for tc in m["tool_calls"]]
             result.append(msg)
         return result
 
     async def stream_completion(
         self,
-        messages: Sequence[LLMMessage],
+        messages: PreparedMessages,
         tools: list,
         temperature: float,
         max_tokens: int | None = None,

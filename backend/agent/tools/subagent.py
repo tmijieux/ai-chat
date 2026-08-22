@@ -2,9 +2,11 @@ import asyncio
 from .base import BaseTool, tool_error
 from tool_result_types import SubagentResult, ToolResult
 from typing import TYPE_CHECKING
+from message_types import LLMMessage
 
 if TYPE_CHECKING:
     from agent.agent import AgentSession
+    from conv_helpers import ToolSet
 
 # Read-only, non-confirmation tools the subagent may use.
 # search_web is intentionally excluded: it requires_confirmation=True and the
@@ -40,17 +42,19 @@ class SubAgentTool(BaseTool):
     async def execute(self, args: dict, session: "AgentSession", working_directory: str | None) -> ToolResult:
         from agent.agent import AgentSession as _AgentSession, run_agent
         from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
+        from conv_helpers import ToolSet
 
         task = args.get("task", "")
         if not task:
             return tool_error(self.name, "task is required")
 
         sub_tools = get_ollama_tool_list(list(_SUBAGENT_TOOL_NAMES))
-        messages = [{"role": "user", "content": task}]
+        toolset = ToolSet(tools=sub_tools, extra_tools=None)
+        messages: list[LLMMessage] = [{"role": "user", "content": task}]
         sub_session = _AgentSession()
 
         agent_task = asyncio.create_task(
-            run_agent(sub_session, messages, sub_tools, working_directory)
+            run_agent(sub_session, messages, toolset, working_directory)
         )
 
         final_content = ""
@@ -58,15 +62,15 @@ class SubAgentTool(BaseTool):
 
         while True:
             event = await sub_session.outbound.get()
-            etype = event.get("type")
 
-            if etype == "content":
-                final_content += event.get("content", "")
+            if event["type"] == "content":
+                final_content += event["content"]
 
-            if etype in FORWARD:
-                await session.emit({**event, "_subagent": True})
+            if event["type"] in FORWARD:
+                event["_subagent"] = True
+                await session.emit(event)
 
-            if etype in ("done", "error"):
+            if event["type"] in ("done", "error"):
                 break
 
         await agent_task

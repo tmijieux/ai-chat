@@ -62,7 +62,9 @@ async def _serve_with_watcher(host: str, port: int) -> bool:
     Returns True if shutdown was triggered by a file change (caller should exit 3),
     False if it was a clean shutdown (e.g. SIGINT).
     """
+    from typing import cast
     from hypercorn.config import Config as HyperConfig
+    from hypercorn.typing import ASGIFramework
     from hypercorn.asyncio import serve
     from main import app
 
@@ -85,7 +87,10 @@ async def _serve_with_watcher(host: str, port: int) -> bool:
 
     watch_task = asyncio.create_task(watch_and_signal())
     try:
-        await serve(app, config, shutdown_trigger=shutdown_event.wait)
+        # hypercorn's Framework protocol and Starlette's ASGI types both describe the same
+        # runtime protocol (ASGI3) with just-incompatible-enough Scope/Receive stubs for pyright
+        # to reject this — hypercorn serving FastAPI apps is its primary supported use case.
+        await serve(cast(ASGIFramework, app), config, shutdown_trigger=shutdown_event.wait)
     finally:
         watch_task.cancel()
         try:

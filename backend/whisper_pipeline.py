@@ -23,7 +23,7 @@ warnings.filterwarnings("ignore")
 logging.getLogger("transformers").setLevel(logging.ERROR)
 
 import openvino as ov
-from transformers import AutoProcessor
+from transformers import WhisperProcessor
 
 WHISPER_DIR = Path(__file__).parent.parent / "whisper"
 SAMPLE_RATE = 16_000
@@ -62,7 +62,7 @@ class _Schema:
 class WhisperPipeline:
     enc:       ov.CompiledModel
     dec:       ov.CompiledModel
-    processor: AutoProcessor
+    processor: WhisperProcessor
     schema:    _Schema
 
 
@@ -120,12 +120,12 @@ def _load_compiled_model(
     return compiled
 
 
-def _load_processor(variant: WhisperVariant) -> AutoProcessor:
+def _load_processor(variant: WhisperVariant) -> WhisperProcessor:
     pkl = variant.blob_dir / "processor.pkl"
     if pkl.exists():
         with open(pkl, "rb") as f:
             return pickle.load(f)
-    processor = AutoProcessor.from_pretrained(variant.model_id, cache_dir=WHISPER_DIR / "model_cache")
+    processor = WhisperProcessor.from_pretrained(variant.model_id, cache_dir=WHISPER_DIR / "model_cache")
     with open(pkl, "wb") as f:
         pickle.dump(processor, f)
     return processor
@@ -186,7 +186,7 @@ def transcribe(pipeline: WhisperPipeline, audio_bytes: bytes, language: str | No
     t3 = time.perf_counter()
     logger.info("[whisper] encoder: %.3fs", t3 - t2)
 
-    tok    = pipeline.processor.tokenizer
+    tok    = pipeline.processor.tokenizer  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue] — set by ProcessorMixin.__init__, real at runtime but not in transformers' stubs
     prefix = [tok.convert_tokens_to_ids("<|startoftranscript|>")]
     if language:
         prefix.append(tok.convert_tokens_to_ids(f"<|{language}|>"))

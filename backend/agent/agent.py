@@ -17,7 +17,7 @@ from .auto_safety import evaluate_tool_safety, _ALWAYS_SAFE_TOOLS, _FILE_WRITE_T
 from .compress import _summarize_shell_output, _summarize_search_results, WORKING_MEMORY_ITERATION_THRESHOLD
 from llm import backend
 from llm.base import ToolCallStartEvent, ToolCallArgEvent, TOOL_CALL_BLOCK_RE, parse_all_tool_calls
-from message_types import LLMMessage, AssistantMessage, ToolCall, ToolCallFunction
+from message_types import LLMMessage, AssistantMessage, ToolCall, ToolCallFunction, PreparedMessages
 from tool_result_types import ToolResult, RunShellResult, SearchWebResult, DiffLine
 
 CTX_LIMIT = 2**15
@@ -246,7 +246,7 @@ class OutboundGenerationEndEvent(OutboundEventTags):
 class OutboundContextEvent(OutboundEventTags):
     type: Literal["context"]
     ctx_tokens: int
-    messages: list[LLMMessage]
+    messages: PreparedMessages
 
 
 class OutboundIterationEndEvent(OutboundEventTags):
@@ -527,7 +527,7 @@ def _deduplicate_file_reads(messages: list[LLMMessage]) -> None:
 
 
 
-def _log_context(messages: Sequence[LLMMessage]) -> None:
+def _log_context(messages: PreparedMessages) -> None:
     print(f"\n=== CONTEXT ({len(messages)} messages) ===")
     for m in messages:
         role = m.get("role", "?")
@@ -583,7 +583,7 @@ async def _track_tokens(
     tools: list[ToolDict],
     session: "AgentSession",
     label: str,
-    prepared: Sequence[LLMMessage] | None = None,
+    prepared: PreparedMessages | None = None,
 ) -> int:
     """Count context tokens, log the result, and emit ctx_update to the frontend."""
     if prepared is None:
@@ -703,7 +703,7 @@ async def _execute_tool_calls(
 
 
 async def _stream_llm(
-    prepared: Sequence[LLMMessage],
+    prepared: PreparedMessages,
     tools: list[ToolDict],
     max_tokens: int,
     session: AgentSession,
@@ -838,7 +838,7 @@ async def chat_with_tools(
     prompt_eval_count = await _track_tokens(messages, toolset.tools, session, "context before generation", prepared=prepared)
     max_tokens = CTX_LIMIT - prompt_eval_count
 
-    await session.emit({"type": "context", "ctx_tokens": prompt_eval_count, "messages": list(prepared)})
+    await session.emit({"type": "context", "ctx_tokens": prompt_eval_count, "messages": prepared})
 
     generation = await _stream_llm(prepared, toolset.tools, max_tokens, session, tool_choice=tool_choice)
 

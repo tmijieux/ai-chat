@@ -67,6 +67,7 @@ class RunShellTool(BaseTool):
                 )
 
             stdout, stderr = await proc.communicate()
+            assert proc.returncode is not None  # communicate() waits for the process to terminate
             return RunShellResult(
                 tool=self.name,
                 status="success",

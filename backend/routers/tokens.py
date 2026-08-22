@@ -45,7 +45,8 @@ async def count_conversation_tokens(id: str, sess: AsyncSession = Depends(get_db
     messages = await build_inference_context(branch, settings.active_prompt_id, sess)
     tool_names = settings.active_tool_names if conv.settings is not None else list(TOOL_REGISTRY.keys())
     tools = get_ollama_tool_list(tool_names)
-    token_count_value = await backend.count_tokens(messages, tools)
+    prepared = backend.prepare_messages(messages)
+    token_count_value = await backend.count_tokens(prepared, tools)
 
     images_by_msg = await fetch_images_by_message(branch, sess)
     image_tokens = sum(
@@ -151,6 +152,8 @@ async def debug_conversation_context(
             logger.info("  [user] %dt  %s", tokens, display_content[:300].replace("\n", " "))
         elif role == "tool":
             try:
+                if not isinstance(raw_content, str):
+                    raise ValueError(f"tool message has non-string content: {type(raw_content)}")
                 tool_data: ToolResult = json.loads(raw_content)
                 tool_name = tool_data.get("tool", "?")
                 status = tool_data.get("status", "?")
@@ -158,7 +161,7 @@ async def debug_conversation_context(
                 if status == "evicted":
                     logger.info("  [tool] %dt  %s %s [evicted]", tokens, tool_name, path)
                 elif status == "compressed":
-                    summary = (tool_data.get("summary") or "")[:120]
+                    summary = tool_data.get("summary", "")[:120]
                     logger.info("  [tool] %dt  %s %s [compressed] %s", tokens, tool_name, path, summary.replace("\n", " "))
                 elif tool_name == "read_file":
                     logger.info("  [tool] %dt  read_file %s [%s]", tokens, path, status)
@@ -236,6 +239,8 @@ async def get_inference_context(
         status = None
         if role == "tool":
             try:
+                if not isinstance(raw_content, str):
+                    raise ValueError(f"tool message has non-string content: {type(raw_content)}")
                 tool_data: ToolResult = json.loads(raw_content)
                 tool_name = tool_data.get("tool")
                 status = tool_data.get("status")

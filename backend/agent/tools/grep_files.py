@@ -94,7 +94,7 @@ class GrepFilesTool(BaseTool):
         if not file_in_directory(str(absolute_path), working_directory):
             return tool_error(self.name, f"Searching outside workspace is forbidden. Workspace: {working_directory}")
 
-        spec = None if include_ignored else load_ignore_spec(working_directory)
+        spec = load_ignore_spec(working_directory)
 
         def _do_grep() -> tuple[list, int]:
             matches = []

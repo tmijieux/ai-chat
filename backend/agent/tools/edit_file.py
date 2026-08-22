@@ -4,7 +4,7 @@ import json
 import re as _re
 from pathlib import Path
 from .base import BaseTool, tool_error, tool_rejected
-from tool_result_types import EditFileResult, ToolResult
+from tool_result_types import EditFileResult, ToolResult, DiffLine
 from agent.file_utils import file_in_directory, resolve_workspace_path
 from typing import TYPE_CHECKING
 
@@ -99,7 +99,7 @@ class EditFileTool(BaseTool):
 
         idx = current_content.find(old_string)
 
-        diff_lines = None
+        diff_lines: list[DiffLine] | None = None
         start_line = current_content[:idx].count('\n') + 1
         old_sl = old_string.splitlines(True)
         new_sl = new_string.splitlines(True)

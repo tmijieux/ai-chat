@@ -7,7 +7,7 @@ Run from the backend/ directory:
 
 import asyncio
 import aiohttp
-from .agent import MODEL_NAME, OLLAMA_CHAT_URL
+from llm.ollama import MODEL_NAME, OLLAMA_CHAT_URL
 from .tools import TOOL_REGISTRY, get_ollama_tool_list
 
 HELLO = [{"role": "user", "content": "hello"}]

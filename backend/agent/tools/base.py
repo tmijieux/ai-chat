@@ -18,7 +18,7 @@ def tool_rejected(tool_name: str, reason: str | None = None) -> ToolResult:
     return result
 
 
-def tool_error(tool_name: str, error: str, user_message: str | None = None, **extra: dict) -> ToolResult:
+def tool_error(tool_name: str, error: str, user_message: str | None = None, path: str | None = None) -> ToolResult:
     """Return a result indicating the tool failed with an error."""
     result: ToolResult = {
         "tool": tool_name,
@@ -27,7 +27,8 @@ def tool_error(tool_name: str, error: str, user_message: str | None = None, **ex
     }
     if user_message is not None:
         result["error"]["user_message"] = user_message
-    result.update(extra)
+    if path is not None:
+        result["path"] = path
     return result
 
 

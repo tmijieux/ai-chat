@@ -89,6 +89,7 @@ def report(
         print(f"NORMALIZED MATCHES — {len(normalized_rewrites)} key(s) would be restored to the source spelling")
         print("-" * 72)
         for match in normalized_rewrites:
+            assert match.source_key is not None  # tier is TIER_NORMALIZED, never paired with a missing source_key
             print(f"  current: {match.translated_key!r}")
             print(f"  source:  {match.source_key!r}")
             print(f"  diff:    {describe_character_differences(match.translated_key, match.source_key)}")
@@ -100,6 +101,7 @@ def report(
         print(f"FUZZY MATCHES — {len(fuzzy_rewrites)} key(s), NOT identical after normalization; check each one")
         print("-" * 72)
         for match in sorted(fuzzy_rewrites, key=lambda m: m.similarity):
+            assert match.source_key is not None  # tier is TIER_FUZZY, never paired with a missing source_key
             print(f"  similarity: {match.similarity:.3f}")
             print(f"  current:    {match.translated_key!r}")
             print(f"  source:     {match.source_key!r}")
@@ -136,6 +138,7 @@ def write_fixed_file(translated: LoadedFile, matches: list[KeyMatch], indent: in
     changed = 0
     for (original_key, value), match in zip(translated.pairs, matches):
         if match.needs_rewrite():
+            assert match.source_key is not None  # needs_rewrite() only returns True when source_key is set
             rewritten_pairs.append((match.source_key, value))
             changed += 1
         else:

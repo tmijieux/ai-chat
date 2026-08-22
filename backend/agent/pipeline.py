@@ -9,6 +9,7 @@ from agent.agent import AgentSession, chat_with_tools, run_agent
 from conv_helpers import ToolSet
 from message_types import LLMMessage
 from agent.finish_tools import (
+    BaseFinishTool,
     FinishAugmentation,
     FinishClassify,
     FinishCritique,
@@ -17,6 +18,7 @@ from agent.finish_tools import (
     FinishVerify,
 )
 from agent.tools import TOOL_REGISTRY, get_ollama_tool_list
+from agent.tools.base import ToolDict
 from agent.tools.explore_codebase import _read_lines
 
 logger = logging.getLogger(__name__)
@@ -162,7 +164,7 @@ async def _run_compile_command(command: str, working_directory: str, session: Ag
 # Stage runner
 # ---------------------------------------------------------------------------
 
-def _finish_tool_schema(tool) -> dict:
+def _finish_tool_schema(tool: BaseFinishTool) -> ToolDict:
     """Convert a finish tool instance to the Ollama function schema dict."""
     return {"type": "function", "function": tool.to_ollama_schema()}
 
@@ -170,14 +172,14 @@ def _finish_tool_schema(tool) -> dict:
 async def _run_stage_loop(
     sub_session: AgentSession,
     stage_messages: list[LLMMessage],
-    tool_schemas: list[dict],
+    tool_schemas: list[ToolDict],
     extra_tools: dict,
     working_directory: str | None,
     stage_name: str,
     max_iterations: int | None = None,
     numbered_name: str | None = None,
     inject_turn_reminders: bool = False,
-    finish_tool_schema: dict | None = None,
+    finish_tool_schema: ToolDict | None = None,
 ) -> None:
     """Inner loop for a pipeline stage. Stops when the finish tool is called or no more tool calls.
 
@@ -217,8 +219,7 @@ async def _run_stage_loop(
             if sub_session.finish_result is not None:
                 break
             if turn.is_done:
-                last_message = stage_messages[-1] if stage_messages else {}
-                raw_content = last_message.get("content") if isinstance(last_message, dict) else None
+                raw_content = stage_messages[-1].get("content") if stage_messages else None
                 logger.warning(
                     "[pipeline:%s] model stopped at iteration %d without calling finish tool — raw output:\n%s",
                     display_name,
@@ -366,7 +367,7 @@ class PipelineOrchestrator:
         self,
         system_messages: list[LLMMessage],
         working_directory: str | None,
-        regular_tools: list[dict],
+        regular_tools: list[ToolDict],
     ):
         self._system_messages = system_messages
         self._working_directory = working_directory
@@ -410,7 +411,7 @@ class PipelineOrchestrator:
 
         if classify_result.get("complexity") == "simple":
             logger.info("[pipeline] classified as simple — running direct agent loop")
-            await run_agent(session, messages, self._regular_tools, wd)
+            await run_agent(session, messages, ToolSet(tools=self._regular_tools, extra_tools=None), wd)
             return
 
         # Stage 2: Augment
@@ -476,7 +477,7 @@ class PipelineOrchestrator:
 
         if not tasks:
             logger.warning("[pipeline] plan produced no tasks — falling back to direct agent loop")
-            await run_agent(session, messages, self._regular_tools, wd)
+            await run_agent(session, messages, ToolSet(tools=self._regular_tools, extra_tools=None), wd)
             return
 
         # Stages 5+6: Execute + Verify each task
@@ -494,7 +495,7 @@ class PipelineOrchestrator:
                     if attempt > 0 and task.verify_issues is not None
                     else ""
                 )
-                execute_messages = [
+                execute_messages: list[LLMMessage] = [
                     {"role": "system", "content": _EXECUTE_SYSTEM},
                     {
                         "role": "user",
@@ -592,4 +593,4 @@ class PipelineOrchestrator:
                 ),
             }
 
-        await run_agent(session, synth_messages, self._regular_tools, wd)
+        await run_agent(session, synth_messages, ToolSet(tools=self._regular_tools, extra_tools=None), wd)

@@ -51,8 +51,8 @@ class ReadFileRangeTool(BaseTool):
             return tool_error(self.name, "No workspace configured — file tools are disabled.")
 
         file_path = args.get("file_path", "")
-        start_line = int(args.get("start_line"))
-        end_line = int(args.get("end_line"))
+        start_line_raw = args.get("start_line")
+        end_line_raw = args.get("end_line")
 
         # search_result_id = args.get("search_result_id", "")
         # range_size = end_line - start_line + 1
@@ -63,8 +63,11 @@ class ReadFileRangeTool(BaseTool):
         #         "Invalid or missing search_result_id. Call glob_files or grep_files first and pass its result_id.",
         #     )
 
-        if not file_path or start_line is None or end_line is None:
+        if not file_path or start_line_raw is None or end_line_raw is None:
             return tool_error(self.name, "file_path, start_line, and end_line are required.")
+
+        start_line = int(start_line_raw)
+        end_line = int(end_line_raw)
 
         if start_line < 1 or end_line < start_line:
             return tool_error(self.name, "start_line must be >= 1 and end_line must be >= start_line.")
