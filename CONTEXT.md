@@ -203,6 +203,8 @@ Three sequential passes operate on the delta since the last working memory messa
 - Length stop ✅: when the LLM output is cut off mid-generation, compression runs and the iteration retries.
 - Iteration threshold (disabled by default): triggers compression after N iterations within a run.
 
+None of this applies inside a [[Workflow Run View]] stage's isolated session — see "Context overflow inside a stage" there.
+
 ## Status Bar
 Always-visible top bar in the chat area. Shows token info: `Context Tokens: N / 32,768 (%)`. The value is the last measured token count — always from a real API call, never estimated. On conversation load, the count is refreshed immediately via `GET /api/conversations/{id}/ctx-tokens` so it reflects the current context even without a new inference. Shows 0 on a new chat. When the conversation mode is not Standard, a colored badge showing the active mode name (`PLAN`, `AUTO`, `YOLO`) is displayed next to the token count. The ⚙ button opens the [[Conversation Settings Drawer]]. A 🔍 button logs a per-message token breakdown to the backend console for debugging.
 
@@ -350,6 +352,8 @@ Workflow stages run in isolated sessions and are **not** part of the conversatio
 **Reopening a past run:** the message that started a workflow gets a "Reopen workflow run" action (its `⋮` menu) once the run has an id — including across a page reload, since this rebuilds the view from the persisted history rather than the live event stream. A reopened run's history can be browsed exactly like a live run's, and it can also be resumed from here (see below) even though nothing is currently streaming.
 
 **Resuming a run:** selecting any stopped or failed node in a run whose overall status is itself stopped/failed reveals a "Resume from here" action. Resuming continues the same run in place — same run id, streaming live over the same channel a fresh run would use — rather than starting over from the beginning. What "from here" means depends on the selected node: resuming a node that already completed skips ahead to whatever ran after it; resuming a node that was itself stopped or failed redoes just that node onward. A loop's items are independent by default, so resuming mid-loop only redoes items from the resume point forward, reusing already-completed later items' results as-is — unless the workflow declares that loop's items depend on each other, in which case every item from the resume point runs again. Editing a stage's persisted result before resuming is possible by hand-editing the persisted JSON directly; there is no in-UI editor.
+
+**Context overflow inside a stage:** a workflow stage's isolated session never compresses its context, unlike the main conversation — a stage is expected to stay within the context limit on its own (e.g. by chunking a large input across loop iterations rather than reading it all at once). If a stage's context overflows anyway, the run fails there with a clear error instead of silently compressing or hanging, and the failure is resumable like any other: fix the workflow definition or its inputs, then "Resume from here."
 
 By default the pane follows whichever stage is currently running, and auto-scrolls as activity streams in under the same rule as [[Chat Auto-scroll]]: scrolling up stops it so nothing jumps while reading, and returning to the bottom resumes it. Selecting a specific stage pins the pane to that stage; a control returns it to following the running one.
 

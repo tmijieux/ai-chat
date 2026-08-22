@@ -157,7 +157,7 @@ def _walk_loop_items(
             if len(resume_address) > 1:
                 item_payload = _read_json(loop_dir / str(item_number) / "item_result.json")
                 if item_payload is not None:
-                    slots[stage.item_var] = item_payload["item_result"]["item"]
+                    slots[stage.item_var] = item_payload["item_result"]["input"]
                 _walk_stages(loop_dir / str(item_number), stage.inner_stages, resume_address[1:], slots)
             break
         if target_item_number is not None and item_number > target_item_number:

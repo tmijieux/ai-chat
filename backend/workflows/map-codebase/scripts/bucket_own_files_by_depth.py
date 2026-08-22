@@ -44,8 +44,8 @@ def main() -> None:
     own_by_directory: dict[str, dict] = {}
 
     for entry in items:
-        file_info = entry.get("item") or {}
-        summary = entry.get("summarize_file") or {}
+        file_info = entry.get("input") or {}
+        summary = (entry.get("result") or {}).get("summarize_file") or {}
         path = file_info.get("path")
         if path is None:
             continue

@@ -43,9 +43,9 @@ def main() -> None:
         entry["own_files"].extend(group.get("files") or [])
 
     for child in child_items:
-        child_item = child.get("item") or {}
-        child_directory = child_item.get("directory")
-        synthesis = child.get("synthesize_directory") or {}
+        child_dir_group = child.get("input") or {}
+        child_directory = child_dir_group.get("directory")
+        synthesis = (child.get("result") or {}).get("synthesize_directory") or {}
         if child_directory is None:
             continue
         parent_directory = str(PurePosixPath(child_directory).parent)

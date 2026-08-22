@@ -193,7 +193,7 @@ stages:
           {{parse_request.focus_note}}
 
           Chunk notes, in file order:
-          {{chunk_notes.items}}
+          {{chunk_notes.items[].result}}
         tools: []
         finish_tool: finish_summarize_file
         max_iterations: 2

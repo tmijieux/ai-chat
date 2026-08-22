@@ -11,7 +11,7 @@ from typing import Any
 
 import aiohttp
 
-from agent.agent import AgentSession, run_agent
+from agent.agent import AgentSession, OutboundEvent, run_agent
 from agent.tools.base import ToolDict
 from conv_helpers import ToolSet
 from message_types import LLMMessage
@@ -25,7 +25,7 @@ from agent.workflow_loader import (
     load_workflow,
 )
 from agent.workflow_resume import reconstruct_slots
-from agent.workflow_run_recorder import WorkflowRunRecorder
+from agent.workflow_run_recorder import WorkflowRunRecorder, LoopItemResultPayload
 
 logger = logging.getLogger(__name__)
 
@@ -61,16 +61,25 @@ def _to_namespace(value: Any) -> Any:
 
 
 def _resolve_path(path: str, slots: dict[str, Any]) -> Any:
-    """Resolve 'slot.field.subfield' dot-path from the slot registry. Returns None if missing."""
-    parts = path.strip().split(".")
-    value = slots.get(parts[0])
-    for part in parts[1:]:
+    """Resolve 'slot.field.subfield' dot-path from the slot registry. A segment written as
+    'field[]' resolves 'field' as a list, then maps the REST of the path over each element —
+    e.g. 'chunk_notes.items[].result' returns [item.get("result") for item in chunk_notes.items].
+    Returns None if missing."""
+    return _resolve_parts(path.strip().split("."), slots)
+
+
+def _resolve_parts(parts: list[str], value: Any) -> Any:
+    """Walk one segment of a dot-path against `value`, recursing into a list for a '[]' segment."""
+    for index, part in enumerate(parts):
         if value is None:
             return None
-        if isinstance(value, dict):
-            value = value.get(part)
-        else:
-            value = getattr(value, part, None)
+        is_map = part.endswith("[]")
+        key = part[:-2] if is_map else part
+        value = value.get(key) if isinstance(value, dict) else getattr(value, key, None)
+        if is_map:
+            if not isinstance(value, list):
+                return None
+            return [_resolve_parts(parts[index + 1:], element) for element in value]
     return value
 
 
@@ -521,7 +530,7 @@ class CustomWorkflowOrchestrator:
 
     async def _replay_loop_item(
         self, session: AgentSession, path: str, loop_address: list[str], item_number: int
-    ) -> dict | None:
+    ) -> LoopItemResultPayload | None:
         """Read one loop item's persisted result and re-emit it as `loop_item_exit` — a faithful
         replay of what already happened, not a guess. Used both when a resumed loop reuses an
         item instead of redispatching it (`_run_loop`) and when replaying a whole loop that
@@ -1182,18 +1191,19 @@ class _RecordingSession:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._real, name)
 
-    async def emit(self, event: dict) -> None:
-        event_type = event.get("type")
-        if event_type == "stage_enter":
+    async def emit(self, event: OutboundEvent) -> None:
+        if event["type"] == "stage_enter":
             self._recorder.on_stage_enter(event, self._active_item_stack)
-        elif event_type == "stage_exit":
+        elif event["type"] == "stage_exit":
             self._recorder.on_stage_exit(event, self._active_item_stack)
-            event = {**event, "result": _truncate_stage_result(event["result"])}
-        elif event_type == "loop_item_exit":
+            event["result"] = _truncate_stage_result(event["result"])
+        elif event["type"] == "loop_item_exit":
             self._recorder.on_loop_item_exit(event, self._active_item_stack)
-            event = {**event, "item_result": _truncate_stage_result(event["item_result"])}
-        elif event.get("_workflow_execution") is not None:
-            self._recorder.on_activity(event["_workflow_execution"], event)
+            event["item_result"] = _truncate_stage_result(event["item_result"])
+        else:
+            execution_id = event.get("_workflow_execution")
+            if execution_id is not None:
+                self._recorder.on_activity(execution_id, event)
         await self._real.emit(event)
 
 
@@ -1220,48 +1230,45 @@ class _RespondStageSession:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._real, name)
 
-    async def emit(self, event: dict) -> None:
-        if event.get("type") == "done":
-            self.finished_without_response = event.get("finished_without_response", False)
+    async def emit(self, event: OutboundEvent) -> None:
+        if event["type"] == "done":
+            self.finished_without_response = event["finished_without_response"]
             return
-        if event.get("type") == "error":
-            self.error_message = event.get("message")
+        if event["type"] == "error":
+            self.error_message = event["message"]
             return
         # A respond stage's own thinking/content/tool-call events come from run_agent directly,
         # not run_stage — so unlike an llm/agent stage, nothing has stamped _workflow_execution on
         # them yet. Stamp it here so WorkflowRunRecorder (via _RecordingSession, further down this
         # session chain) can persist this stage's transcript the same as any other stage type.
         if event.get("_workflow_execution") is None:
-            event = {**event, "_workflow_execution": self._execution_id}
+            event["_workflow_execution"] = self._execution_id
         await self._real.emit(event)
 
 
 def _collect_inner_results(
     stage: WorkflowStageDefinition, slots: dict[str, Any], item: Any, success: bool
 ) -> dict:
-    """Snapshot inner stage finish results for one loop iteration.
-
-    Skips any inner stage with include_in_item_result=False — scratch data meant only for other
-    inner stages in the same iteration (e.g. a chunking pass consumed by a per-chunk summarize
-    loop), not for "what this item produced" as seen by the loop's own aggregated output slot or
-    the loop_item_exit event the run view reads.
+    """Snapshot one loop iteration: its raw input, kept separate from what its inner stages
+    produced (result, one key per included inner stage — skips any with
+    include_in_item_result=False, e.g. a chunking pass consumed by a per-chunk summarize loop).
     """
-    result: dict = {"item": item, "success": success}
+    result: dict = {}
     for inner in stage.inner_stages:
         if inner.include_in_item_result and inner.name in slots:
             result[inner.name] = slots[inner.name]
-    return result
+    return {"input": item, "success": success, "result": result}
 
 
 def _format_task_summary(aggregated: list[dict]) -> str:
     """Produce a human-readable task summary from loop aggregated results."""
     lines = []
     for entry in aggregated:
-        item = entry.get("item") or {}
-        task_id = item.get("id", "?") if isinstance(item, dict) else str(item)
-        description = item.get("description", "") if isinstance(item, dict) else ""
+        input = entry.get("input") or {}
+        task_id = input.get("id", "?") if isinstance(input, dict) else str(input)
+        description = input.get("description", "") if isinstance(input, dict) else ""
         status = "done" if entry.get("success") else "failed"
-        execute = entry.get("execute_task") or {}
+        execute = (entry.get("result") or {}).get("execute_task") or {}
         result_text = execute.get("result", "") if isinstance(execute, dict) else ""
         lines.append(f"- {task_id} [{status}]: {description} → {result_text or 'no result'}")
     return "\n".join(lines)

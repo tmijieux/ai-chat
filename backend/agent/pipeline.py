@@ -281,6 +281,10 @@ async def run_stage(
     sub_session.auto_safe_commands = list(parent_session.auto_safe_commands)
     sub_session.working_directory = parent_session.working_directory
     sub_session.last_user_message = parent_session.last_user_message
+    # Always off for an isolated stage session, regardless of the real conversation's own
+    # setting — chunking exists so a stage's own context never needs compression; if it overflows
+    # anyway that's a stage-definition problem a human needs to fix, not something to paper over.
+    sub_session.compression_enabled = False
     stage_messages = list(messages)
     regular_schemas = get_ollama_tool_list(regular_tool_names)
     all_schemas = regular_schemas + [_finish_tool_schema(finish_tool)]
@@ -310,13 +314,12 @@ async def run_stage(
                 if tool_id and tool_id in sub_session._pending_confirms:
                     parent_session._pending_confirms[tool_id] = sub_session._pending_confirms[tool_id]
             existing = event.get("_pipeline_stage")
-            tag = f"{numbered_name}.{existing}" if existing else numbered_name
-            forwarded = {**event, "_pipeline_stage": tag}
-            if execution_id is not None and forwarded.get("_workflow_execution") is None:
+            event["_pipeline_stage"] = f"{numbered_name}.{existing}" if existing else numbered_name
+            if execution_id is not None and event.get("_workflow_execution") is None:
                 # Only stamp the innermost stage's id — a nested run_stage already tagged its own
                 # events, and the run view files activity under the stage that actually produced it.
-                forwarded["_workflow_execution"] = execution_id
-            await parent_session.emit(forwarded)
+                event["_workflow_execution"] = execution_id
+            await parent_session.emit(event)
 
         await loop_task
     finally:
