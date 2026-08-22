@@ -21,3 +21,11 @@
 
 - **map-codebase: file-list preview before the scan loop starts** — deferred out of the ADR-0011 work, not started. See handoff doc for details.
 
+- **In-UI editing of a stage's definition/inputs before resuming**: correcting a workflow bug that stopped or failed a run — a stage's `workflow.yaml` definition, or a persisted stage's own input/result JSON — currently requires editing files by hand outside the app before hitting "Resume from here." No in-UI editor exists yet. See ADR-0011 and ADR-0012.
+
+## Local Model Exploration
+
+- **Try ornith-1.5-9B-GGUF**: model on Hugging Face based on Qwen3.5-9B and Gemma, reportedly trained more recently with better benchmark results. Worth evaluating as a replacement for the current local model.
+
+- **Search for other recent small models**: look for other recently-trained models around the same size class (fits current hardware) that might outperform the current local model on benchmarks.
+
