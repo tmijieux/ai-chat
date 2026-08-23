@@ -1,4 +1,4 @@
-import { Component, input, signal } from '@angular/core'
+import { Component, computed, input, linkedSignal } from '@angular/core'
 import { CommonModule } from '@angular/common'
 import { CollapsibleBubbleComponent } from '../collapsible-bubble/collapsible-bubble.component'
 import { DisplayMessage, TokenMeta } from '../../types/message-types'
@@ -18,7 +18,14 @@ export class ToolResultComponent {
   readonly CTX_LIMIT = 2 ** 15
   readonly msg = input.required<ToolResultMessage>()
 
-  private readonly _tab = signal<'output' | 'summary'>('summary')
+  // A generated image is worth seeing immediately, unlike other tool output — drives both the
+  // bubble's default open state and the tab default below, so it isn't hidden behind a click or
+  // a "summary" tab once compressed.
+  readonly generatedImage = computed(() => this.formatGenerateImageResult(this.msg().content))
+
+  private readonly _tab = linkedSignal<'output' | 'summary'>(() =>
+    this.generatedImage() ? 'output' : 'summary',
+  )
 
   get tab(): 'output' | 'summary' {
     return this._tab()

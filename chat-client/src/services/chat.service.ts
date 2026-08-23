@@ -643,7 +643,11 @@ export class ChatService {
       } else if (event.type === 'tool_result') {
         this._callingTool.set(null)
         this._streamingToolCallArgs.set('')
-        const resultId = `result-${event.tool_id}`
+        // A fresh id, not derived from event.tool_id: tool_id only disambiguates calls within
+        // one LLM turn (it's not globally unique — llama_server.py assigns it as a plain
+        // per-turn position like "tc-0", so almost every conversation's first tool call gets
+        // the same value) and must never double as this message's database primary key.
+        const resultId = crypto.randomUUID()
         const resultContent = event.content ?? ''
         const logMessage = event.log_message ?? null
         const toolTokenCount = event.ctx_tokens ?? lastKnownCtxTokens
@@ -940,23 +944,14 @@ export class ChatService {
           ...siblingMeta,
         })
       } else if (m.role === 'assistant') {
-        if (m.content) {
+        // An assistant turn that only made a tool call has empty content and no thinking —
+        // still a real turn the user needs to see (it's what the following tool_result message
+        // is answering), so it must be included alongside the content/thinking/degenerate cases.
+        if (m.content || m.thinking || m.is_degenerate || (m.tool_calls && m.tool_calls.length > 0)) {
           result.push({
             kind: 'assistant',
             id: m.id,
             content: m.content,
-            thinking: m.thinking ?? undefined,
-            tool_calls: m.tool_calls ?? undefined,
-            token_count: m.token_count,
-            token_delta: m.token_delta,
-            context_excluded: m.context_excluded,
-            ...siblingMeta,
-          })
-        } else if (m.thinking || m.is_degenerate) {
-          result.push({
-            kind: 'assistant',
-            id: m.id,
-            content: '',
             thinking: m.thinking ?? undefined,
             tool_calls: m.tool_calls ?? undefined,
             is_degenerate: m.is_degenerate,

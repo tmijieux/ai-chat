@@ -1,4 +1,4 @@
-import { Component, input, signal } from '@angular/core'
+import { Component, input, linkedSignal } from '@angular/core'
 
 @Component({
   selector: 'app-collapsible-bubble',
@@ -23,6 +23,11 @@ export class CollapsibleBubbleComponent {
   readonly streaming = input(false)
   readonly wrapperClass = input('bg-thinking-bubble')
   readonly flat = input(false)
+  readonly initiallyOpen = input(false)
 
-  readonly opened = signal(false)
+  // linkedSignal, not a plain signal seeded once: initiallyOpen can depend on @for-recycled
+  // component state (e.g. msg().content only resolving after creation), so this must track it
+  // reactively rather than read it once at construction. Still freely writable by the click
+  // handler afterward, same as a plain signal.
+  readonly opened = linkedSignal(() => this.initiallyOpen())
 }

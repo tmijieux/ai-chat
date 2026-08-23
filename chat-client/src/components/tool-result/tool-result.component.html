@@ -1,5 +1,5 @@
 <div class="p-relative w-full">
-  <app-collapsible-bubble wrapperClass="bg-tool-result border-tool-result">
+  <app-collapsible-bubble wrapperClass="bg-tool-result border-tool-result" [initiallyOpen]="!!generatedImage()">
     <span header>
       @if (msg().log_message) {
         <code class="tool-result-label">{{ msg().log_message }}</code>
@@ -29,13 +29,12 @@
       @let shell = formatShellResult(msg().content);
       @let fileContent = formatFileContent(msg().content);
       @let fileList = formatFileList(msg().content);
-      @let generatedImage = formatGenerateImageResult(msg().content);
-      @if (generatedImage) {
+      @if (generatedImage(); as img) {
         <div class="p-3 border-t border-gray-200">
           <img
-            [src]="'/api/images/' + generatedImage.imageId"
+            [src]="'/api/images/' + img.imageId"
             class="max-h-96 max-w-full object-contain rounded border border-gray-300"
-            [alt]="generatedImage.prompt"
+            [alt]="img.prompt"
           />
         </div>
       } @else if (grep) {
