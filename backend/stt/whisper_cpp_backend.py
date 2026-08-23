@@ -77,7 +77,7 @@ class WhisperCppBackend(SttBackend):
             [
                 WHISPER_SERVER_EXE,
                 "-m", WHISPER_MODEL_PATH,
-                "-bs", "1", "-bo", "1",  # greedy decode — matches the OpenVINO pipeline's decoding
+                "-bs", "5", "-bo", "5",  # beam search — greedy (1/1) traded too much accuracy for speed
                 # No --convert: we transcode to WAV ourselves before uploading (see module
                 # docstring) — whisper.cpp's own reader (miniaudio) accepts WAV natively.
                 "--port", "8090",
@@ -122,4 +122,10 @@ class WhisperCppBackend(SttBackend):
                     body = await r.text()
                     raise RuntimeError(f"whisper-server /inference failed ({r.status}): {body}")
                 data = await r.json()
-                return data["text"].strip()
+                # whisper-server's output_str() unconditionally joins Whisper's per-segment
+                # output with "\n" (server.cpp, not configurable via a request parameter) —
+                # segments break on natural speech pauses, so continuous dictation otherwise
+                # comes back with a hard newline at every pause. The OpenVINO pipeline never had
+                # this (its own decode loop produces one continuous string), so collapse it here
+                # to match: join with spaces instead of newlines.
+                return " ".join(data["text"].split())
