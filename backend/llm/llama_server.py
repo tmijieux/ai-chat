@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import AsyncIterator, Sequence
 
 import aiohttp
+import psutil
 from fastapi import HTTPException
 
 from tokenizer import render_messages
@@ -159,6 +160,32 @@ class LlamaServerBackend(LLMBackend):
                     pass
 
         logger.warning("llama-server did not respond within 60s — continuing anyway.")
+
+    async def stop(self) -> None:
+        """Terminate any running llama-server.exe process, freeing its VRAM for another GPU
+        workload (e.g. image generation). Finds the process by name rather than relying on a
+        locally-tracked handle, since ensure_running's already-running fast path never captures
+        one — llama-server may have been spawned by a previous backend session."""
+        killed = False
+        for proc in psutil.process_iter(["name"]):
+            try:
+                if proc.info["name"] and proc.info["name"].lower() == "llama-server.exe":
+                    proc.terminate()
+                    killed = True
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        if not killed:
+            return
+
+        async with aiohttp.ClientSession() as http:
+            for _ in range(20):  # 10s
+                try:
+                    async with http.get(LLAMA_HEALTH_URL, timeout=aiohttp.ClientTimeout(total=1)):
+                        pass
+                except Exception:
+                    return
+                await asyncio.sleep(0.5)
+        logger.warning("llama-server still responding 10s after terminate — VRAM may not be freed yet.")
 
     async def check_or_raise(self) -> None:
         async with aiohttp.ClientSession() as http:

@@ -670,6 +670,17 @@ export class ChatService {
               m.id === resultId ? { ...m, token_delta: tokenDelta } : m,
             ),
           )
+          // generate_image attaches its Image row to this tool-result message the same way a
+          // user-uploaded image attaches to a user message — via image_ids on the same POST.
+          let imageIds: string[] | undefined
+          try {
+            const parsed = JSON.parse(resultContent)
+            if (parsed.tool === 'generate_image' && parsed.status === 'success' && parsed.image_id) {
+              imageIds = [parsed.image_id]
+            }
+          } catch {
+            /* not JSON or not a generate_image result — no image to attach */
+          }
           await firstValueFrom(
             this.api.post_message(conv.id, {
               id: resultId,
@@ -678,6 +689,7 @@ export class ChatService {
               log_message: logMessage,
               token_count: toolTokenCount,
               token_delta: tokenDelta ?? undefined,
+              ...(imageIds ? { image_ids: imageIds } : {}),
             }),
           )
           this._contextRevision.update((n) => n + 1)

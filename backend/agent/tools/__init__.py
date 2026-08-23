@@ -15,6 +15,7 @@ from .read_file_range import ReadFileRangeTool
 from .explore_codebase import ExploreCodebaseTool
 from .propose_plan import ProposePlanTool
 from .ask_user_question import AskUserQuestionTool
+from .generate_image import GenerateImageTool
 
 TOOL_REGISTRY: dict[str, BaseTool] = {
     t.name: t
@@ -31,6 +32,7 @@ TOOL_REGISTRY: dict[str, BaseTool] = {
         SearchWebTool(),
         SummarizeSubtaskTool(),
         SubAgentTool(),
+        GenerateImageTool(),
     ]
 }
 

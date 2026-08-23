@@ -25,9 +25,13 @@
 
 - **Search for other recent small models**: look for other recently-trained models around the same size class (fits current hardware) that might outperform the current local model on benchmarks.
 
-## Ideas to Explore
+## Image Generation
 
-- **Image generation**: explore adding image generation capability.
+- **Migrate to stable-diffusion.cpp**: the current `generate_image` tool runs Flux.1-schnell through PyTorch/diffusers, which was directly responsible for a hard VRAM-ceiling failure mode (see ADR-0013) — resolution is capped at 512x512 to stay under it. `stable-diffusion.cpp` (GGML-based, same lineage as `llama.cpp`) uses static VRAM allocation instead of PyTorch's dynamic caching allocator, and llama-server's own stability at high VRAM occupancy suggests it would fix this at the root rather than by capping resolution. Likely able to reuse the same GGUF model files already downloaded.
+
+- **Revisit generation resolution/quality**: 512x512 was picked as the first size that fit within the measured VRAM ceiling, not tuned for best quality/headroom tradeoff — worth another pass (a size between 512 and 768, or trading T5 encoder quality for more headroom) once on stable-diffusion.cpp or otherwise.
+
+## Ideas to Explore
 
 - **Text to speech**: explore adding text-to-speech capability.
 

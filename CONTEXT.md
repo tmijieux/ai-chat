@@ -75,13 +75,24 @@ Allow pasting or dragging images into the chat input area. Multiple images per m
 
 **Context eviction (deferred):** when implemented — strip image parts from evicted messages, store an AI-generated description as `compressed_summary`, provide a `reload_image` agent tool. See ADR-0007.
 
-## Tool Result Display
-Tool result bubbles currently render raw JSON in a `<pre>` block. Planned improvements:
+## Image Generation
 
-- **Grep results** (`grep_files`): Parse `matches: [{file, line, content, match?}]`. Render grouped by file — file-path header per group, line numbers, matched lines highlighted (green) vs context lines (subdued). The `log_message` header already shows a one-liner summary.
-- **Write / edit results**: Compact success/error line — just path and status, no raw JSON blob.
-- **Run_shell results**: Exit code prominently + stdout in a scrollable code block.
-- **Other tools**: Surface key fields (path, status, count) as a summary line; hide the rest.
+`generate_image` agent tool: generates an image from a text prompt using a local image-generation model, separate from the chat model. Selectable and confirmed like any other agent tool.
+
+**Requires confirmation, and is slow (roughly a minute or more per image).** The chat model and the image-generation model cannot both fit in the machine's GPU memory at once, so generating an image temporarily stops the chat model, generates, then restarts it — the chat model is briefly unavailable for the duration. The confirmation card surfaces this cost before the user approves it.
+
+**Result:** the generated image displays inline in the tool result, the same way an uploaded image displays in a user message bubble. See ADR-0013.
+
+## Tool Result Display
+Tool result bubbles render structured content per tool, falling back to raw JSON in a `<pre>` block for tools without a dedicated rendering:
+
+- **Grep results** (`grep_files`): grouped by file — file-path header per group, line numbers, matched lines highlighted (green) vs context lines (subdued). The `log_message` header already shows a one-liner summary.
+- **Write / edit results**: compact success/error line — just path and status, no raw JSON blob.
+- **Run_shell results**: exit code prominently + stdout (and stderr, if present) in a scrollable code block.
+- **File content** (`read_file`, `read_file_range`): line-numbered, same visual treatment as grep's context lines.
+- **File lists** (`list_directory`, `glob_files`): one entry per line.
+- **Generated images** (`generate_image`): the image itself, rendered inline. See [[Image Generation]].
+- **Other tools**: fall back to raw JSON.
 
 `compressed_summary` always takes precedence; structured rendering applies only to the raw content fallback.
 

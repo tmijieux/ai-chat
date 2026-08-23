@@ -126,6 +126,18 @@ parseGrepResult(content: string): {
     }
   }
 
+  formatGenerateImageResult(content: string): { imageId: string; prompt: string } | null {
+    try {
+      const r = JSON.parse(content)
+      if (r.tool !== 'generate_image' || r.status !== 'success' || !r.image_id) {
+        return null
+      }
+      return { imageId: r.image_id, prompt: r.prompt ?? '' }
+    } catch {
+      return null
+    }
+  }
+
   /** Handles list_directory (newline-separated content) and glob_files (files array). */
   formatFileList(content: string): { entries: string[] } | null {
     try {

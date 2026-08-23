@@ -109,3 +109,9 @@ class SummarizeSubtaskResult(ToolResult):
 class SubagentResult(ToolResult):
     """Result of subagent: the final content produced by the sub-agent."""
     result: NotRequired[str]
+
+
+class GenerateImageResult(ToolResult):
+    """Result of generate_image: the prompt used and the id of the created Image row."""
+    prompt: NotRequired[str]
+    image_id: NotRequired[str]
