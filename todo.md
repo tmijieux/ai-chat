@@ -19,23 +19,6 @@
 
 - **In-UI editing of a stage's definition/inputs before resuming**: correcting a workflow bug that stopped or failed a run — a stage's `workflow.yaml` definition, or a persisted stage's own input/result JSON — currently requires editing files by hand outside the app before hitting "Resume from here." No in-UI editor exists yet. See ADR-0011 and ADR-0012.
 
-## Local Model Exploration
-
-- **Try ornith-1.5-9B-GGUF**: model on Hugging Face based on Qwen3.5-9B and Gemma, reportedly trained more recently with better benchmark results. Worth evaluating as a replacement for the current local model.
-
-- **Search for other recent small models**: look for other recently-trained models around the same size class (fits current hardware) that might outperform the current local model on benchmarks.
-
-## Image Generation
-
-- **Push generation resolution past 512x512**: `generate_image` runs on stable-diffusion.cpp with Z-Image-Turbo (ADR-0013), which measured even more VRAM headroom at 512x512 (~5.3GB peak) than the earlier Flux.1-schnell setup on the same backend (~6.8GB) — 512x512 is not a hard limit, just the untested default. Worth trying 768x768 or higher.
-
-- **sd-server.exe instead of a fresh sd-cli.exe subprocess per call**: `stable-diffusion.cpp` also builds a server mode (mirroring `llama-server`), which could avoid the model-file read on every single generation (currently ~1-2s, cheap enough that this hasn't been worth doing yet).
-
-## Voice Dictation
-
-- **Validate whisper.cpp French transcription quality**: the whisper.cpp STT backend (ADR-0014) was wired in and validated end-to-end only on English audio (`jfk.wav`). Dictation is primarily used in French (see the STT-correction prompt's default) — compare against the OpenVINO backend on real French audio before treating whisper.cpp as the confirmed default rather than just the active one.
-
-- **Whisper.cpp backend: add the other model variants**: only the `small` multilingual model is wired up (`backend/stt/whisper_cpp_backend.py`). The OpenVINO backend still has tiny/base/French-specialized-large as swappable options (`whisper_pipeline.py`'s `ACTIVE_VARIANT`) with no whisper.cpp equivalent yet.
 
 ## Ideas to Explore
 
