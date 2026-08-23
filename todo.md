@@ -31,6 +31,10 @@
 
 - **sd-server.exe instead of a fresh sd-cli.exe subprocess per call**: `stable-diffusion.cpp` also builds a server mode (mirroring `llama-server`), which could avoid the model-file read on every single generation (currently ~1-2s, cheap enough that this hasn't been worth doing yet).
 
+## Voice Dictation
+
+- **Wire whisper.cpp into the backend, replacing the OpenVINO pipeline**: `~/ai/whisper.cpp` builds clean with `GGML_VULKAN=ON` (see `scripts/build_whisper_cpp.bat`) and, restricted to the Arc iGPU via `GGML_VK_VISIBLE_DEVICES=0` (required — Vulkan defaults to using every dedicated *and* integrated GPU it finds, which would otherwise also pull in the RTX 4070 and reintroduce the VRAM contention this migration exists to avoid), matches the current OpenVINO `whisper-small` pipeline on both transcription quality and speed on a standalone test clip. Not wired into `backend/whisper_pipeline.py` yet — the open design question is preserving the current streaming-partial-transcript-while-speaking UX (see `CONTEXT.md`'s "Voice Dictation" section) through whisper.cpp's CLI/server, which isn't natively a streaming tool the way it's used today. Needs a design discussion before implementation, not an assumed subprocess-per-chunk approach.
+
 ## Ideas to Explore
 
 - **Text to speech**: explore adding text-to-speech capability.
