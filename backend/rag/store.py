@@ -33,7 +33,7 @@ def compute_content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _encode_embedding(vector: list[float]) -> str:
+def encode_embedding(vector: list[float]) -> str:
     """Encode a float vector as base64 text, matching Image.data's base64-blob-in-Text convention."""
     return base64.b64encode(np.asarray(vector, dtype=np.float32).tobytes()).decode("ascii")
 
@@ -60,8 +60,12 @@ async def add_source_and_chunks(
         raise ValueError(f"No such RAG space: {space_id}")
 
     chunks = chunk_text(text)
-    provider = get_embedding_provider()
-    logger.info("[rag] Embedding %d chunk(s) for source '%s'", len(chunks), title)
+    # Use the model THIS space is already on, not whatever the current global default is — a space
+    # predating a default-model change keeps its existing model's chunks comparable until it's
+    # explicitly recomputed (see rag_recompute.py), rather than silently mixing two models' vectors
+    # in one space.
+    provider = get_embedding_provider(space.embedding_model)
+    logger.info("[rag] Embedding %d chunk(s) for source '%s' with model '%s'", len(chunks), title, provider.model_name)
     # fastembed's embed() is a blocking CPU call — offload it so a large ingestion run doesn't
     # stall the event loop for every other request while it computes (same reasoning as offloading
     # sd-cli.exe's blocking call in imagegen_pipeline.py).
@@ -91,7 +95,7 @@ async def add_source_and_chunks(
         sess.add(db.RagChunk(
             id=str(uuid.uuid4()), source_id=source.id, space_id=space_id, chunk_index=chunk.index,
             start_line=chunk.start_line, end_line=chunk.end_line, text=chunk.text,
-            embedding=_encode_embedding(vector), created_at=now,
+            embedding=encode_embedding(vector), created_at=now,
         ))
 
     return source
@@ -110,7 +114,13 @@ class SearchResult:
 
 async def search(sess: AsyncSession, space_id: str, query: str, top_k: int = 5) -> list[SearchResult]:
     """Embed `query` and return the top_k most similar chunks in the space via brute-force cosine
-    similarity."""
+    similarity. The query is embedded with the SAME model the space's chunks were embedded with
+    (RagSpace.embedding_model) — using any other model's vector would be meaningless to compare
+    against these chunks' vectors, and could even be a different dimension entirely."""
+    space = await sess.get(db.RagSpace, space_id)
+    if space is None:
+        raise ValueError(f"No such RAG space: {space_id}")
+
     rows = (await sess.execute(
         select(db.RagChunk, db.RagSource)
         .join(db.RagSource, db.RagChunk.source_id == db.RagSource.id)
@@ -120,8 +130,8 @@ async def search(sess: AsyncSession, space_id: str, query: str, top_k: int = 5) 
     if len(rows) == 0:
         return []
 
-    provider = get_embedding_provider()
-    query_vector = np.asarray(provider.embed([query])[0], dtype=np.float32)
+    provider = get_embedding_provider(space.embedding_model)
+    query_vector = np.asarray(await asyncio.to_thread(provider.embed, [query]), dtype=np.float32)[0]
     query_norm = np.linalg.norm(query_vector)
     if query_norm == 0:
         return []

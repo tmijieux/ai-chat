@@ -343,6 +343,12 @@ A minimal manual testing surface exists in chat — see [[RAG Slash Commands]] �
 deliberately not the real feature: no agent tool lets a running agent query a space on its own,
 and there is no settings-page UI for creating/naming/managing spaces. Both are deferred.
 
+**Embedding model:** defaults to a code-tuned model (chosen after live testing showed a
+general-purpose sentence model performed poorly on source-code search — see ADR-0018), since
+every space created so far holds source code. A space remembers which model it was actually built
+with, so changing the default doesn't retroactively break older spaces — a backend command-line
+tool exists to re-embed a specific space onto a different model on demand.
+
 ## RAG Slash Commands
 `/rag-index [path]` and `/rag-search <query>`, typed in the chat input like any other [[Slash
 Command Palette]] entry. A manual, non-agentic way to try indexing/retrieval directly — the agent

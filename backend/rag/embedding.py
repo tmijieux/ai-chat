@@ -6,10 +6,16 @@ EmbeddingProvider is an abstract interface so a future GPU-based provider (for f
 of a large repo, accepting the VRAM-contention cost the CPU provider was chosen to avoid) can be
 swapped in later without touching the ingestion/storage code above it. Only the CPU provider is
 implemented for now.
+
+get_embedding_provider() is keyed by model name, not a single process-wide singleton: a space
+records the model it was actually embedded with (RagSpace.embedding_model), and ingestion/search
+must embed using THAT model, not necessarily whatever DEFAULT_EMBEDDING_MODEL currently is — two
+spaces can legitimately be on different models at once (one predating a model change, not yet
+recomputed via rag_recompute.py) and each keeps working correctly. See ADR-0018.
 """
 from abc import ABC, abstractmethod
 
-DEFAULT_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+DEFAULT_EMBEDDING_MODEL = "jinaai/jina-embeddings-v2-base-code"
 
 
 class EmbeddingProvider(ABC):
@@ -41,12 +47,14 @@ class FastEmbedProvider(EmbeddingProvider):
         return [vector.tolist() for vector in self._model.embed(texts)]
 
 
-_provider: EmbeddingProvider | None = None
+_providers: dict[str, EmbeddingProvider] = {}
 
 
-def get_embedding_provider() -> EmbeddingProvider:
-    """Return the process-wide embedding provider, creating it lazily on first use."""
-    global _provider
-    if _provider is None:
-        _provider = FastEmbedProvider()
-    return _provider
+def get_embedding_provider(model_name: str | None = None) -> EmbeddingProvider:
+    """Return the provider for `model_name` (DEFAULT_EMBEDDING_MODEL if not given), creating and
+    caching it lazily on first use. Multiple models can be loaded at once — each is small (tens to
+    a few hundred MB) and CPU-only, so keeping more than one resident isn't a real cost."""
+    key = model_name or DEFAULT_EMBEDDING_MODEL
+    if key not in _providers:
+        _providers[key] = FastEmbedProvider(key)
+    return _providers[key]
