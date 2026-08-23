@@ -14,8 +14,15 @@ spaces can legitimately be on different models at once (one predating a model ch
 recomputed via rag_recompute.py) and each keeps working correctly. See ADR-0018.
 """
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 DEFAULT_EMBEDDING_MODEL = "jinaai/jina-embeddings-v2-base-code"
+
+# fastembed defaults to caching under the OS temp directory, which disk-cleanup tools or Windows
+# itself can purge — causing a silent multi-hundred-MB re-download stall on next use. Point it
+# alongside this machine's other local models instead (see CONTEXT.md's Vision/Image Input and
+# ADR-0013 for the same ~/ai/models/ convention).
+_EMBEDDING_CACHE_DIR = Path.home() / "ai" / "models" / ".cache" / "fastembed"
 
 
 class EmbeddingProvider(ABC):
@@ -37,7 +44,8 @@ class FastEmbedProvider(EmbeddingProvider):
         """Load the given fastembed model and probe its output dimension."""
         from fastembed import TextEmbedding
         self.model_name = model_name
-        self._model = TextEmbedding(model_name=model_name)
+        _EMBEDDING_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        self._model = TextEmbedding(model_name=model_name, cache_dir=str(_EMBEDDING_CACHE_DIR))
         self.dimension = len(next(iter(self._model.embed(["dimension probe"]))))
 
     def embed(self, texts: list[str]) -> list[list[float]]:
