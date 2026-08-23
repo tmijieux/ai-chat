@@ -11,7 +11,7 @@ const MODES: SlashCommand[] = [
 
 const RAG_COMMANDS: SlashCommand[] = [
   { type: 'rag', value: 'rag-index',  label: 'rag-index',  description: 'Index a directory (default: whole workspace) into this workspace\'s RAG space', paramHint: '[path]' },
-  { type: 'rag', value: 'rag-search', label: 'rag-search', description: 'Search this workspace\'s RAG space', paramHint: '<query>' },
+  { type: 'rag', value: 'rag-search', label: 'rag-search', description: 'Search this workspace\'s RAG space — phrase as a sentence, not keywords', paramHint: '<query>' },
 ]
 
 @Component({

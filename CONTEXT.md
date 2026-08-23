@@ -368,6 +368,12 @@ needs redoing later, a re-run just continues where it left off). `/rag-search` s
 "Searching…" banner without progress detail or a cancel option, since a query is fast. The chat
 input stays disabled for the duration of either command, same as during an agent run.
 
+**Query phrasing matters:** `/rag-search` works much better with a full natural-language sentence
+describing what the code does (e.g. "launch the myapp C++ simulation as a subprocess") than with a
+keyword list (e.g. "subprocess execute myapp cpp") — confirmed directly through live testing. The
+code-tuned embedding model (see [[RAG Space]], ADR-0018) was trained on docstring-style natural
+language paired with code, not on keyword search, so it rewards being asked in that style.
+
 ## RAG Source
 One document ingested into a [[RAG Space]] — directly pasted text, an uploaded text/markdown file,
 or (for a path pointing into a workspace) one file found there. Pointing ingestion at a directory
