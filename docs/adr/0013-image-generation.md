@@ -1,4 +1,4 @@
-# ADR-0013: Local Image Generation (Flux.1-schnell)
+# ADR-0013: Local Image Generation (Z-Image-Turbo)
 
 **Date:** 2026-08-23
 **Status:** Accepted
@@ -31,9 +31,17 @@ Migrated image generation to **stable-diffusion.cpp** (same GGML lineage as `lla
 
 512x512 remains the resolution in use, not because it's still a hard ceiling (it measurably isn't anymore — sd.cpp had real headroom at that size) but because it hasn't been pushed further yet. See `todo.md`.
 
+### Model swap: Z-Image-Turbo replaces Flux.1-schnell
+
+Once on sd.cpp, tried Z-Image-Turbo (Alibaba/Tongyi, 6B params, Apache-2.0, distilled to 8 steps, native sd.cpp support added Dec 2025) as a smaller alternative to Flux.1-schnell's 12B. Measured directly at the same 512x512, same sd.cpp backend: peak VRAM ~5.3GB vs Flux's ~6.8GB, generation ~9s vs ~11s, comparable output quality on direct comparison. Switched to it as the default — `flux1-schnell-Q4_K_S.gguf` + `t5-v1_1-xxl-encoder-Q8_0.gguf` replaced by `z-image-turbo-Q4_K_M.gguf` (transformer) + `Qwen3-4B-Instruct-2507-Q4_K_M.gguf` (text encoder, loaded via sd.cpp's `--llm` flag rather than `--t5xxl`/`--clip_l` — Z-Image uses a single Qwen3 LLM as its text conditioner, not CLIP+T5).
+
+The VAE is reused as-is from the Flux setup (`~/ai/models/flux1-schnell/vae/diffusion_pytorch_model.safetensors`) — same architecture, confirmed working for Z-Image directly, no need to source or duplicate a second one. This is also why the "ungated mirror sourcing" story above still matters even though Flux itself is no longer the active model: that VAE file, and the AutoencoderTiny substitution bug it required catching, remain a live dependency.
+
+Full end-to-end cycle measured with Z-Image-Turbo, isolated (`LlamaServerBackend.stop()` → `imagegen_pipeline.generate()` → `ensure_running()`, timed directly, no LLM thinking/framing overhead included): stop ~1s → generate ~10s → restart ~8s — **~19s total**. No equivalent clean isolated measurement exists for the Flux setup to compare against directly; the only Flux figures on record are end-to-end real-conversation timestamps that also include the model's own turn-taking overhead, so a precise before/after delta isn't claimed here — the tool's user-facing duration estimate (`CONTEXT.md`, the tool description) was updated from this one clean measurement.
+
 ### GPU handoff: stop-and-restart `llama-server` around every generation
 
-Chosen over trying to make the two coexist in 8GB — a typical loaded chat model (5-7GB) plus sd.cpp's own ~6.8GB peak still exceeds 8GB combined, so this remains necessary regardless of inference engine. `generate_image`'s execution: stop `llama-server` (`LlamaServerBackend.stop()`, which finds and terminates `llama-server.exe` by process name rather than a locally-tracked handle, since `ensure_running()`'s already-running fast path never captures one) → generate (a plain `sd-cli.exe` subprocess call, run off the event loop via `asyncio.to_thread` so a ~11s generation doesn't stall every other concurrent connection the backend is serving) → restart `llama-server`. No pipeline object to keep resident between calls — sd.cpp's own model load is cheap enough (~1-2s for the transformer's tensors) that there's nothing worth caching, unlike the PyTorch pipeline's minute-plus GGUF-to-bf16 conversion pass.
+Chosen over trying to make the two coexist in 8GB — a typical loaded chat model (5-7GB) plus even Z-Image-Turbo's own ~5.3GB peak still exceeds 8GB combined, so this remains necessary regardless of inference engine or which image model is active. `generate_image`'s execution: stop `llama-server` (`LlamaServerBackend.stop()`, which finds and terminates `llama-server.exe` by process name rather than a locally-tracked handle, since `ensure_running()`'s already-running fast path never captures one) → generate (a plain `sd-cli.exe` subprocess call, run off the event loop via `asyncio.to_thread` so a ~10s generation doesn't stall every other concurrent connection the backend is serving) → restart `llama-server`. No pipeline object to keep resident between calls — sd.cpp's own model load is cheap enough (~1-2s for the diffusion model's tensors) that there's nothing worth caching, unlike the PyTorch pipeline's minute-plus GGUF-to-bf16 conversion pass.
 
 ## Data flow
 

@@ -27,7 +27,7 @@
 
 ## Image Generation
 
-- **Push generation resolution past 512x512**: `generate_image` now runs on stable-diffusion.cpp (ADR-0013), which measured real VRAM headroom at 512x512 (~6.8GB peak, no ceiling fragility) unlike the earlier PyTorch pipeline — 512x512 is no longer known to be a hard limit, just the untested default. Worth trying 768x768 or higher.
+- **Push generation resolution past 512x512**: `generate_image` runs on stable-diffusion.cpp with Z-Image-Turbo (ADR-0013), which measured even more VRAM headroom at 512x512 (~5.3GB peak) than the earlier Flux.1-schnell setup on the same backend (~6.8GB) — 512x512 is not a hard limit, just the untested default. Worth trying 768x768 or higher.
 
 - **sd-server.exe instead of a fresh sd-cli.exe subprocess per call**: `stable-diffusion.cpp` also builds a server mode (mirroring `llama-server`), which could avoid the model-file read on every single generation (currently ~1-2s, cheap enough that this hasn't been worth doing yet).
 

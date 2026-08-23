@@ -13,8 +13,8 @@ if TYPE_CHECKING:
 class GenerateImageTool(BaseTool):
     name = "generate_image"
     description = (
-        "Generate an image from a text prompt using the local Flux.1-schnell model. "
-        "Slow (roughly 30-60 seconds): the local chat model is stopped to free GPU memory "
+        "Generate an image from a text prompt using the local Z-Image-Turbo model. "
+        "Slow (roughly 20-30 seconds): the local chat model is stopped to free GPU memory "
         "for image generation, then restarted afterward. Use only when the user actually "
         "wants a generated image, not for editing or analyzing existing images."
     )

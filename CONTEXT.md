@@ -79,7 +79,7 @@ Allow pasting or dragging images into the chat input area. Multiple images per m
 
 `generate_image` agent tool: generates an image from a text prompt using a local image-generation model, separate from the chat model. Selectable and confirmed like any other agent tool.
 
-**Requires confirmation, and is slow (roughly 30-60 seconds per image).** The chat model and the image-generation model cannot both fit in the machine's GPU memory at once, so generating an image temporarily stops the chat model, generates, then restarts it — the chat model is briefly unavailable for the duration, which is most of that cost (actual generation is only ~10 seconds). The confirmation card surfaces this cost before the user approves it.
+**Requires confirmation, and is slow (roughly 20-30 seconds per image).** The chat model and the image-generation model cannot both fit in the machine's GPU memory at once, so generating an image temporarily stops the chat model, generates, then restarts it — the chat model is briefly unavailable for the duration. Restarting the chat model (~8s) is now the larger share of that cost; generation itself is only ~10 seconds. The confirmation card surfaces this cost before the user approves it.
 
 **Result:** the generated image displays inline in the tool result, the same way an uploaded image displays in a user message bubble. See ADR-0013.
 
