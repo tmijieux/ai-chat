@@ -24,8 +24,23 @@ LLAMA_COMPLETION_URL = f"{LLAMA_BASE_URL}/completion"
 LLAMA_TOKENIZE_URL = f"{LLAMA_BASE_URL}/tokenize"
 LLAMA_HEALTH_URL = f"{LLAMA_BASE_URL}/health"
 LLAMA_SERVER_EXE = str(Path.home() / "ai/llama.cpp/build/bin/Release/llama-server.exe")
-GGUF_PATH = str(Path.home() / "ai/models/unsloth/Qwen3.5-9B-Q4_K_M.gguf")
-MMPROJ_PATH = str(Path.home() / "ai/models/unsloth/mmproj-F16.gguf")
+
+_MODEL_PATHS = {
+    "qwen3.5-9b": {
+        "gguf": str(Path.home() / "ai/models/unsloth/Qwen3.5-9B-Q4_K_M.gguf"),
+        "mmproj": str(Path.home() / "ai/models/unsloth/mmproj-F16.gguf"),
+    },
+    "ornith1.5-9b": {
+        "gguf": str(Path.home() / "ai/models/ornith-ai/Ornith-1.5-9B-Q4_K_M.gguf"),
+        "mmproj": str(Path.home() / "ai/models/ornith-ai/mmproj-Ornith-1.5-9B-BF16.gguf"),
+    },
+}
+# Flip to switch which local model llama-server loads.
+ACTIVE_MODEL = "ornith1.5-9b"
+#ACTIVE_MODEL = "qwen3.5-9b"
+
+GGUF_PATH = _MODEL_PATHS[ACTIVE_MODEL]["gguf"]
+MMPROJ_PATH = _MODEL_PATHS[ACTIVE_MODEL]["mmproj"]
 CTX_LIMIT = 2**15 # 14 -> 16K, 15 -> 32K, 16 -> 65k
 
 # Flip to False to instantly revert every tool-enabled turn to the pre-think-gate behavior
