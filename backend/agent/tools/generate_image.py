@@ -14,7 +14,7 @@ class GenerateImageTool(BaseTool):
     name = "generate_image"
     description = (
         "Generate an image from a text prompt using the local Flux.1-schnell model. "
-        "Slow (roughly 30-90 seconds): the local chat model is stopped to free GPU memory "
+        "Slow (roughly 30-60 seconds): the local chat model is stopped to free GPU memory "
         "for image generation, then restarted afterward. Use only when the user actually "
         "wants a generated image, not for editing or analyzing existing images."
     )
@@ -48,15 +48,10 @@ class GenerateImageTool(BaseTool):
         from llm import backend
         from llm.llama_server import LlamaServerBackend
 
-        # Load lazily before freeing the GPU — loading itself doesn't touch VRAM, only
-        # generation does, so there's no reason to make llama-server's outage any longer than
-        # the actual generation requires.
-        pipe = imagegen_pipeline.get_pipeline()
-
         if isinstance(backend, LlamaServerBackend):
             await backend.stop()
         try:
-            result = imagegen_pipeline.generate(pipe, prompt)
+            result = await imagegen_pipeline.generate(prompt)
         except Exception as e:
             return tool_error(self.name, f"Image generation failed: {e}")
         finally:

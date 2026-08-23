@@ -27,9 +27,9 @@
 
 ## Image Generation
 
-- **Migrate to stable-diffusion.cpp**: the current `generate_image` tool runs Flux.1-schnell through PyTorch/diffusers, which was directly responsible for a hard VRAM-ceiling failure mode (see ADR-0013) — resolution is capped at 512x512 to stay under it. `stable-diffusion.cpp` (GGML-based, same lineage as `llama.cpp`) uses static VRAM allocation instead of PyTorch's dynamic caching allocator, and llama-server's own stability at high VRAM occupancy suggests it would fix this at the root rather than by capping resolution. Likely able to reuse the same GGUF model files already downloaded.
+- **Push generation resolution past 512x512**: `generate_image` now runs on stable-diffusion.cpp (ADR-0013), which measured real VRAM headroom at 512x512 (~6.8GB peak, no ceiling fragility) unlike the earlier PyTorch pipeline — 512x512 is no longer known to be a hard limit, just the untested default. Worth trying 768x768 or higher.
 
-- **Revisit generation resolution/quality**: 512x512 was picked as the first size that fit within the measured VRAM ceiling, not tuned for best quality/headroom tradeoff — worth another pass (a size between 512 and 768, or trading T5 encoder quality for more headroom) once on stable-diffusion.cpp or otherwise.
+- **sd-server.exe instead of a fresh sd-cli.exe subprocess per call**: `stable-diffusion.cpp` also builds a server mode (mirroring `llama-server`), which could avoid the model-file read on every single generation (currently ~1-2s, cheap enough that this hasn't been worth doing yet).
 
 ## Ideas to Explore
 
