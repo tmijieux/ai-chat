@@ -19,23 +19,27 @@ exactly max_fold_depth so fold_levels_loop (an ordinary loop over this list) run
 of iterations regardless of how deep the repo actually goes.
 
 Usage:
-    python bucket_own_files_by_depth.py <items_json> <target_directory> <max_fold_depth>
+    python bucket_own_files_by_depth.py <items_json_path> <target_directory> <max_fold_depth_path>
+
+items_json_path and max_fold_depth_path are paths to temp files holding JSON (written by
+run_script in workflow_coordinator.py, since these values can be too large to pass as literal
+command-line text) — not the JSON/value itself.
 """
 from __future__ import annotations
 
 import json
 import sys
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 
 def main() -> None:
     """Bucket files_loop's aggregated per-file summaries by clamped depth and print the result."""
     if len(sys.argv) != 4:
-        sys.exit("usage: bucket_own_files_by_depth.py <items_json> <target_directory> <max_fold_depth>")
+        sys.exit("usage: bucket_own_files_by_depth.py <items_json_path> <target_directory> <max_fold_depth_path>")
 
-    items = json.loads(sys.argv[1])
+    items = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
     target_directory = sys.argv[2]
-    max_fold_depth = int(sys.argv[3])
+    max_fold_depth = json.loads(Path(sys.argv[3]).read_text(encoding="utf-8"))
 
     target_norm = "." if target_directory in ("", ".") else target_directory.rstrip("/")
     target_path = PurePosixPath(target_norm)

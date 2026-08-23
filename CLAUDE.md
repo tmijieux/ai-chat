@@ -27,6 +27,10 @@ CLAUDE.md is for global Claude behavior directives, workflows that claude should
 
 Do not read `catchall.py` and backend/claude directory  — it is currently unused and irrelevant.
 
+**Never read or touch the user's real live data:** `backend/chat_db.sqlite` (no queries against it), any pre-existing entry under `backend/workflow_runs/**`, and no HTTP/WebSocket calls against a backend that could be the user's real live instance. This is a hard rule — it does not bend for "just this once", "read-only", or "it would answer the question faster". Do not treat a vague one-word reply ("so?", "sure", "ok") as permission to cross it — only an unambiguous yes to the specific read you asked about counts. When in doubt, don't, and ask again more explicitly.
+
+**But default to testing, not guessing from source.** When investigating a bug, do not just read code and speculate about what might happen — write real code (in the scratchpad) that exercises the actual paths and observe it: create your own throwaway conversation/session/workflow run and drive it, e.g. call the app's REST API against your own disposable conversation (create it, use it, delete it), or drive `CustomWorkflowOrchestrator`/agent code directly in-process. This is what real data would have told you, without ever touching the user's. If a throwaway run must land under a shared directory like `backend/workflow_runs/`, mark it obviously as synthetic so it's never confused for the user's real data.
+
 ## Database Migrations
 
 Never add migration code to `database.py` or any startup hook. Apply schema changes directly to the SQLite file:

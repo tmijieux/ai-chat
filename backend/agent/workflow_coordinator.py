@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import sys
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
@@ -230,9 +231,12 @@ async def _run_script(
 
     A plain string arg (a path, a flag like "--apply") is passed through unchanged, exactly as
     before. Anything else — a list, dict, None, bool, number, e.g. from a bare {{slot.field}} that
-    resolved to a real Python value rather than a string — is turned into JSON text via json.dumps
-    (None -> "null", a missing slot resolving to None included) so a script can always json.loads
-    a non-string arg rather than receiving a Python repr it can't parse.
+    resolved to a real Python value rather than a string — is JSON-serialized to a temp file
+    instead of being inlined on the command line, and the file's path is passed as the argv entry;
+    the script reads and json.loads() that path itself. A large slot value (e.g. every file
+    summary in a codebase) inlined as literal command-line text can exceed the OS command-line
+    length limit (Windows raises WinError 206, "filename or extension is too long"); a temp file
+    has no such ceiling. Temp files are deleted right after the subprocess exits.
     """
     script_rel = inputs.get("script")
     args = inputs.get("args") or []
@@ -243,14 +247,31 @@ async def _run_script(
     if not script_path.is_file():
         return {"success": False, "output": f"run_script: script not found: {script_path}", "data": None}
 
-    argv = [a if isinstance(a, str) else json.dumps(a, ensure_ascii=False) for a in args]
-    proc = await asyncio.create_subprocess_exec(
-        sys.executable, str(script_path), *argv,
-        cwd=working_directory,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
-    stdout, _ = await proc.communicate()
+    argv: list[str] = []
+    tmp_paths: list[Path] = []
+    for a in args:
+        if isinstance(a, str):
+            argv.append(a)
+            continue
+        fd, tmp_name = tempfile.mkstemp(suffix=".json", prefix="run_script_arg_")
+        tmp_path = Path(tmp_name)
+        with open(fd, "w", encoding="utf-8") as f:
+            json.dump(a, f, ensure_ascii=False)
+        tmp_paths.append(tmp_path)
+        argv.append(str(tmp_path))
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, str(script_path), *argv,
+            cwd=working_directory,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        stdout, _ = await proc.communicate()
+    finally:
+        for tmp_path in tmp_paths:
+            tmp_path.unlink(missing_ok=True)
+
     output = stdout.decode("utf-8", errors="replace").strip()
 
     data = None
@@ -364,21 +385,21 @@ async def _enumerate_files(inputs: dict[str, Any], working_directory: str | None
 
     def _walk() -> list[EnumeratedFile]:
         results: list[EnumeratedFile] = []
-        for p in sorted(absolute_root.rglob("*")):
-            if not p.is_file():
+        for path in sorted(absolute_root.rglob("*")):
+            if not path.is_file():
                 continue
-            if is_path_ignored(p, working_directory, spec):
+            if is_path_ignored(path, working_directory, spec):
                 continue
-            if any(p.is_relative_to(ex) for ex in exclude_roots):
+            if any(path.is_relative_to(ex) for ex in exclude_roots):
                 continue
-            if p.suffix.lower() in _ENUMERATE_FILES_BINARY_EXTENSIONS:
+            if path.suffix.lower() in _ENUMERATE_FILES_BINARY_EXTENSIONS:
                 continue
-            if p.name in _ENUMERATE_FILES_LOCKFILE_NAMES:
+            if path.name in _ENUMERATE_FILES_LOCKFILE_NAMES:
                 continue
             results.append({
-                "path": p.relative_to(working_directory).as_posix(),
-                "extension": p.suffix,
-                "size_bytes": p.stat().st_size,
+                "path": path.relative_to(working_directory).as_posix(),
+                "extension": path.suffix,
+                "size_bytes": path.stat().st_size,
             })
         return results
 

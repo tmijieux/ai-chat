@@ -16,22 +16,26 @@ one entry per unique directory referenced by either input — a directory with o
 child subdirectories, or both, all produce exactly one merged entry.
 
 Usage:
-    python merge_fold_level.py <own_groups_json> <child_summaries_json_or_null>
+    python merge_fold_level.py <own_groups_json_path> <child_summaries_json_path>
+
+Both args are paths to temp files holding JSON (written by run_script in
+workflow_coordinator.py, since these values can be too large to pass as literal command-line
+text) — not the JSON itself.
 """
 from __future__ import annotations
 
 import json
 import sys
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 
 def main() -> None:
     """Union-merge this level's own file groups with the previous iteration's child summaries."""
     if len(sys.argv) != 3:
-        sys.exit("usage: merge_fold_level.py <own_groups_json> <child_summaries_json_or_null>")
+        sys.exit("usage: merge_fold_level.py <own_groups_json_path> <child_summaries_json_path>")
 
-    own_groups = json.loads(sys.argv[1]) or []
-    child_items = json.loads(sys.argv[2]) or []
+    own_groups = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8")) or []
+    child_items = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8")) or []
 
     merged: dict[str, dict] = {}
 
