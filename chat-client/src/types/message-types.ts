@@ -91,9 +91,43 @@ export type FileSearchResult = {
   relative_path: string
 }
 
+export type RagCommandName = 'rag-index' | 'rag-search'
+
 export type SlashCommand =
   | { type: 'mode'; value: ConversationMode; label: string; description: string }
   | { type: 'workflow'; value: string; label: string; description: string }
+  | { type: 'rag'; value: RagCommandName; label: string; description: string }
+
+export type RagSpace = {
+  id: string
+  name: string
+  description: string | null
+  workspace_path: string | null
+  embedding_model: string
+  embedding_dim: number
+  created_at: string
+}
+
+export type RagSource = {
+  id: string
+  space_id: string
+  source_type: string
+  title: string
+  origin_path: string | null
+  status: string
+  error_message: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type RagSearchResult = {
+  chunk_id: string
+  source_id: string
+  source_title: string
+  origin_path: string | null
+  text: string
+  score: number
+}
 
 export type Conversation = {
   id: string

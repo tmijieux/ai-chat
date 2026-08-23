@@ -334,8 +334,19 @@ pollutes search results for another. A space is global by default (usable from a
 but can optionally be pinned to a workspace it conceptually belongs to.
 
 **Implementation status:** indexing and retrieval infrastructure exists and is verified working.
-Not yet implemented: any agent tool that lets a running agent actually query a space, and any
-frontend UI for creating spaces or managing their documents — both deferred to follow-up work.
+A minimal manual testing surface exists in chat — see [[RAG Slash Commands]] — but it is
+deliberately not the real feature: no agent tool lets a running agent query a space on its own,
+and there is no settings-page UI for creating/naming/managing spaces. Both are deferred.
+
+## RAG Slash Commands
+`/rag-index [path]` and `/rag-search <query>`, typed in the chat input like any other [[Slash
+Command Palette]] entry. A manual, non-agentic way to try indexing/retrieval directly — the agent
+is not involved at all; the command's result is computed immediately and shown as a plain message
+in the conversation. Both commands operate on **one [[RAG Space]] per workspace**: the space bound
+to the conversation's active [[Workspace]] is found or created automatically (named after the
+workspace's directory name), so repeated use of either command in the same workspace always
+targets the same space. `path` for `/rag-index` defaults to the whole workspace when omitted.
+Requires a workspace to be configured on the conversation.
 
 ## RAG Source
 One document ingested into a [[RAG Space]] — directly pasted text, an uploaded text/markdown file,

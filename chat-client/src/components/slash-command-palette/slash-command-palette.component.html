@@ -16,6 +16,23 @@
     </div>
   }
 
+  @if (filteredRagCommands().length > 0) {
+    <div class="slash-palette-group">
+      <div class="slash-palette-group-label">RAG</div>
+      @for (item of filteredRagCommands(); track item.value; let i = $index) {
+        <button
+          class="slash-palette-item"
+          [class.active]="isActive(ragIndex(i))"
+          (mousedown)="$event.preventDefault()"
+          (click)="selectItem(item)"
+        >
+          <span class="slash-palette-item-label">/{{ item.label }}</span>
+          <span class="slash-palette-item-desc">{{ item.description }}</span>
+        </button>
+      }
+    </div>
+  }
+
   @if (filteredWorkflows().length > 0) {
     <div class="slash-palette-group">
       <div class="slash-palette-group-label">Workflows</div>

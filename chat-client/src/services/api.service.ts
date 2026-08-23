@@ -11,6 +11,9 @@ import {
   FileSearchResult,
   Message,
   MessageForQuery,
+  RagSearchResult,
+  RagSource,
+  RagSpace,
   Workflow,
   WorkflowRunNode,
   WorkflowRunStatusResponse,
@@ -76,6 +79,22 @@ export class ApiService {
 
   get_conversation_messages(conversationId: string) {
     return this.http.get<Message[]>(`${BASE_URL}/conversations/${conversationId}/messages`)
+  }
+
+  get_rag_spaces() {
+    return this.http.get<RagSpace[]>(`${BASE_URL}/rag/spaces`)
+  }
+
+  post_rag_space(body: { name: string; description?: string | null; workspace_path?: string | null }) {
+    return this.http.post<RagSpace>(`${BASE_URL}/rag/spaces`, body)
+  }
+
+  post_rag_workspace_path_source(spaceId: string, body: { workspace: string; path: string }) {
+    return this.http.post<RagSource[]>(`${BASE_URL}/rag/spaces/${spaceId}/sources/workspace-path`, body)
+  }
+
+  post_rag_query(spaceId: string, body: { query: string; top_k?: number }) {
+    return this.http.post<RagSearchResult[]>(`${BASE_URL}/rag/spaces/${spaceId}/query`, body)
   }
 
   generate_chat_response(messagesArray: MessageForQuery[]) {

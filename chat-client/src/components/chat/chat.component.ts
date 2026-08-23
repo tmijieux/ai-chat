@@ -5,6 +5,7 @@ import {
   Conversation,
   ConversationSettings,
   DisplayMessageWithMeta,
+  RagCommandName,
   TokenMeta,
   ToolCallEntry,
 } from '../../types/message-types'
@@ -258,8 +259,12 @@ export class ChatComponent implements OnDestroy {
   // User actions — all delegated to ChatService
   // -------------------------------------------------------------------------
 
-  onSubmitted(data: { text: string; imageIds: string[]; workflowName?: string; commandLabel?: string }): void {
+  onSubmitted(data: { text: string; imageIds: string[]; workflowName?: string; ragCommand?: RagCommandName; commandLabel?: string }): void {
     this.autoScrollEnabled.set(true)
+    if (data.ragCommand !== undefined) {
+      this.chatSvc.runRagCommand(data.ragCommand, data.text, data.commandLabel)
+      return
+    }
     this.chatSvc.startAgentRun(data.text, data.imageIds, data.workflowName, data.commandLabel)
   }
 

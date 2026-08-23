@@ -7,7 +7,7 @@ import { ChatService } from '../../services/chat.service'
 import { ApiService } from '../../services/api.service'
 import { VoiceDictationService } from '../../services/voice-dictation.service'
 import { AppStatusService } from '../../services/app-status.service'
-import { ConversationMode, PendingImage, SlashCommand, Workflow } from '../../types/message-types'
+import { ConversationMode, PendingImage, RagCommandName, SlashCommand, Workflow } from '../../types/message-types'
 import { SlashCommandPaletteComponent } from '../slash-command-palette/slash-command-palette.component'
 import { FileMentionPickerComponent } from '../file-mention-picker/file-mention-picker.component'
 
@@ -36,7 +36,7 @@ export class ChatInputComponent implements AfterViewInit {
   // The outer component decides what to cancel (agent run, streaming response, etc.).
   readonly stopRequested = output<void>()
 
-  readonly submitted = output<{ text: string; imageIds: string[]; workflowName?: string; commandLabel?: string }>()
+  readonly submitted = output<{ text: string; imageIds: string[]; workflowName?: string; ragCommand?: RagCommandName; commandLabel?: string }>()
 
   readonly currentInput = signal('')
   readonly pendingImages = signal<PendingImage[]>([])
@@ -47,6 +47,7 @@ export class ChatInputComponent implements AfterViewInit {
   readonly availableWorkflows = signal<Workflow[]>([])
   private _workflowsLoaded = false
   private _pendingWorkflowName = signal<string | undefined>(undefined)
+  private _pendingRagCommand = signal<RagCommandName | undefined>(undefined)
   /** The command token (mode name or workflow name) last chosen, kept only so it can be echoed into the sent message for display. */
   private _pendingCommandLabel = signal<string | undefined>(undefined)
 
@@ -268,10 +269,13 @@ export class ChatInputComponent implements AfterViewInit {
       this.chatSvc.updateConversationSettings({ ...settings, mode: command.value as ConversationMode }).subscribe()
     } else if (command.type === 'workflow') {
       this._pendingWorkflowName.set(command.value)
+    } else if (command.type === 'rag') {
+      this._pendingRagCommand.set(command.value)
     }
   }
 
   private readonly KNOWN_MODES: ConversationMode[] = ['standard', 'auto', 'plan', 'yolo']
+  private readonly KNOWN_RAG_COMMANDS: RagCommandName[] = ['rag-index', 'rag-search']
 
   async sendMessage(event: Event | null): Promise<void> {
     if (event && (event as KeyboardEvent).shiftKey) {
@@ -292,17 +296,22 @@ export class ChatInputComponent implements AfterViewInit {
 
     let messageText = this.currentInput().trim()
     let workflowName = this._pendingWorkflowName()
+    let ragCommand = this._pendingRagCommand()
     let commandLabel = this._pendingCommandLabel()
 
     // Parse a leading /command prefix if the user typed or Tab-completed it.
     // This is skipped when the command was already consumed via palette Enter.
-    if (messageText.startsWith('/') && workflowName === undefined) {
+    if (messageText.startsWith('/') && workflowName === undefined && ragCommand === undefined) {
       const spaceIndex = messageText.indexOf(' ')
       const token = spaceIndex === -1 ? messageText.slice(1) : messageText.slice(1, spaceIndex)
       const remainder = spaceIndex === -1 ? '' : messageText.slice(spaceIndex + 1).trim()
       if (this.KNOWN_MODES.includes(token as ConversationMode)) {
         const settings = this.chatSvc.currentConversationSettings()
         this.chatSvc.updateConversationSettings({ ...settings, mode: token as ConversationMode }).subscribe()
+        messageText = remainder
+        commandLabel = token
+      } else if (this.KNOWN_RAG_COMMANDS.includes(token as RagCommandName)) {
+        ragCommand = token as RagCommandName
         messageText = remainder
         commandLabel = token
       } else if (token.length > 0) {
@@ -312,7 +321,7 @@ export class ChatInputComponent implements AfterViewInit {
       }
     }
 
-    if (!messageText && this.pendingImages().length === 0 && workflowName === undefined) {
+    if (!messageText && this.pendingImages().length === 0 && workflowName === undefined && ragCommand === undefined) {
       this.currentInput.set('')
       this._pendingCommandLabel.set(undefined)
       return
@@ -323,9 +332,10 @@ export class ChatInputComponent implements AfterViewInit {
     this.currentInput.set('')
     this.pendingImages.set([])
     this._pendingWorkflowName.set(undefined)
+    this._pendingRagCommand.set(undefined)
     this._pendingCommandLabel.set(undefined)
     this.voiceSvc.dismissCorrection()
-    this.submitted.emit({ text: messageText, imageIds, workflowName, commandLabel })
+    this.submitted.emit({ text: messageText, imageIds, workflowName, ragCommand, commandLabel })
   }
 
   attachImages(files: FileList | File[]): void {

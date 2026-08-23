@@ -9,6 +9,11 @@ const MODES: SlashCommand[] = [
   { type: 'mode', value: 'yolo',     label: 'yolo',     description: 'Autonomous loop with verification' },
 ]
 
+const RAG_COMMANDS: SlashCommand[] = [
+  { type: 'rag', value: 'rag-index',  label: 'rag-index',  description: 'Index a directory (default: whole workspace) into this workspace\'s RAG space' },
+  { type: 'rag', value: 'rag-search', label: 'rag-search', description: 'Search this workspace\'s RAG space' },
+]
+
 @Component({
   selector: 'app-slash-command-palette',
   standalone: true,
@@ -31,6 +36,11 @@ export class SlashCommandPaletteComponent {
     return MODES.filter((m) => m.value.includes(f))
   })
 
+  readonly filteredRagCommands = computed(() => {
+    const f = this.filter().toLowerCase()
+    return RAG_COMMANDS.filter((c) => c.value.includes(f))
+  })
+
   readonly filteredWorkflows = computed(() => {
     const f = this.filter().toLowerCase()
     return this.workflows()
@@ -40,6 +50,7 @@ export class SlashCommandPaletteComponent {
 
   readonly allFiltered = computed<SlashCommand[]>(() => [
     ...this.filteredModes(),
+    ...this.filteredRagCommands(),
     ...this.filteredWorkflows(),
   ])
 
@@ -81,8 +92,13 @@ export class SlashCommandPaletteComponent {
     return modeIndex
   }
 
+  /** Returns the absolute index in allFiltered for a RAG command item. */
+  ragIndex(ragIndex: number): number {
+    return this.filteredModes().length + ragIndex
+  }
+
   /** Returns the absolute index in allFiltered for a workflow item. */
   workflowIndex(workflowIndex: number): number {
-    return this.filteredModes().length + workflowIndex
+    return this.filteredModes().length + this.filteredRagCommands().length + workflowIndex
   }
 }

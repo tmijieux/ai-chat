@@ -13,6 +13,8 @@ import {
   DisplayMessage,
   Message,
   MessageForQuery,
+  RagCommandName,
+  RagSpace,
   SystemPromptTemplate,
   ToolCallEntry,
 } from '../types/message-types'
@@ -342,6 +344,81 @@ export class ChatService {
       const agentMode = workflowName !== undefined ? 'classic' : this._pipelineMode() ? 'pipeline' : 'classic'
       this.agentSvc.start(input, convId, userMsg.id, agentMode, workflowName)
     })
+  }
+
+  /** Minimal, non-agentic slash-command path for trying out RAG: no LLM/agent loop involved,
+   * just a direct backend ingest/query call whose result is persisted as a plain assistant
+   * message. Uses one RAG space per workspace (get-or-create, named after the workspace's
+   * directory name) — this is a manual testing surface, not the eventual agent tool wiring. */
+  async runRagCommand(kind: RagCommandName, arg: string, commandLabel?: string): Promise<void> {
+    const workspace = this._conversationSettings().working_directory
+    const displayInput =
+      commandLabel === undefined ? arg : arg !== '' ? `/${commandLabel} ${arg}` : `/${commandLabel}`
+    const userMsg: DisplayMessage = { kind: 'user', id: crypto.randomUUID(), content: displayInput }
+    this._messages.update((msgs) => [...msgs, userMsg])
+    this._promptTokens.set(0)
+
+    const persist = !this._conversation
+      ? this._createConversation(userMsg, [])
+      : this._addUserMessageToDb(userMsg, [])
+
+    this._isLoading.set(true)
+    try {
+      await persist
+
+      if (workspace === null) {
+        await this._postRagResultMessage('No workspace configured for this conversation — set one in the settings drawer before using RAG commands.')
+        return
+      }
+
+      const space = await this._getOrCreateWorkspaceRagSpace(workspace)
+
+      if (kind === 'rag-index') {
+        const path = arg.trim() === '' ? '.' : arg.trim()
+        const sources = await firstValueFrom(this.api.post_rag_workspace_path_source(space.id, { workspace, path }))
+        const lines = sources.slice(0, 30).map((s) => `- ${s.origin_path ?? s.title} (${s.status})`)
+        const more = sources.length > 30 ? `\n…and ${sources.length - 30} more.` : ''
+        const content = `Indexed **${sources.length}** file(s) from \`${path}\` into RAG space **${space.name}**:\n\n${lines.join('\n')}${more}`
+        await this._postRagResultMessage(content)
+      } else {
+        const query = arg.trim()
+        if (query === '') {
+          await this._postRagResultMessage('Usage: `/rag-search <query>`')
+          return
+        }
+        const results = await firstValueFrom(this.api.post_rag_query(space.id, { query, top_k: 5 }))
+        const content =
+          results.length === 0
+            ? `No results in RAG space **${space.name}** — has it been indexed yet? Try \`/rag-index\` first.`
+            : results
+                .map((r) => `**${r.source_title}** (score: ${r.score.toFixed(3)})\n> ${r.text.replace(/\n/g, '\n> ')}`)
+                .join('\n\n')
+        await this._postRagResultMessage(content)
+      }
+    } finally {
+      this._isLoading.set(false)
+    }
+  }
+
+  private async _getOrCreateWorkspaceRagSpace(workspace: string): Promise<RagSpace> {
+    const spaces = await firstValueFrom(this.api.get_rag_spaces())
+    const existing = spaces.find((s) => s.workspace_path === workspace)
+    if (existing) {
+      return existing
+    }
+    const name = workspace.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || workspace
+    return firstValueFrom(this.api.post_rag_space({ name, workspace_path: workspace }))
+  }
+
+  private async _postRagResultMessage(content: string): Promise<void> {
+    if (!this._conversation) {
+      return
+    }
+    const assistantId = crypto.randomUUID()
+    await firstValueFrom(
+      this.api.post_message(this._conversation.id, { id: assistantId, role: 'assistant', content }),
+    )
+    this._messages.update((msgs) => [...msgs, { kind: 'assistant', id: assistantId, content, streaming: false }])
   }
 
   uploadImage(file: File) {
