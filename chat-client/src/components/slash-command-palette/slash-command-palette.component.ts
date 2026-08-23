@@ -3,15 +3,15 @@ import { CommonModule } from '@angular/common'
 import { ConversationMode, SlashCommand, Workflow } from '../../types/message-types'
 
 const MODES: SlashCommand[] = [
-  { type: 'mode', value: 'standard', label: 'standard', description: 'Default agent mode' },
-  { type: 'mode', value: 'auto',     label: 'auto',     description: 'Auto-approve safe tool calls' },
-  { type: 'mode', value: 'plan',     label: 'plan',     description: 'Plan before editing — no file writes' },
-  { type: 'mode', value: 'yolo',     label: 'yolo',     description: 'Autonomous loop with verification' },
+  { type: 'mode', value: 'standard', label: 'standard', description: 'Default agent mode', paramHint: '[message]' },
+  { type: 'mode', value: 'auto',     label: 'auto',     description: 'Auto-approve safe tool calls', paramHint: '[message]' },
+  { type: 'mode', value: 'plan',     label: 'plan',     description: 'Plan before editing — no file writes', paramHint: '[message]' },
+  { type: 'mode', value: 'yolo',     label: 'yolo',     description: 'Autonomous loop with verification', paramHint: '[message]' },
 ]
 
 const RAG_COMMANDS: SlashCommand[] = [
-  { type: 'rag', value: 'rag-index',  label: 'rag-index',  description: 'Index a directory (default: whole workspace) into this workspace\'s RAG space' },
-  { type: 'rag', value: 'rag-search', label: 'rag-search', description: 'Search this workspace\'s RAG space' },
+  { type: 'rag', value: 'rag-index',  label: 'rag-index',  description: 'Index a directory (default: whole workspace) into this workspace\'s RAG space', paramHint: '[path]' },
+  { type: 'rag', value: 'rag-search', label: 'rag-search', description: 'Search this workspace\'s RAG space', paramHint: '<query>' },
 ]
 
 @Component({
@@ -45,7 +45,7 @@ export class SlashCommandPaletteComponent {
     const f = this.filter().toLowerCase()
     return this.workflows()
       .filter((w) => w.name.toLowerCase().includes(f) || w.description.toLowerCase().includes(f))
-      .map<SlashCommand>((w) => ({ type: 'workflow', value: w.name, label: w.name, description: w.description }))
+      .map<SlashCommand>((w) => ({ type: 'workflow', value: w.name, label: w.name, description: w.description, paramHint: '[prompt]' }))
   })
 
   readonly allFiltered = computed<SlashCommand[]>(() => [
@@ -66,13 +66,6 @@ export class SlashCommandPaletteComponent {
 
   resetIndex(): void {
     this._activeIndex.set(0)
-  }
-
-  selectActive(): void {
-    const item = this.allFiltered()[this._activeIndex()]
-    if (item !== undefined) {
-      this.commandSelected.emit(item)
-    }
   }
 
   selectItem(item: SlashCommand): void {

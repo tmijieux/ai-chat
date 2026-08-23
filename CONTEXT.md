@@ -300,21 +300,26 @@ Per-conversation setting that controls how the agent runs. Persisted in `Convers
 
 Triggered by typing `@` anywhere in the chat input when a workspace is set. Opens a floating popup above the textarea (same visual style as the [[Slash Command Palette]]). The text after `@` is used as a live search query against all files in the workspace (recursive, skipping `.git`, `node_modules`, `__pycache__`, `venv`, etc.). Results are shown as `filename — relative/path` pairs, sorted by depth then alphabetically. Max 50 results. Search is debounced (~150ms).
 
-Keyboard: ArrowUp/Down to navigate, Enter to select, Escape to dismiss and remove the `@` token from the input.
+**Files only by default; directories too where a directory is the natural target** — e.g. while typing `/rag-index`'s path parameter, since that command indexes a directory (a single file also works, but the whole-workspace/subdirectory case is the common one). A directory result is shown with a trailing `/`.
 
-On selection, the `@filter` in the textarea is replaced with `@/absolute/path/to/file ` (trailing space closes the picker). The absolute path is visible in the message so the agent can call `read_file` on it without ambiguity.
+Keyboard: ArrowUp/Down to navigate, Enter or Tab to select the highlighted entry, Escape to dismiss and remove the `@` token from the input. Tab is intercepted specifically so it picks the entry instead of falling through to native focus traversal (which would otherwise jump out of the textarea onto the next control).
+
+On selection, the `@filter` in the textarea is replaced with just the absolute path (trailing space closes the picker) — the triggering `@` itself is dropped, not kept as a prefix, so anything reading the message literally (a deterministic command like [[RAG Slash Commands]], or the agent) sees a clean path rather than one that looks like it starts with an `@` character.
 
 Only available when a workspace directory is configured for the conversation.
 
 ## Slash Command Palette
-Triggered by typing `/` at the start of the chat input. Opens a floating popup above the textarea with two sections:
+Triggered by typing `/` at the start of the chat input. Opens a floating popup above the textarea with three sections:
 
 - **Modes** — `/standard`, `/auto`, `/plan`, `/yolo`. Selecting one switches the conversation mode persistently. Mode can also be changed from the [[Conversation Settings Drawer]].
+- **RAG** — see [[RAG Slash Commands]].
 - **Workflows** — one entry per workflow definition in `backend/workflows/`. Selecting one invokes that workflow for the current message only (one-shot, does not change the base mode).
 
-Keyboard: ArrowUp/Down to navigate, Enter to select, Tab to autocomplete the command name with a trailing space (so the user can continue typing a prompt argument), Escape to dismiss and clear the `/` from the input.
+Each entry shows a parameter hint next to its name (e.g. `<query>` for a required parameter, `[path]`/`[message]` for an optional one) so it's clear what to type next without needing the description.
 
-The command token is parsed and consumed at send time — the remaining text after the command is the message body. Works whether the user selected from the palette or typed the full `/command prompt` manually.
+Keyboard: ArrowUp/Down to navigate, Escape to dismiss and clear the `/` from the input. **Both Tab and Enter complete the highlighted command** — filling in its token with a trailing space so the user can type its parameter — rather than executing it immediately; every command can take trailing text, so a single keypress can't tell whether the user is done typing. Sending happens on the next Enter, once the palette has closed (detected by the trailing space).
+
+The command token is parsed and consumed at send time — the remaining text after the command is the message body. Works whether the user completed it from the palette or typed the full `/command prompt` manually.
 
 ## Workflow / skills
 A named, user-defined multi-stage agent execution flow stored as a YAML file in `backend/workflows/`. Workflows are the structured, ordered-stage variant of automation — distinct from simple skills (prompt injection) but they are able to implement skills in Claude sense(they are a superset of skills). Each stage specifies a prompt, a set of tools, a finish tool, and iteration limits. The agent in each stage can only use the tools listed for that stage and must call the stage's finish tool to advance.

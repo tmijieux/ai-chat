@@ -42,8 +42,9 @@ def _fuzzy_score(query: str, relative_path: str) -> tuple[int, int]:
 # ---------------------------------------------------------------------------
 
 @router.get("/api/utils/search-files")
-async def search_files(workspace: str, query: str = ""):
-    """Recursively search for files in a workspace directory by filename. Skips common ignored directories."""
+async def search_files(workspace: str, query: str = "", include_dirs: bool = False):
+    """Recursively search for files (and, if include_dirs, directories too) in a workspace
+    directory by name. Skips common ignored directories."""
     workspace_path = Path(workspace).resolve()
     if not workspace_path.is_dir():
         raise HTTPException(400, detail=f"Not a directory: {workspace_path}")
@@ -52,6 +53,19 @@ async def search_files(workspace: str, query: str = ""):
     results = []
     for root, dirs, files in os.walk(workspace_path):
         dirs[:] = [d for d in dirs if not d.startswith(".") and d not in SKIP_DIRS]
+
+        if include_dirs:
+            for dirname in dirs:
+                abs_path = Path(root) / dirname
+                relative_path = "/".join(abs_path.relative_to(workspace_path).parts)
+                if query_lower and not _fuzzy_match(query_lower, relative_path.lower()):
+                    continue
+                results.append({"name": dirname, "path": str(abs_path), "relative_path": relative_path, "is_dir": True})
+                if len(results) >= 50:
+                    break
+        if len(results) >= 50:
+            break
+
         for filename in files:
             if filename.startswith("."):
                 continue
@@ -59,7 +73,7 @@ async def search_files(workspace: str, query: str = ""):
             relative_path = "/".join(abs_path.relative_to(workspace_path).parts)
             if query_lower and not _fuzzy_match(query_lower, relative_path.lower()):
                 continue
-            results.append({"name": filename, "path": str(abs_path), "relative_path": relative_path})
+            results.append({"name": filename, "path": str(abs_path), "relative_path": relative_path, "is_dir": False})
             if len(results) >= 50:
                 break
         if len(results) >= 50:

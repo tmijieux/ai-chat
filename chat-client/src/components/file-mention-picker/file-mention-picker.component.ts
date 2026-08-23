@@ -20,6 +20,10 @@ export class FileMentionPickerComponent {
   readonly filter = input.required<string>()
   /** Absolute path of the workspace root to search within. */
   readonly workspacePath = input.required<string>()
+  /** Whether directories should be offered as selectable results alongside files — only makes
+   * sense in a context expecting a directory (e.g. typing a /rag-index path), off by default so
+   * plain @-mentions in a chat message keep listing files only. */
+  readonly includeDirs = input(false)
 
   /** Emits the absolute path of the selected file. */
   readonly fileSelected = output<string>()
@@ -53,7 +57,7 @@ export class FileMentionPickerComponent {
             return of({ results: [] as FileSearchResult[] })
           }
           untracked(() => this._loading.set(true))
-          return this.api.search_files(workspace, query)
+          return this.api.search_files(workspace, query, this.includeDirs())
         }),
         takeUntilDestroyed(),
       )

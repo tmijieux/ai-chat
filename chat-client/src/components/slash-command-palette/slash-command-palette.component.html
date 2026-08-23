@@ -10,6 +10,9 @@
           (click)="selectItem(item)"
         >
           <span class="slash-palette-item-label">/{{ item.label }}</span>
+          @if (item.paramHint) {
+            <span class="slash-palette-item-param">{{ item.paramHint }}</span>
+          }
           <span class="slash-palette-item-desc">{{ item.description }}</span>
         </button>
       }
@@ -27,6 +30,9 @@
           (click)="selectItem(item)"
         >
           <span class="slash-palette-item-label">/{{ item.label }}</span>
+          @if (item.paramHint) {
+            <span class="slash-palette-item-param">{{ item.paramHint }}</span>
+          }
           <span class="slash-palette-item-desc">{{ item.description }}</span>
         </button>
       }
@@ -44,6 +50,9 @@
           (click)="selectItem(item)"
         >
           <span class="slash-palette-item-label">/{{ item.label }}</span>
+          @if (item.paramHint) {
+            <span class="slash-palette-item-param">{{ item.paramHint }}</span>
+          }
           <span class="slash-palette-item-desc">{{ item.description }}</span>
         </button>
       }

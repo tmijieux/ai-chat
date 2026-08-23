@@ -89,14 +89,15 @@ export type FileSearchResult = {
   name: string
   path: string
   relative_path: string
+  is_dir: boolean
 }
 
 export type RagCommandName = 'rag-index' | 'rag-search'
 
 export type SlashCommand =
-  | { type: 'mode'; value: ConversationMode; label: string; description: string }
-  | { type: 'workflow'; value: string; label: string; description: string }
-  | { type: 'rag'; value: RagCommandName; label: string; description: string }
+  | { type: 'mode'; value: ConversationMode; label: string; description: string; paramHint?: string }
+  | { type: 'workflow'; value: string; label: string; description: string; paramHint?: string }
+  | { type: 'rag'; value: RagCommandName; label: string; description: string; paramHint?: string }
 
 export type RagSpace = {
   id: string

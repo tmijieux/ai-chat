@@ -699,6 +699,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   color: #a5b4fc;
   flex-shrink: 0;
 }
+.slash-palette-item-param {
+  font-size: 0.75rem;
+  font-family: monospace;
+  font-style: italic;
+  color: #64748b;
+  flex-shrink: 0;
+}
 .slash-palette-item-desc {
   font-size: 0.75rem;
   color: #94a3b8;

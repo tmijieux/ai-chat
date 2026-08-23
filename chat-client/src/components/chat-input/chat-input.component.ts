@@ -84,6 +84,23 @@ export class ChatInputComponent implements AfterViewInit {
 
   readonly fileMentionOpen = computed(() => this.fileMentionContext() !== null)
 
+  // Slash commands whose parameter is a path where a directory (not just a file) is the natural
+  // target — the @ picker offers directories alongside files only while typing one of these.
+  private readonly DIRECTORY_PARAM_COMMANDS: string[] = ['rag-index']
+
+  readonly mentionIncludeDirs = computed(() => {
+    const input = this.currentInput()
+    if (!input.startsWith('/')) {
+      return false
+    }
+    const spaceIndex = input.indexOf(' ')
+    if (spaceIndex === -1) {
+      return false
+    }
+    const token = input.slice(1, spaceIndex)
+    return this.DIRECTORY_PARAM_COMMANDS.includes(token)
+  })
+
   // Text that was in the input before recording started; partials/final are appended to it.
   private _startPrefix = ''
   // Timer ID for the Alt hold-to-record 500ms delay.
@@ -250,7 +267,10 @@ export class ChatInputComponent implements AfterViewInit {
       return
     }
     const input = this.currentInput()
-    this.currentInput.set(input.slice(0, context.atIndex) + '@' + absolutePath + ' ')
+    // The leading '@' was only the trigger for this picker — drop it so the inserted path is
+    // clean for anything that reads this text literally (the RAG slash commands, or the model
+    // itself), instead of looking like the path starts with an '@' character.
+    this.currentInput.set(input.slice(0, context.atIndex) + absolutePath + ' ')
     this._textareaRef?.nativeElement.focus()
   }
 
@@ -281,10 +301,14 @@ export class ChatInputComponent implements AfterViewInit {
     if (event && (event as KeyboardEvent).shiftKey) {
       return
     }
-    // Route Enter to palette selection when palette is open.
+    // Enter while the palette is open completes the command token the same way Tab does —
+    // it does not execute/apply it yet. Every slash command can take trailing text (a message
+    // body, a path, a query), so a single Enter can't tell whether the user is done typing;
+    // completing the token and requiring a second Enter (now with the palette closed) is
+    // consistent and never silently swallows a parameter the user was about to type.
     if (this.paletteOpen()) {
       event?.preventDefault()
-      this._palette?.selectActive()
+      this._completeActiveSlashCommand()
       return
     }
     if (this.fileMentionOpen()) {
@@ -369,6 +393,24 @@ export class ChatInputComponent implements AfterViewInit {
     this.pendingImages.update((imgs) => imgs.filter((i) => i.localUrl !== img.localUrl))
   }
 
+  /** Fill in the highlighted palette command's token with a trailing space so the user can type
+   * its parameter — does not apply/execute the command yet. The palette closes automatically
+   * because the space is detected by the open/close effect; the command itself is parsed at
+   * send time (see sendMessage's leading-/command parsing). Shared by Tab and Enter. */
+  private _completeActiveSlashCommand(): void {
+    const item = this._palette?.getActiveItem()
+    if (item === undefined) {
+      return
+    }
+    this.currentInput.set('/' + item.label + ' ')
+    queueMicrotask(() => {
+      const el = this._textareaRef?.nativeElement
+      if (el) {
+        el.selectionStart = el.selectionEnd = el.value.length
+      }
+    })
+  }
+
   onTextareaKeydown(event: KeyboardEvent): void {
     if (this.paletteOpen()) {
       if (event.key === 'ArrowUp') {
@@ -379,19 +421,7 @@ export class ChatInputComponent implements AfterViewInit {
         this._palette?.navigateDown()
       } else if (event.key === 'Tab') {
         event.preventDefault()
-        const item = this._palette?.getActiveItem()
-        if (item !== undefined) {
-          // Fill in the command token with a trailing space so the user can type the prompt.
-          // The palette closes automatically because the space is detected by the effect.
-          // The command itself is parsed at send time.
-          this.currentInput.set('/' + item.label + ' ')
-          queueMicrotask(() => {
-            const el = this._textareaRef?.nativeElement
-            if (el) {
-              el.selectionStart = el.selectionEnd = el.value.length
-            }
-          })
-        }
+        this._completeActiveSlashCommand()
       } else if (event.key === 'Escape') {
         event.preventDefault()
         this.paletteOpen.set(false)
@@ -407,6 +437,12 @@ export class ChatInputComponent implements AfterViewInit {
       } else if (event.key === 'ArrowDown') {
         event.preventDefault()
         this._filePicker?.navigateDown()
+      } else if (event.key === 'Tab') {
+        // Without this, Tab falls through to native focus traversal and jumps out of the
+        // textarea onto the next focusable control (the STT language switch button) instead of
+        // picking the highlighted entry the way it does in the slash command palette.
+        event.preventDefault()
+        this._filePicker?.selectActive()
       } else if (event.key === 'Escape') {
         event.preventDefault()
         // Remove the '@' and filter text, leaving the rest of the message intact.

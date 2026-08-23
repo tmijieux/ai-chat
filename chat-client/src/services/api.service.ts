@@ -253,9 +253,9 @@ export class ApiService {
     })
   }
 
-  search_files(workspace: string, query: string) {
+  search_files(workspace: string, query: string, includeDirs = false) {
     return this.http.get<{ results: FileSearchResult[] }>(`${BASE_URL}/utils/search-files`, {
-      params: { workspace, query },
+      params: { workspace, query, include_dirs: includeDirs },
     })
   }
 

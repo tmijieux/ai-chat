@@ -39,6 +39,7 @@
         <app-file-mention-picker
           [filter]="fileMentionContext()!.filterText"
           [workspacePath]="_workspacePath()!"
+          [includeDirs]="mentionIncludeDirs()"
           (fileSelected)="onFileMentionSelected($event)"
           (dismissed)="currentInput.set(currentInput().slice(0, fileMentionContext()!.atIndex))"
         />
