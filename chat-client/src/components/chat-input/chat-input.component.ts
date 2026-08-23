@@ -163,6 +163,14 @@ export class ChatInputComponent implements AfterViewInit {
       return
     }
 
+    // Windows synthesizes a phantom Control keydown alongside every real AltGraph keydown —
+    // both on initial press and on every OS key-repeat pulse while AltGraph is held. Ignore it
+    // outright so it doesn't hit the "any other key cancels" branch below and clear/cancel the
+    // hold-to-record timer before it ever fires.
+    if (event.key === 'Control' && event.getModifierState('AltGraph')) {
+      return
+    }
+
     if (event.key === 'AltGraph') {
       if (this.voiceSvc.isRecording() || this._altTimer !== null) {
         return
