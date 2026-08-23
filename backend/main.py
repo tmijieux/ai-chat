@@ -7,7 +7,7 @@ from fastapi import FastAPI
 
 from database import init_db
 from llm import backend
-import whisper_pipeline
+from stt import backend as stt_backend
 from routers import conversations, prompts, agents, utils, tokens, ws, stt, token_visualizer, workflow_runs
 
 logger = logging.getLogger(__name__)
@@ -25,16 +25,19 @@ _disable_sqlalchemy_logging()
 logging.basicConfig(level=logging.DEBUG)
 
 
-_whisper: whisper_pipeline.WhisperPipeline | None = None
+_whisper_ready: bool = False
 _llm_ready: bool = False
 
 
 def _load_whisper_bg() -> None:
-    global _whisper
+    global _whisper_ready
     try:
-        _whisper = whisper_pipeline.load_pipeline()
+        import asyncio
+        asyncio.run(stt_backend.ensure_running())
+        _whisper_ready = True
+        logger.info("STT backend ready.")
     except Exception:
-        logger.exception("Whisper pipeline failed to load — /api/transcribe will be unavailable")
+        logger.exception("STT backend failed to load — /api/transcribe will be unavailable")
 
 
 def _load_llm_bg() -> None:
@@ -72,7 +75,7 @@ app.include_router(workflow_runs.router)
 
 @app.get("/api/status")
 async def get_status():
-    return {"llm": _llm_ready, "whisper": _whisper is not None}
+    return {"llm": _llm_ready, "whisper": _whisper_ready}
 
 
 async def check_llm() -> None:

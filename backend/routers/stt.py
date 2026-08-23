@@ -1,12 +1,11 @@
 """Speech-to-text transcription and LLM-based correction endpoints."""
-import asyncio
 import logging
 
 import aiohttp
 from fastapi import APIRouter, Form, HTTPException, UploadFile
 
 import loaders as ld
-import whisper_pipeline
+from stt import backend as stt_backend
 
 router = APIRouter()
 
@@ -107,13 +106,10 @@ async def transcribe_audio(
     language: str | None = Form(default=None),
 ):
     import main as _main
-    if _main._whisper is None:
-        raise HTTPException(503, "Whisper pipeline is still loading, try again in a moment")
+    if _main._whisper_ready == False:
+        raise HTTPException(503, "STT backend is still loading, try again in a moment")
     data = await audio.read()
-    loop = asyncio.get_event_loop()
-    text = await loop.run_in_executor(
-        None, whisper_pipeline.transcribe, _main._whisper, data, language
-    )
+    text = await stt_backend.transcribe(data, language)
     logger.info("STT raw transcript: %r", text)
     return {"text": text}
 

@@ -132,18 +132,9 @@ The structured JSON dict that every tool's `execute()` returns. Contains at mini
 
 Hold-to-record mic button in `ChatInputComponent`. Three visual states: gray (idle), red pulsing (recording), yellow pulsing (transcribing). Hold mousedown → record; release anywhere (mouseup on document) → stop. Alt held 500ms in textarea → same. Partial transcripts appear in the textarea while speaking; final result replaces them on release.
 
-**Pipeline:** `backend/whisper_pipeline.py` — OpenVINO inference, encoder and decoder both on GPU.0 (Intel Arc iGPU). Audio decoded via ffmpeg (handles WebM/WAV/OGG). Tensor names and statefulness auto-detected at load time (`_introspect`), so any Whisper variant works without code changes. Pipeline exposed as `WhisperPipeline` dataclass; call `load_pipeline()` once at startup, pass to `transcribe(pipeline, audio_bytes, language)`.
+**Backend:** Two interchangeable local speech-to-text engines are maintained side by side, switchable at a single point with no other code changes needed — an original OpenVINO-based engine, and a newer whisper.cpp-based engine (see ADR-0014) kept as the active default. Both run entirely on the Intel Arc iGPU, never the discrete GPU the chat LLM and image generation share — dictation never competes with either for VRAM. Audio (WebM/WAV/OGG from the browser) is transcoded via ffmpeg before transcription either way.
 
-**Model variants** (defined in `whisper_pipeline.py`, swap by changing `ACTIVE_VARIANT`):
-
-| Constant | HuggingFace ID | Dir | Stateful |
-|---|---|---|---|
-| `WHISPER_TINY` | `openai/whisper-tiny` | `whisper/ov_model_tiny` | yes |
-| `WHISPER_BASE` | `openai/whisper-base` | `whisper/ov_model_base` | yes |
-| `WHISPER_SMALL` | `openai/whisper-small` | `whisper/ov_model_small` | no |
-| `WHISPER_LARGE_FR` | `bofenghuang/whisper-large-v3-french` | `whisper/ov_model_large_fr` | yes (re-exported with optimum-intel stateful) |
-
-Stateful models use one-token-at-a-time decode with internal KV cache (`_decode_stateful`) — O(n). Non-stateful use full-sequence decode (`_decode_full_sequence`) — O(n²). Compiled blobs cached per variant+device in `whisper/compiled_blobs_<name>/`. Export new variants with `optimum-cli export openvino` from the `whisper/venv`.
+**Model variants:** The OpenVINO engine supports four model sizes, from fastest/least accurate (`tiny`) to slowest/most accurate, including a French-specialized large model. The whisper.cpp engine currently only has the mid-size multilingual model (`small`) wired up — the same size as the OpenVINO default — with the others a possible future addition, not yet needed.
 
 **STT correction:** `POST /api/correct` calls `_correct_stt()` — non-streaming llama-server call with few-shot prompt. Fixes misheard technical terms and mangled French words.
 

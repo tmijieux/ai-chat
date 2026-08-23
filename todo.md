@@ -33,7 +33,9 @@
 
 ## Voice Dictation
 
-- **Wire whisper.cpp into the backend, replacing the OpenVINO pipeline**: `~/ai/whisper.cpp` builds clean with `GGML_VULKAN=ON` (see `scripts/build_whisper_cpp.bat`) and, restricted to the Arc iGPU via `GGML_VK_VISIBLE_DEVICES=0` (required — Vulkan defaults to using every dedicated *and* integrated GPU it finds, which would otherwise also pull in the RTX 4070 and reintroduce the VRAM contention this migration exists to avoid), matches the current OpenVINO `whisper-small` pipeline on both transcription quality and speed on a standalone test clip. Not wired into `backend/whisper_pipeline.py` yet — the open design question is preserving the current streaming-partial-transcript-while-speaking UX (see `CONTEXT.md`'s "Voice Dictation" section) through whisper.cpp's CLI/server, which isn't natively a streaming tool the way it's used today. Needs a design discussion before implementation, not an assumed subprocess-per-chunk approach.
+- **Validate whisper.cpp French transcription quality**: the whisper.cpp STT backend (ADR-0014) was wired in and validated end-to-end only on English audio (`jfk.wav`). Dictation is primarily used in French (see the STT-correction prompt's default) — compare against the OpenVINO backend on real French audio before treating whisper.cpp as the confirmed default rather than just the active one.
+
+- **Whisper.cpp backend: add the other model variants**: only the `small` multilingual model is wired up (`backend/stt/whisper_cpp_backend.py`). The OpenVINO backend still has tiny/base/French-specialized-large as swappable options (`whisper_pipeline.py`'s `ACTIVE_VARIANT`) with no whisper.cpp equivalent yet.
 
 ## Ideas to Explore
 
