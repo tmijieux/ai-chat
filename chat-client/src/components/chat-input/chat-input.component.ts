@@ -107,6 +107,26 @@ export class ChatInputComponent implements AfterViewInit {
       })
     })
 
+    // Auto-grow the textarea (up to its CSS max-height, where it scrolls internally instead) as
+    // content spans multiple lines, and auto-scroll to the bottom while dictating so newly
+    // appended speech stays visible. queueMicrotask so scrollHeight is read after the browser
+    // has laid out the DOM update ngModel just triggered, not the stale pre-update value.
+    effect(() => {
+      this.currentInput()
+      const isSpeechMode = this.voiceSvc.isRecording() || this.voiceSvc.isTranscribing()
+      queueMicrotask(() => {
+        const el = this._textareaRef?.nativeElement
+        if (!el) {
+          return
+        }
+        el.style.height = 'auto'
+        el.style.height = `${el.scrollHeight}px`
+        if (isSpeechMode) {
+          el.scrollTop = el.scrollHeight
+        }
+      })
+    })
+
     // Append each partial transcript to the prefix captured at recording start.
     effect(() => {
       const partial = this.voiceSvc.partialText()
@@ -185,6 +205,13 @@ export class ChatInputComponent implements AfterViewInit {
       this._altHeld = true
       this._altTimer = setTimeout(() => {
         this._altTimer = null
+        // Re-check: this fires 500ms after being scheduled, and isRecording() may have changed
+        // in the meantime (e.g. the mouse button was used instead) — starting anyway would
+        // orphan whatever session is already active. VoiceDictationService.startRecording()
+        // also refuses this itself, but no need to even attempt it (getUserMedia) here.
+        if (this.voiceSvc.isRecording()) {
+          return
+        }
         this._startPrefix = this.currentInput()
         this.voiceSvc.startRecording().catch(() => {})
       }, 500)
