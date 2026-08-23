@@ -90,7 +90,12 @@ export class VoiceDictationService {
     }
 
     this._stream = stream
-    this._mediaRecorder = new MediaRecorder(stream)
+    // Explicit mimeType, not the browser default: Firefox otherwise defaults audio-only capture
+    // to Ogg, whose page-based structure isn't safely truncatable at an arbitrary chunk boundary
+    // the way WebM/Matroska's cluster-based structure is — a real problem here since every
+    // partial fire re-slices the growing chunk buffer from the start (see _firePartial below).
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : undefined
+    this._mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
 
     this._mediaRecorder.ondataavailable = (e) => {
       this._audioChunks.push(e.data)
