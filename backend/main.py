@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from database import init_db
 from llm import backend
 from stt import backend as stt_backend
-from routers import conversations, prompts, agents, utils, tokens, ws, stt, token_visualizer, workflow_runs
+from routers import conversations, prompts, agents, utils, tokens, ws, stt, token_visualizer, workflow_runs, rag
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +71,7 @@ app.include_router(ws.router)
 app.include_router(stt.router)
 app.include_router(token_visualizer.router)
 app.include_router(workflow_runs.router)
+app.include_router(rag.router)
 
 
 @app.get("/api/status")

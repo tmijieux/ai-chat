@@ -20,9 +20,17 @@
 - **In-UI editing of a stage's definition/inputs before resuming**: correcting a workflow bug that stopped or failed a run — a stage's `workflow.yaml` definition, or a persisted stage's own input/result JSON — currently requires editing files by hand outside the app before hitting "Resume from here." No in-UI editor exists yet. See ADR-0011 and ADR-0012.
 
 
+## Pipeline / Agent
+
+- **RAG agent tool wiring**: backend indexing/retrieval infrastructure for [[RAG Space]] exists (ADR-0015) but nothing lets a running agent query a space yet — needs a tool (e.g. analogous to `explore_codebase`) and a decision on how a conversation selects which space(s) it can search.
+
+- **RAG spaces UI**: no frontend exists yet for creating/managing RAG spaces or their documents — only the backend API (`/api/rag/...`). Needs a settings-page-style CRUD surface, similar to system prompts.
+
+- **RAG image/PDF ingestion**: current RAG ingestion is text-only (paste, uploaded text/markdown, workspace path). Image and PDF ingestion were explicitly deferred.
+
 ## Ideas to Explore
 
 - **Text to speech**: explore adding text-to-speech capability.
 
-- **RAG indexing and retrieval**: explore adding retrieval-augmented generation — indexing documents/knowledge sources and retrieving relevant chunks to ground agent responses.
+- **RAG GPU-based embedding**: current RAG embedding runs CPU-only (fastembed) to avoid VRAM contention with the chat model — worth exploring a GPU-based embedding provider later if it meaningfully speeds up bulk-indexing a large repo, even at the cost of temporarily stopping the chat llama-server like `generate_image` already does. `EmbeddingProvider` was designed swappable for this.
 

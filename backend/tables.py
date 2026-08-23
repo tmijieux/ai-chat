@@ -96,3 +96,43 @@ class SystemPromptTemplate(Base):
     is_default = column(Boolean, nullable=False, default=False)
     token_count = column(Integer, nullable=True)
     created_at = column(String, nullable=False)
+
+
+class RagSpace(Base):
+    __tablename__ = "rag_spaces"
+    id = column(String, primary_key=True, index=True)
+    name = column(String, nullable=False)
+    description: Mapped[str | None] = nullable_column(Text)
+    # None = global space; otherwise the workspace this space is pinned to
+    workspace_path: Mapped[str | None] = nullable_column(String)
+    embedding_model = column(String, nullable=False)
+    embedding_dim = column(Integer, nullable=False)
+    created_at = column(String, nullable=False)
+
+
+class RagSource(Base):
+    __tablename__ = "rag_sources"
+    id = column(String, primary_key=True, index=True)
+    space_id = column(String, ForeignKey("rag_spaces.id"), index=True, nullable=False)
+    source_type = column(String, nullable=False)  # paste | upload | workspace_path
+    title = column(String, nullable=False)
+    # Filename or workspace-relative path; None for pasted text
+    origin_path: Mapped[str | None] = nullable_column(String)
+    content_hash = column(String, nullable=False)
+    status = column(String, nullable=False)  # pending | indexed | error
+    error_message: Mapped[str | None] = nullable_column(Text)
+    created_at = column(String, nullable=False)
+    updated_at = column(String, nullable=False)
+
+
+class RagChunk(Base):
+    __tablename__ = "rag_chunks"
+    id = column(String, primary_key=True, index=True)
+    source_id = column(String, ForeignKey("rag_sources.id"), index=True, nullable=False)
+    space_id = column(String, ForeignKey("rag_spaces.id"), index=True, nullable=False)  # denormalized for query
+    chunk_index = column(Integer, nullable=False)
+    start_line: Mapped[int | None] = nullable_column(Integer)
+    end_line: Mapped[int | None] = nullable_column(Integer)
+    text = column(Text, nullable=False)
+    embedding = column(Text, nullable=False)  # base64-encoded float32 bytes
+    created_at = column(String, nullable=False)

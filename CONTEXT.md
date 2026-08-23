@@ -327,6 +327,29 @@ A `create-workflow` workflow (self-hosted) helps users design and write new work
 
 **Implementation status:** YAML files are discovered and listed via `GET /api/workflows` and appear in the [[Slash Command Palette]]. Stage execution is handled by `PipelineOrchestrator` (`agent/pipeline.py`) and `CustomWorkflowOrchestrator` (`agent/custom_workflow.py`). The `prepare_verification` stage and post-execution script running are not yet fully wired.
 
+## RAG Space
+A named, independent collection of indexed documents, searchable by semantic similarity. Multiple
+spaces can exist side by side — nothing is shared between them, so a space for one topic never
+pollutes search results for another. A space is global by default (usable from any conversation)
+but can optionally be pinned to a workspace it conceptually belongs to.
+
+**Implementation status:** indexing and retrieval infrastructure exists and is verified working.
+Not yet implemented: any agent tool that lets a running agent actually query a space, and any
+frontend UI for creating spaces or managing their documents — both deferred to follow-up work.
+
+## RAG Source
+One document ingested into a [[RAG Space]] — directly pasted text, an uploaded text/markdown file,
+or (for a path pointing into a workspace) one file found there. Pointing ingestion at a directory
+adds one source per file inside it, not one source for the whole directory, so re-indexing later
+only touches files that actually changed since they were last indexed — unchanged files are
+skipped, keeping repeat indexing fast.
+
+## RAG Chunk
+A retrieval-sized slice of one [[RAG Source]]'s text — the actual unit that gets embedded and
+searched. A source is split into several overlapping chunks so a fact isn't lost if it happens to
+fall near a split point; a query against a space returns the most relevant chunks, not whole
+documents.
+
 ## Locale Translation Workflow
 `translate-locale` — translates a key-value localization file into another language. The file's keys are treated as fixed identifiers in the source language (used by application code to look up strings) and are never altered; only the values are rewritten into the target language. Runs one confirmation up front (to create the output file), then works through the source file in fixed-size chunks so a large file never needs to fit in context at once. Invoked via the [[Slash Command Palette]] with a free-text request naming the source file, output file (optional — derived from the source filename otherwise), and target language.
 

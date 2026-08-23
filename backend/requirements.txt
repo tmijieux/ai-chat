@@ -20,3 +20,5 @@ Jinja2==3.1.6
 ddgs==9.14.4
 trafilatura==2.0.0
 psutil==7.2.2 # Finds and terminates the llama-server process for image-gen VRAM handoff
+numpy==2.4.6 # RAG chunk-embedding storage/similarity search
+fastembed==0.8.0 # CPU (ONNX Runtime) text embeddings for RAG

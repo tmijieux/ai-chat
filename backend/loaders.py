@@ -98,3 +98,24 @@ class UpdateAgent(BaseModel):
 class CorrectRequest(BaseModel):
     text: str
     language: str | None = "fr"
+
+
+class NewRagSpace(BaseModel):
+    name: str
+    description: str | None = None
+    workspace_path: str | None = None
+
+
+class NewPastedRagSource(BaseModel):
+    title: str
+    text: str
+
+
+class NewWorkspacePathRagSource(BaseModel):
+    workspace: str
+    path: str
+
+
+class RagQuery(BaseModel):
+    query: str
+    top_k: int = 5

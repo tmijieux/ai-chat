@@ -20,7 +20,9 @@ dateparser==1.4.0
 ddgs==9.14.4
 fake-useragent==2.2.0
 fastapi==0.136.3
+fastembed==0.8.0
 filelock==3.29.0
+flatbuffers==25.12.19
 frozenlist==1.8.0
 fsspec==2026.4.0
 gguf==0.19.0
@@ -41,11 +43,13 @@ importlib_metadata==9.0.0
 Jinja2==3.1.6
 jusText==3.0.2
 librt==0.15.0
+loguru==0.7.3
 lxml==6.1.1
 lxml_html_clean==0.4.5
 markdown-it-py==4.2.0
 MarkupSafe==3.0.3
 mdurl==0.1.2
+mmh3==5.2.1
 mpmath==1.3.0
 multidict==6.7.1
 mypy==2.3.1
@@ -53,6 +57,7 @@ mypy_extensions==1.1.0
 networkx==3.6.1
 nodeenv==1.10.0
 numpy==2.4.6
+onnxruntime==1.29.0
 openvino==2026.2.0
 openvino-telemetry==2025.2.0
 packaging==26.2
@@ -61,7 +66,9 @@ pillow==12.2.0
 primp==1.3.1
 priority==2.0.0
 propcache==0.5.2
+protobuf==7.36.0
 psutil==7.2.2
+py_rust_stemmers==0.1.8
 pycparser==3.0
 pydantic==2.13.4
 pydantic_core==2.46.4
@@ -102,6 +109,7 @@ urllib3==2.7.0
 uvicorn==0.48.0
 watchfiles==1.1.1
 websockets==16.0
+win32_setctime==1.2.0
 wsproto==1.3.2
 yarl==1.24.2
 zipp==4.1.0
