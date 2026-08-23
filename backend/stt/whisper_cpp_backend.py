@@ -9,12 +9,20 @@ for the chat model). Device 0 is the Intel Arc iGPU on this machine — confirme
 
 See scripts/build_whisper_cpp.bat for the build, and todo.md's "Voice Dictation" section for the
 remaining open question (preserving streaming-partial UX) this backend was validated against.
+
+Audio is transcoded to WAV in Python before it ever reaches whisper-server, not via the server's
+own --convert flag. That flag shells out to ffmpeg through std::system() on every request and
+was found, in real use, to intermittently misdetect the Opus codec inside the browser's Ogg/WebM
+blobs ("Codec not found" — ffmpeg's own format-probing flakiness, not a request-timing race:
+whisper-server serializes /inference behind a single mutex, so requests are never concurrent).
+Converting here instead reuses whisper_pipeline.py's already-proven approach: an in-memory ffmpeg
+pipe (stdin/stdout, no temp files, no shell layer) — the same mechanism that never showed this
+failure mode for the OpenVINO backend.
 """
 import asyncio
 import logging
 import os
 import subprocess
-import tempfile
 from pathlib import Path
 
 import aiohttp
@@ -27,8 +35,21 @@ WHISPER_INFERENCE_URL = f"{WHISPER_BASE_URL}/inference"
 WHISPER_SERVER_EXE = str(Path.home() / "ai/whisper.cpp/build/bin/whisper-server.exe")
 WHISPER_MODEL_PATH = str(Path.home() / "ai/models/whisper-cpp/ggml-small.bin")
 WHISPER_LOG_PATH = str(Path.home() / "ai/whisper.cpp/whisper-server.log")
+SAMPLE_RATE = 16_000
 
 logger = logging.getLogger(__name__)
+
+
+def _transcode_to_wav(audio_bytes: bytes) -> bytes:
+    """Blocking ffmpeg call — always invoked through asyncio.to_thread, never directly."""
+    result = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error",
+         "-i", "pipe:0", "-f", "wav", "-ar", str(SAMPLE_RATE), "-ac", "1", "-c:a", "pcm_s16le", "pipe:1"],
+        input=audio_bytes, capture_output=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg transcode to WAV failed: {result.stderr.decode(errors='replace')}")
+    return result.stdout
 
 
 class WhisperCppBackend(SttBackend):
@@ -57,8 +78,8 @@ class WhisperCppBackend(SttBackend):
                 WHISPER_SERVER_EXE,
                 "-m", WHISPER_MODEL_PATH,
                 "-bs", "1", "-bo", "1",  # greedy decode — matches the OpenVINO pipeline's decoding
-                "--convert",  # ffmpeg WebM/OGG -> WAV, needed for MediaRecorder's audio/webm blobs
-                "--tmp-dir", tempfile.gettempdir(),  # else defaults to "." — whatever the app's CWD is
+                # No --convert: we transcode to WAV ourselves before uploading (see module
+                # docstring) — whisper.cpp's own reader (miniaudio) accepts WAV natively.
                 "--port", "8090",
                 "--host", "127.0.0.1",
             ],
@@ -88,8 +109,10 @@ class WhisperCppBackend(SttBackend):
         logger.warning("whisper-server did not respond within 30s — continuing anyway.")
 
     async def transcribe(self, audio_bytes: bytes, language: str | None) -> str:
+        wav_bytes = await asyncio.to_thread(_transcode_to_wav, audio_bytes)
+
         form = aiohttp.FormData()
-        form.add_field("file", audio_bytes, filename="audio.webm", content_type="application/octet-stream")
+        form.add_field("file", wav_bytes, filename="audio.wav", content_type="audio/wav")
         form.add_field("language", language if language is not None else "auto")
         form.add_field("response_format", "json")
 
