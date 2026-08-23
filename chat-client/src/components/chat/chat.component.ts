@@ -26,6 +26,7 @@ import { ToolEvaluatingComponent } from '../tool-evaluating/tool-evaluating.comp
 import { ContextViewComponent } from '../context-view/context-view.component'
 import { WorkflowRunPanelComponent } from '../workflow-run-panel/workflow-run-panel.component'
 import { WorkflowRunService } from '../../services/workflow-run.service'
+import { RagService } from '../../services/rag.service'
 
 @Component({
   selector: 'app-chat',
@@ -58,6 +59,7 @@ export class ChatComponent implements OnDestroy {
   readonly chatSvc = inject(ChatService)
   readonly appStatus = inject(AppStatusService)
   readonly workflowSvc = inject(WorkflowRunService)
+  readonly ragSvc = inject(RagService)
 
   /** Stage name + loop progress for the status bar chip, or null when no workflow has run. */
   readonly workflowChipLabel = computed(() => {

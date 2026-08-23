@@ -346,12 +346,21 @@ and there is no settings-page UI for creating/naming/managing spaces. Both are d
 ## RAG Slash Commands
 `/rag-index [path]` and `/rag-search <query>`, typed in the chat input like any other [[Slash
 Command Palette]] entry. A manual, non-agentic way to try indexing/retrieval directly — the agent
-is not involved at all; the command's result is computed immediately and shown as a plain message
-in the conversation. Both commands operate on **one [[RAG Space]] per workspace**: the space bound
+is not involved at all; the command's result is computed and shown as a plain message in the
+conversation. Both commands operate on **one [[RAG Space]] per workspace**: the space bound
 to the conversation's active [[Workspace]] is found or created automatically (named after the
 workspace's directory name), so repeated use of either command in the same workspace always
 targets the same space. `path` for `/rag-index` defaults to the whole workspace when omitted.
 Requires a workspace to be configured on the conversation.
+
+**Live progress and cancellation:** `/rag-index` streams per-file progress rather than running
+silently — a banner above the message list shows the current file being indexed, a count
+(`current/total`), and a progress bar, with a **Cancel** button that stops the run. Cancelling
+takes effect between files, not instantly mid-file — whatever was already indexed before the
+cancel point stays (thanks to [[RAG Source]]'s content-hash incremental design, nothing is lost or
+needs redoing later, a re-run just continues where it left off). `/rag-search` shows a brief
+"Searching…" banner without progress detail or a cancel option, since a query is fast. The chat
+input stays disabled for the duration of either command, same as during an agent run.
 
 ## RAG Source
 One document ingested into a [[RAG Space]] — directly pasted text, an uploaded text/markdown file,

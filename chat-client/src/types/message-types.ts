@@ -121,6 +121,20 @@ export type RagSource = {
   updated_at: string
 }
 
+/** Events streamed over the RAG ingestion websocket (see RagIndexService). */
+export type RagIndexEvent =
+  | { type: 'progress'; current: number; total: number; filename: string }
+  | { type: 'done'; sources: RagSource[] }
+  | { type: 'error'; message: string }
+  | { type: 'cancelled' }
+
+/** Drives the RAG activity banner in the chat area — null when nothing is running. */
+export type RagActivity = {
+  kind: RagCommandName
+  label: string
+  progress?: { current: number; total: number; filename: string }
+} | null
+
 export type RagSearchResult = {
   chunk_id: string
   source_id: string

@@ -9,8 +9,10 @@ structure (e.g. HNSW/IVF) — exact results, and fast enough at the corpus sizes
 collection realistically reaches; an index would trade exactness for speed at a scale this doesn't
 need yet, and can replace this function's internals later without changing anything above it.
 """
+import asyncio
 import base64
 import hashlib
+import logging
 import uuid
 from dataclasses import dataclass
 
@@ -22,6 +24,8 @@ import tables as db
 from conv_helpers import _now
 from rag.chunking import chunk_text
 from rag.embedding import get_embedding_provider
+
+logger = logging.getLogger(__name__)
 
 
 def compute_content_hash(text: str) -> str:
@@ -57,7 +61,11 @@ async def add_source_and_chunks(
 
     chunks = chunk_text(text)
     provider = get_embedding_provider()
-    vectors = provider.embed([chunk.text for chunk in chunks])
+    logger.info("[rag] Embedding %d chunk(s) for source '%s'", len(chunks), title)
+    # fastembed's embed() is a blocking CPU call — offload it so a large ingestion run doesn't
+    # stall the event loop for every other request while it computes (same reasoning as offloading
+    # sd-cli.exe's blocking call in imagegen_pipeline.py).
+    vectors = await asyncio.to_thread(provider.embed, [chunk.text for chunk in chunks])
 
     now = _now()
     content_hash = compute_content_hash(text)

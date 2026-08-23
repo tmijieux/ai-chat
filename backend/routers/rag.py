@@ -1,8 +1,10 @@
 """RAG spaces: create/list/delete spaces, ingest text sources (paste/upload/workspace-path),
 list/delete sources, and query a space's chunks. Backend-only surface — no agent tool wiring yet."""
+import asyncio
+import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +17,9 @@ from rag.ingestion import ingest_pasted_text, ingest_uploaded_file, ingest_works
 from rag.store import search as rag_search
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+_TASK_CANCEL_TIMEOUT_SECONDS = 5
 
 
 def _space_dict(space: db.RagSpace) -> dict:
@@ -95,6 +100,87 @@ async def add_workspace_path_source(space_id: str, body: ld.NewWorkspacePathRagS
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     return [_source_dict(source) for source in sources]
+
+
+async def _cancel_and_wait(task: asyncio.Task, label: str) -> None:
+    """Cancel a task and wait, bounded, for it to unwind. Mirrors routers/ws.py's helper of the
+    same shape — kept local since each router here stays self-contained."""
+    task.cancel()
+    done, _pending = await asyncio.wait({task}, timeout=_TASK_CANCEL_TIMEOUT_SECONDS)
+    if len(done) == 0:
+        logger.warning("[rag ws] %s did not stop within %ss of cancellation", label, _TASK_CANCEL_TIMEOUT_SECONDS)
+
+
+@router.websocket("/api/rag/spaces/{space_id}/sources/workspace-path/ws")
+async def ingest_workspace_path_ws(websocket: WebSocket, space_id: str, sess: AsyncSession = Depends(get_db_session)):
+    """Streams per-file ingestion progress ({type: progress, current, total, filename}) and
+    supports cancellation ({type: cancel} from the client) — the interactive counterpart to the
+    plain POST endpoint above, used by the /rag-index slash command so the UI can show real
+    progress instead of a bare spinner. The POST endpoint stays for simple/programmatic use."""
+    await websocket.accept()
+    try:
+        init_data = await websocket.receive_json()
+        workspace: str = init_data["workspace"]
+        path: str = init_data.get("path") or "."
+
+        space = await sess.get(db.RagSpace, space_id)
+        if space is None:
+            await websocket.send_json({"type": "error", "message": f"No such RAG space: {space_id}"})
+            return
+
+        outbound: asyncio.Queue = asyncio.Queue()
+
+        def on_progress(current: int, total: int, filename: str) -> None:
+            outbound.put_nowait({"type": "progress", "current": current, "total": total, "filename": filename})
+
+        async def run_ingestion() -> None:
+            # Commit explicitly here rather than relying on get_db_session's implicit
+            # commit-on-return — that cleanup only runs once this whole websocket handler
+            # returns, which is well after this task's work is done and entangled with the
+            # connection's own teardown; a client that closes the socket right after seeing
+            # "done" was observed to race that implicit commit and lose the just-ingested rows.
+            try:
+                sources = await ingest_workspace_path(sess, space_id, workspace, path, on_progress=on_progress)
+                await sess.commit()
+                await outbound.put({"type": "done", "sources": [_source_dict(s) for s in sources]})
+            except ValueError as e:
+                await outbound.put({"type": "error", "message": str(e)})
+            except asyncio.CancelledError:
+                # Persist whatever was flushed before the cancellation point rather than losing it.
+                await sess.commit()
+                raise
+
+        ingest_task = asyncio.create_task(run_ingestion())
+
+        async def send_loop() -> None:
+            while True:
+                event = await outbound.get()
+                await websocket.send_json(event)
+                if event["type"] in ("done", "error", "cancelled"):
+                    return
+
+        async def recv_loop() -> None:
+            try:
+                while True:
+                    data = await websocket.receive_json()
+                    if data.get("type") == "cancel":
+                        await outbound.put({"type": "cancelled"})
+                        return
+            except WebSocketDisconnect:
+                return
+
+        send_task = asyncio.create_task(send_loop())
+        recv_task = asyncio.create_task(recv_loop())
+        try:
+            await asyncio.wait({send_task, recv_task}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            await _cancel_and_wait(recv_task, "rag ingest websocket receive task")
+            await _cancel_and_wait(send_task, "rag ingest websocket send task")
+            await _cancel_and_wait(ingest_task, "rag ingest task")
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        logger.exception("error in rag ingest websocket handling")
 
 
 @router.get("/api/rag/spaces/{space_id}/sources")
