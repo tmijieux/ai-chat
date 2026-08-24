@@ -84,6 +84,13 @@ stages:
           Keep placeholders such as {name}, %s, %d and any HTML tags exactly as they appear in the
           translated value.
 
+          This is critical: any text between a pair of single braces, like {name} or {count}, is a
+          substitution placeholder the application code fills in at runtime. The content inside the
+          braces must NEVER be changed — not translated, not reworded, not re-cased, not a single
+          character altered. You may move a {placeholder} to a different position in the sentence if
+          the target language's grammar calls for it, and you may drop one entirely if it genuinely
+          doesn't belong in the translated sentence — but if you keep it, copy it byte-for-byte.
+
           A key may start with a "[ctx: ...]" prefix giving you disambiguating context (e.g.
           "[ctx: short form of September] Sept"). That prefix is only there to help you translate
           correctly — never repeat it, or any part of it, in translated_value.
