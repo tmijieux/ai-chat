@@ -41,7 +41,7 @@ class ReadFileRangeTool(BaseTool):
         "required": ["file_path", "start_line", "end_line"],
     }
     requires_confirmation = False
-    measured_delta = 426
+    measured_delta = 428
 
     def label(self, args: dict) -> str:
         return f"READ {args.get('file_path', '')} lines {args.get('start_line')}–{args.get('end_line')}"

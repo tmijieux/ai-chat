@@ -28,7 +28,7 @@ class RunShellTool(BaseTool):
         "required": ["command"],
     }
     requires_confirmation = True
-    measured_delta = 316
+    measured_delta = 331
 
     def make_validation_text_for_user_confirmation(self, args: dict) -> str:
         return f"SHELL: {args.get('command', '')}"
