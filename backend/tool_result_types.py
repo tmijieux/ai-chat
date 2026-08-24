@@ -90,6 +90,13 @@ class ExploreCodebaseResult(ToolResult):
     snippets: NotRequired[list[dict]]
 
 
+class RagSearchResult(ToolResult):
+    """Result of rag_search: ranked chunks from the RAG space bound to the active workspace."""
+    query: NotRequired[str]
+    space_name: NotRequired[str]
+    results: NotRequired[list[dict]]
+
+
 class AskUserQuestionResult(ToolResult):
     """Result of ask_user_question: the user's free-text reply."""
     reply: NotRequired[str]

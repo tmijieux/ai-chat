@@ -11,6 +11,7 @@ _ALWAYS_SAFE_TOOLS = frozenset({
     "grep_files",
     "list_directory",
     "explore_codebase",
+    "rag_search",
 })
 
 _FILE_WRITE_TOOLS = frozenset({"write_file", "edit_file"})

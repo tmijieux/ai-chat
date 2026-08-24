@@ -339,9 +339,9 @@ pollutes search results for another. A space is global by default (usable from a
 but can optionally be pinned to a workspace it conceptually belongs to.
 
 **Implementation status:** indexing and retrieval infrastructure exists and is verified working.
-A minimal manual testing surface exists in chat — see [[RAG Slash Commands]] — but it is
-deliberately not the real feature: no agent tool lets a running agent query a space on its own,
-and there is no settings-page UI for creating/naming/managing spaces. Both are deferred.
+A minimal manual testing surface exists in chat — see [[RAG Slash Commands]]. A running agent can
+also query a space on its own via the `rag_search` tool — see [[RAG Agent Tool]]. There is still
+no settings-page UI for creating/naming/managing spaces; that remains deferred.
 
 **Embedding model:** defaults to a code-tuned model (chosen after live testing showed a
 general-purpose sentence model performed poorly on source-code search — see ADR-0018), since
@@ -373,6 +373,13 @@ describing what the code does (e.g. "launch the myapp C++ simulation as a subpro
 keyword list (e.g. "subprocess execute myapp cpp") — confirmed directly through live testing. The
 code-tuned embedding model (see [[RAG Space]], ADR-0018) was trained on docstring-style natural
 language paired with code, not on keyword search, so it rewards being asked in that style.
+
+## RAG Agent Tool
+`rag_search` lets a running agent query a [[RAG Space]] on its own, without any user action —
+unlike [[RAG Slash Commands]], which are typed manually and never reach the agent loop. It takes
+only a search query; it targets the one space bound to the conversation's active [[Workspace]],
+found or created automatically, same as the slash commands. Requires a workspace to be configured
+on the conversation. Read-only and does not require user confirmation. See ADR-0019.
 
 ## RAG Source
 One document ingested into a [[RAG Space]] — directly pasted text, an uploaded text/markdown file,

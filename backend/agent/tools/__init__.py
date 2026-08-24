@@ -13,6 +13,7 @@ from .summarize_subtask import SummarizeSubtaskTool
 from .subagent import SubAgentTool
 from .read_file_range import ReadFileRangeTool
 from .explore_codebase import ExploreCodebaseTool
+from .rag_search import RagSearchTool
 from .propose_plan import ProposePlanTool
 from .ask_user_question import AskUserQuestionTool
 from .generate_image import GenerateImageTool
@@ -26,6 +27,7 @@ TOOL_REGISTRY: dict[str, BaseTool] = {
         ReadFileTool(),
         ReadFileRangeTool(),
         ExploreCodebaseTool(),
+        RagSearchTool(),
         WriteFileTool(),
         EditFileTool(),
         RunShellTool(),

@@ -90,6 +90,16 @@
             <div class="tool-result-list-entry">{{ entry }}</div>
           }
         </div>
+      } @else if (formatRagSearchResult(msg().content); as ragSearch) {
+        <div class="p-3 border-t border-gray-200 flex flex-col gap-3">
+          @if (ragSearch.chunks.length === 0) {
+            <div class="text-muted italic">No results in RAG space {{ ragSearch.spaceName }}.</div>
+          } @else {
+            @for (chunk of ragSearch.chunks; track $index) {
+              <markdown [data]="chunk" />
+            }
+          }
+        </div>
       } @else {
         <pre class="text-xs p-3 overflow-auto max-h-60 whitespace-pre-wrap border-t border-gray-200">{{ msg().content }}</pre>
       }

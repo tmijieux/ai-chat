@@ -50,8 +50,11 @@ function _fenceFor(text: string): string {
  * extension when known) rather than a markdown blockquote — quoting raw source as a blockquote let
  * the chunk's own markdown-special characters (underscores, asterisks, a leading '#', or its own
  * embedded backticks) get reinterpreted by the renderer instead of shown verbatim, which is what
- * made code results look broken. A fence treats the content as opaque text. */
-function _renderResultChunk(sourceTitle: string, score: number, originPath: string | null, text: string): string {
+ * made code results look broken. A fence treats the content as opaque text.
+ *
+ * Exported so the rag_search agent tool's result bubble (tool-result.component.ts) can render its
+ * chunks identically to the /rag-search slash command's output. */
+export function renderRagResultChunk(sourceTitle: string, score: number, originPath: string | null, text: string): string {
   const fence = _fenceFor(text)
   const language = _languageFromPath(originPath)
   return `**${sourceTitle}** (score: ${score.toFixed(3)})\n${fence}${language}\n${text}\n${fence}`
@@ -107,7 +110,7 @@ export class RagService {
         return `No results in RAG space **${space.name}** — has it been indexed yet? Try \`/rag-index\` first.`
       }
       return results
-        .map((r) => _renderResultChunk(r.source_title, r.score, r.origin_path, r.text))
+        .map((r) => renderRagResultChunk(r.source_title, r.score, r.origin_path, r.text))
         .join('\n\n')
     } finally {
       this._activity.set(null)

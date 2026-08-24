@@ -1,7 +1,9 @@
 import { Component, computed, input, linkedSignal } from '@angular/core'
 import { CommonModule } from '@angular/common'
+import { MarkdownComponent } from 'ngx-markdown'
 import { CollapsibleBubbleComponent } from '../collapsible-bubble/collapsible-bubble.component'
 import { DisplayMessage, TokenMeta } from '../../types/message-types'
+import { renderRagResultChunk } from '../../services/rag.service'
 
 export type ToolResultMessage = Extract<DisplayMessage, { kind: 'tool_result' }> & {
   token_meta?: TokenMeta
@@ -10,7 +12,7 @@ export type ToolResultMessage = Extract<DisplayMessage, { kind: 'tool_result' }>
 @Component({
   selector: 'app-tool-result',
   standalone: true,
-  imports: [CommonModule, CollapsibleBubbleComponent],
+  imports: [CommonModule, CollapsibleBubbleComponent, MarkdownComponent],
   templateUrl: './tool-result.component.html',
   styleUrls: ['./tool-result.component.scss'],
 })
@@ -128,6 +130,23 @@ parseGrepResult(content: string): {
         return { lines }
       }
       return null
+    } catch {
+      return null
+    }
+  }
+
+  formatRagSearchResult(content: string): { spaceName: string; chunks: string[] } | null {
+    try {
+      const r = JSON.parse(content)
+      if (r.tool !== 'rag_search' || r.status !== 'success') {
+        return null
+      }
+      const results: { source_title: string; origin_path: string | null; text: string; score: number }[] =
+        Array.isArray(r.results) ? r.results : []
+      return {
+        spaceName: r.space_name ?? '',
+        chunks: results.map((res) => renderRagResultChunk(res.source_title, res.score, res.origin_path, res.text)),
+      }
     } catch {
       return null
     }

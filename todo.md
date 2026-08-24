@@ -22,9 +22,7 @@
 
 ## Pipeline / Agent
 
-- **RAG agent tool wiring**: backend indexing/retrieval infrastructure for [[RAG Space]] exists (ADR-0015), and a manual `/rag-index` `/rag-search` slash-command surface exists for trying it out (ADR-0016), but nothing lets a *running agent* query a space on its own yet — needs a tool (e.g. analogous to `explore_codebase`) and a decision on how a conversation selects which space(s) it can search.
-
-- **RAG spaces UI**: no settings-page UI exists yet for creating/naming/managing RAG spaces or their documents beyond the one-space-per-workspace the `/rag-index`/`/rag-search` slash commands auto-create — only the backend API (`/api/rag/...`). Needs a proper CRUD surface, similar to system prompts, including support for multiple spaces per workspace, global spaces, and picking an embedding model per space (the default is now code-tuned — see ADR-0018 — which won't suit a general-prose/non-English space; a command-line recompute tool exists but there's no UI path to it yet).
+- **RAG spaces UI**: no settings-page UI exists yet for creating/naming/managing RAG spaces or their documents beyond the one-space-per-workspace the `/rag-index`/`/rag-search` slash commands and the `rag_search` agent tool auto-create — only the backend API (`/api/rag/...`). Needs a proper CRUD surface, similar to system prompts, including support for multiple spaces per workspace, global spaces, and picking an embedding model per space (the default is now code-tuned — see ADR-0018 — which won't suit a general-prose/non-English space; a command-line recompute tool exists but there's no UI path to it yet). Once this exists, `rag_search` should gain a way to target a specific space instead of only the auto-created workspace-bound one (see ADR-0019).
 
 - **RAG image/PDF ingestion**: current RAG ingestion is text-only (paste, uploaded text/markdown, workspace path). Image and PDF ingestion were explicitly deferred.
 
