@@ -91,6 +91,13 @@ stages:
           the target language's grammar calls for it, and you may drop one entirely if it genuinely
           doesn't belong in the translated sentence — but if you keep it, copy it byte-for-byte.
 
+          Some short words are spelled identically in the source language and
+          {{parse_request.target_language}} — loanwords, brand-like terms, or genuine cross-language
+          homonyms (e.g. "Email", "Radio", "Menu"). If the correct, natural word in
+          {{parse_request.target_language}} really is spelled the same as the source value, submit it
+          unchanged rather than inventing a different-looking synonym just to prove it was translated.
+          Only pick a different word when the target language actually uses one.
+
           A key may start with a "[ctx: ...]" prefix giving you disambiguating context (e.g.
           "[ctx: short form of September] Sept"). That prefix is only there to help you translate
           correctly — never repeat it, or any part of it, in translated_value.
