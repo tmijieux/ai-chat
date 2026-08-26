@@ -18,18 +18,6 @@ logger = logging.getLogger(__name__)
 # event, it doesn't await anything here.
 ProgressCallback = Callable[[int, int, str], None]
 
-# Extensions treated as non-text — no useful chunk comes from reading these as source text, and
-# several (media, archives) can be large enough to matter.
-_BINARY_EXTENSIONS = {
-    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".svg",
-    ".mp3", ".wav", ".ogg", ".flac", ".mp4", ".mov", ".avi", ".webm",
-    ".zip", ".tar", ".gz", ".7z", ".rar",
-    ".pdf", ".woff", ".woff2", ".ttf", ".eot", ".otf",
-    ".pyc", ".pyo", ".o", ".a", ".so", ".dll", ".exe", ".bin", ".wasm",
-    ".gguf", ".safetensors", ".onnx", ".pt", ".pth",
-    ".sqlite", ".sqlite3", ".db",
-}
-
 
 async def ingest_pasted_text(sess: AsyncSession, space_id: str, title: str, text: str) -> db.RagSource:
     """Ingest directly-pasted text as one source."""
@@ -75,7 +63,6 @@ async def ingest_workspace_path(
             path for path in sorted(target.rglob("*"))
             if path.is_file()
             and not is_path_ignored(path, workspace, spec)
-            and path.suffix.lower() not in _BINARY_EXTENSIONS
         ]
 
     total = len(candidate_paths)

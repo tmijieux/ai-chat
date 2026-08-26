@@ -7,6 +7,26 @@ _HARDCODED_IGNORE_DIRS = {
     "dist", "build", ".tox", ".cache", ".angular"
 }
 
+# Extensions treated as non-text — no useful chunk/summary comes from reading these as source
+# text, and several (media, archives) can be large enough to matter.
+_BINARY_EXTENSIONS = {
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".svg",
+    ".mp3", ".wav", ".ogg", ".flac", ".mp4", ".mov", ".avi", ".webm",
+    ".zip", ".tar", ".gz", ".7z", ".rar",
+    ".pdf", ".woff", ".woff2", ".ttf", ".eot", ".otf",
+    ".pyc", ".pyo", ".o", ".a", ".so", ".dll", ".exe", ".bin", ".wasm",
+    ".gguf", ".safetensors", ".onnx", ".pt", ".pth",
+    ".sqlite", ".sqlite3", ".db",
+}
+
+# Generated lockfiles: authored by tooling, not humans, and disproportionately large relative to
+# their information content — never worth a per-file summary or index entry.
+_LOCKFILE_NAMES = {
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+    "poetry.lock", "Pipfile.lock", "uv.lock",
+    "Cargo.lock", "composer.lock", "Gemfile.lock", "go.sum",
+}
+
 
 def load_ignore_spec(workspace: str) -> pathspec.PathSpec:
     """Build a PathSpec from .gitignore (if present) plus hardcoded defaults."""
@@ -21,7 +41,8 @@ def load_ignore_spec(workspace: str) -> pathspec.PathSpec:
 
 
 def is_path_ignored(path: Path, workspace: str, spec: pathspec.PathSpec) -> bool:
-    """Return True if path should be excluded by the ignore spec."""
+    """Return True if path should be excluded: hardcoded dirs, gitignore, non-text extensions, or
+    generated lockfiles."""
     try:
         rel = path.relative_to(workspace)
     except ValueError:
@@ -30,6 +51,10 @@ def is_path_ignored(path: Path, workspace: str, spec: pathspec.PathSpec) -> bool
     for part in rel.parts:
         if part in _HARDCODED_IGNORE_DIRS:
             return True
+    if path.suffix.lower() in _BINARY_EXTENSIONS:
+        return True
+    if path.name in _LOCKFILE_NAMES:
+        return True
     # Check gitignore spec (use forward slashes for cross-platform consistency)
     return spec.match_file(rel.as_posix())
 

@@ -36,26 +36,6 @@ CHUNK_FILE_TARGET_TOKENS = 12000
 CHUNK_FILE_CHARS_PER_TOKEN_ESTIMATE = 4
 CHUNK_FILE_MAX_CHUNK_CHARS = CHUNK_FILE_TARGET_TOKENS * CHUNK_FILE_CHARS_PER_TOKEN_ESTIMATE
 
-# Extensions treated as non-text for enumerate_files — no useful summary comes from reading these
-# as source, and several (images, archives) can be large enough to matter.
-_ENUMERATE_FILES_BINARY_EXTENSIONS = {
-    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".svg",
-    ".mp3", ".wav", ".ogg", ".flac", ".mp4", ".mov", ".avi", ".webm",
-    ".zip", ".tar", ".gz", ".7z", ".rar",
-    ".pdf", ".woff", ".woff2", ".ttf", ".eot", ".otf",
-    ".pyc", ".pyo", ".o", ".a", ".so", ".dll", ".exe", ".bin", ".wasm",
-    ".gguf", ".safetensors", ".onnx", ".pt", ".pth",
-    ".sqlite", ".sqlite3", ".db",
-}
-
-# Generated lockfiles: authored by tooling, not humans, and disproportionately large relative to
-# their information content — never worth a per-file summary.
-_ENUMERATE_FILES_LOCKFILE_NAMES = {
-    "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
-    "poetry.lock", "Pipfile.lock", "uv.lock",
-    "Cargo.lock", "composer.lock", "Gemfile.lock", "go.sum",
-}
-
 
 async def run_coordinator_action(
     action: str,
@@ -391,10 +371,6 @@ async def _enumerate_files(inputs: dict[str, Any], working_directory: str | None
             if is_path_ignored(path, working_directory, spec):
                 continue
             if any(path.is_relative_to(ex) for ex in exclude_roots):
-                continue
-            if path.suffix.lower() in _ENUMERATE_FILES_BINARY_EXTENSIONS:
-                continue
-            if path.name in _ENUMERATE_FILES_LOCKFILE_NAMES:
                 continue
             results.append({
                 "path": path.relative_to(working_directory).as_posix(),
