@@ -55,6 +55,29 @@ slower per-chunk — acceptable since it turns "memory scales with total chunks 
 stays negligible in absolute terms. Still exact brute-force cosine similarity, not an approximate
 index — same reasoning as the original design in ADR-0015.
 
+### Embedding window size doubles as the model's batch size — kept small deliberately
+
+After the fixes above, ingesting a small (1.3MB) but real file — a password-strength frequency
+list shipped as a few giant comma-separated lines — still drove RSS to 15-20GB. The cause this time
+wasn't Python-level retention at all: it was inside the ONNX Runtime inference call itself.
+`_INGEST_WINDOW_SIZE` (200 at the time) is also the batch size passed to `provider.embed()`, and
+self-attention memory scales with `batch_size * sequence_length^2`. This file's dense,
+comma-separated text (short "words" with no natural spaces) tokenizes far worse than the
+chars-per-token estimate `TARGET_CHUNK_CHARS` is tuned for — measured directly, its 1600-character
+chunks average ~740 tokens and peak at 858, roughly double the ~400-token target. Batching 200 such
+chunks into one inference call was enough to blow ONNX's memory arena up to double-digit GB (arena
+allocators grow to fit the largest request and don't shrink back down between calls).
+
+Fix: lowered `_INGEST_WINDOW_SIZE` from 200 to 16. Verified empirically, not assumed: embedding the
+file's actual longest chunks in escalating batch sizes (1/8/16/32) showed clearly super-linear
+growth as the batch grew, while re-running with a *constant* window of 16 across the whole file
+held memory flat window over window — confirming a small, constant batch size is what actually
+bounds this, not just a smaller total window count. No attempt to estimate token count ahead of
+time and size the window adaptively — ordinary source code (this app's primary RAG use case, see
+ADR-0018) tokenizes much closer to the character-based estimate, but nothing upstream guarantees
+that for an arbitrary ingested file, so the window stays small unconditionally rather than trusting
+a heuristic that this exact file already broke.
+
 ### Oversized-line splitting is also lazy, and now overlaps
 
 A real source of the reported blowup: some real-world files (e.g. a frequency-list-style file) are
@@ -83,3 +106,9 @@ Measured actual process RSS (via `psutil`) around a synthetic 300MB single line 
 (the eager list-comprehension materializing all ~225K overlapping slices at once); after the fix,
 RSS stayed flat through pulling all ~225K slices in windows of 200, confirming the fix actually
 bounds memory rather than just preserving correct output.
+
+Finally, ran the real `debug_freq_list/frequency_lists.ts` file (the actual file that triggered the
+15-20GB reports) through the full real pipeline — real fastembed/ONNX embeddings, isolated temp DB
+— with `_INGEST_WINDOW_SIZE = 16`: memory held flat across all real windows (observed directly via
+Task Manager during the run), and a smaller slice of the same file through `add_source_and_chunks`
++ `search()` end-to-end persisted the expected chunk count and returned relevant results.

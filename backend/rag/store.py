@@ -34,7 +34,16 @@ logger = logging.getLogger(__name__)
 # ingesting one huge file (e.g. a multi-million-line log) never holds more than one window's worth
 # of chunk text + embeddings in memory — only the window's worth of Chunk objects and vectors are
 # ever resident, regardless of how many chunks the whole file produces.
-_INGEST_WINDOW_SIZE = 200
+#
+# Kept deliberately small: this is also the embedding model's batch size, and self-attention memory
+# scales with batch_size * sequence_length^2. Measured directly against a real dense-text file
+# (comma-separated word lists, tokenizing to ~800 tokens/chunk vs. the ~400 chars-per-token estimate
+# assumes) — a window of 200 drove ONNX Runtime's memory arena to double-digit GB in one batched
+# call, while a constant window of 16 held memory flat across the whole file. A typical source-code
+# chunk tokenizes far more efficiently than dense comma-separated text, but nothing upstream
+# guarantees that, so the window stays small unconditionally rather than trying to estimate token
+# count per chunk ahead of time.
+_INGEST_WINDOW_SIZE = 16
 
 
 def compute_content_hash(text: str) -> str:
