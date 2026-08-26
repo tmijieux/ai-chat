@@ -34,16 +34,28 @@ guaranteed, immediate mechanism — deliberately chosen over having the endpoint
 `Request.is_disconnected()`, which depends on the ASGI server noticing a TCP close promptly and
 doesn't fire at all for an explicit in-band cancel message the way this does.
 
-### Explicit commit before the "done"/cancelled event, not on handler return
+### Each file gets its own session, committed immediately
 
 `get_db_session`'s dependency commits once the route handler function returns — for this endpoint
 that's *after* `send_loop`/`recv_loop` have both settled, which is entangled with the connection's
 own lifecycle. Testing this directly (via `TestClient`'s websocket support closing the connection
 right after receiving "done") reproduced a real bug: the just-ingested rows were lost, apparently a
-race between the implicit post-return commit and the connection teardown. Fixed by committing
-explicitly inside `run_ingestion()` — once on success, and once in a `CancelledError` handler
-before re-raising it (so a cancelled run still keeps whatever it managed to flush) — so persistence
-no longer depends on how or when the socket happens to close.
+race between the implicit post-return commit and the connection teardown.
+
+The first fix committed explicitly inside `run_ingestion()` on the request-scoped session — once on
+success, once in a `CancelledError` handler — but that still left every file's chunks and
+embeddings (base64-encoded vectors, held alongside chunk text) accumulating in that one session's
+identity map for the whole run, since `AsyncSessionLocal` is configured with `expire_on_commit=
+False`. On a large directory this grew unbounded, and a crash or kill outside the explicit
+cancel path (not `CancelledError`) lost the entire run with nothing durable to resume from.
+
+`ingest_workspace_path` now opens a fresh, short-lived session per file (`AsyncSessionLocal()`
+inside the loop), commits it right after that file's source+chunks are added, and lets it close —
+closing drops the session's identity map entirely, so memory is bounded to roughly one file's
+chunks/embeddings at a time regardless of directory size. Persistence is now real per-file
+durability rather than depending on an explicit end-of-run or cancellation commit: any interruption
+(explicit cancel, crash, kill) only loses the one file in flight, and a re-run resumes via the
+existing content-hash skip rather than restarting from scratch.
 
 ### Embedding offloaded to a thread
 

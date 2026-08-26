@@ -96,7 +96,7 @@ async def add_uploaded_source(space_id: str, file: UploadFile, sess: AsyncSessio
 async def add_workspace_path_source(space_id: str, body: ld.NewWorkspacePathRagSource, sess: AsyncSession = Depends(get_db_session)):
     await _get_space_or_404(sess, space_id)
     try:
-        sources = await ingest_workspace_path(sess, space_id, body.workspace, body.path)
+        sources = await ingest_workspace_path(space_id, body.workspace, body.path)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     return [_source_dict(source) for source in sources]
@@ -134,20 +134,15 @@ async def ingest_workspace_path_ws(websocket: WebSocket, space_id: str, sess: As
             outbound.put_nowait({"type": "progress", "current": current, "total": total, "filename": filename})
 
         async def run_ingestion() -> None:
-            # Commit explicitly here rather than relying on get_db_session's implicit
-            # commit-on-return — that cleanup only runs once this whole websocket handler
-            # returns, which is well after this task's work is done and entangled with the
-            # connection's own teardown; a client that closes the socket right after seeing
-            # "done" was observed to race that implicit commit and lose the just-ingested rows.
+            # ingest_workspace_path commits each file through its own short-lived session, so
+            # progress is already durable as it goes — nothing left to commit here on completion
+            # or cancellation.
             try:
-                sources = await ingest_workspace_path(sess, space_id, workspace, path, on_progress=on_progress)
-                await sess.commit()
+                sources = await ingest_workspace_path(space_id, workspace, path, on_progress=on_progress)
                 await outbound.put({"type": "done", "sources": [_source_dict(s) for s in sources]})
             except ValueError as e:
                 await outbound.put({"type": "error", "message": str(e)})
             except asyncio.CancelledError:
-                # Persist whatever was flushed before the cancellation point rather than losing it.
-                await sess.commit()
                 raise
 
         ingest_task = asyncio.create_task(run_ingestion())

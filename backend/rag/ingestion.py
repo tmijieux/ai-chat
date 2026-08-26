@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import tables as db
 from agent.file_utils import file_in_directory, is_path_ignored, load_ignore_spec, resolve_workspace_path
+from database import AsyncSessionLocal
 from rag.store import add_source_and_chunks, compute_content_hash
 
 logger = logging.getLogger(__name__)
@@ -38,7 +39,6 @@ async def ingest_uploaded_file(sess: AsyncSession, space_id: str, filename: str,
 
 
 async def ingest_workspace_path(
-    sess: AsyncSession,
     space_id: str,
     workspace: str,
     relative_path: str,
@@ -48,9 +48,12 @@ async def ingest_workspace_path(
     .gitignore/hardcoded-dir filtering the agent's file tools use) and produces one source per
     matched text file. A file whose content hash matches an existing source at the same
     (space_id, origin_path) is skipped — makes re-running ingestion on the same path incremental.
-    `on_progress`, if given, is called once per file as it starts processing — the caller can
-    cancel between calls (e.g. via asyncio task cancellation), which this function does not catch,
-    so whatever's already been flushed to the session stays (nothing is lost on cancel)."""
+    Each file is chunked, embedded, and committed through its own short-lived session — closed
+    right after, so a large directory never holds more than one file's chunks/embeddings in memory
+    at a time, and a crash or cancellation only loses the one file in flight, not the whole run (a
+    re-run picks back up via the content-hash skip above). `on_progress`, if given, is called once
+    per file as it starts processing — the caller can cancel between calls (e.g. via asyncio task
+    cancellation), which this function does not catch."""
     target = resolve_workspace_path(relative_path, workspace)
     if not file_in_directory(str(target), workspace) and target != Path(workspace).resolve():
         raise ValueError(f"Ingesting outside the workspace is forbidden: {relative_path}")
@@ -82,23 +85,25 @@ async def ingest_workspace_path(
 
         content_hash = compute_content_hash(text)
 
-        existing = await sess.scalar(
-            select(db.RagSource).where(
-                db.RagSource.space_id == space_id,
-                db.RagSource.origin_path == origin_path,
+        async with AsyncSessionLocal() as file_sess:
+            existing = await file_sess.scalar(
+                select(db.RagSource).where(
+                    db.RagSource.space_id == space_id,
+                    db.RagSource.origin_path == origin_path,
+                )
             )
-        )
-        if existing is not None and existing.content_hash == content_hash:
-            logger.info("[rag] (%d/%d) unchanged, skipped: %s", index, total, origin_path)
-            sources.append(existing)
-            continue
+            if existing is not None and existing.content_hash == content_hash:
+                logger.info("[rag] (%d/%d) unchanged, skipped: %s", index, total, origin_path)
+                sources.append(existing)
+                continue
 
-        logger.info("[rag] (%d/%d) indexing: %s", index, total, origin_path)
-        source = await add_source_and_chunks(
-            sess, space_id=space_id, source_type="workspace_path", title=path.name,
-            origin_path=origin_path, text=text, existing_source=existing,
-        )
-        sources.append(source)
+            logger.info("[rag] (%d/%d) indexing: %s", index, total, origin_path)
+            source = await add_source_and_chunks(
+                file_sess, space_id=space_id, source_type="workspace_path", title=path.name,
+                origin_path=origin_path, text=text, existing_source=existing,
+            )
+            await file_sess.commit()
+            sources.append(source)
 
     logger.info("[rag] Finished ingesting '%s': %d source(s) processed (space %s)", relative_path, len(sources), space_id)
     return sources
