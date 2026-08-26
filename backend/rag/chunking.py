@@ -26,9 +26,23 @@ class Chunk:
     text: str
 
 
-def _split_oversized_line(line: str, max_chars: int) -> list[str]:
-    """Split one line that alone exceeds the chunk budget into fixed-size character slices."""
-    return [line[i:i + max_chars] for i in range(0, len(line), max_chars)] or [""]
+def _split_oversized_line(line: str, max_chars: int, overlap_chars: int) -> Iterator[str]:
+    """Split one line that alone exceeds the chunk budget into fixed-size character slices,
+    overlapping consecutive slices by `overlap_chars` — the same overlap guarantee normal
+    line-based chunk boundaries get, so a fact split across one of these cuts still appears whole
+    in at least one slice. Without this, a file that's essentially one giant line (e.g. a
+    frequency list or minified data file) would get the overlap protection everywhere except where
+    it matters most.
+
+    Yields lazily rather than building the full slice list: a line spanning hundreds of MB (the
+    whole point of this function existing) would otherwise materialize every overlapping slice at
+    once before chunk_text got to yield even the first one, defeating chunk_text's own laziness."""
+    if len(line) == 0:
+        yield ""
+        return
+    step = max_chars - overlap_chars
+    for i in range(0, len(line), step):
+        yield line[i:i + max_chars]
 
 
 def _overlap_tail(lines_so_far: list[str]) -> list[str]:
@@ -76,7 +90,7 @@ def chunk_text(text: str) -> Iterator[Chunk]:
             chunk = build_chunk(line_number - 1)
             if chunk is not None:
                 yield chunk
-            for piece in _split_oversized_line(line, TARGET_CHUNK_CHARS):
+            for piece in _split_oversized_line(line, TARGET_CHUNK_CHARS, OVERLAP_CHARS):
                 yield Chunk(index=next_index, start_line=line_number, end_line=line_number, text=piece)
                 next_index += 1
             current_lines = []

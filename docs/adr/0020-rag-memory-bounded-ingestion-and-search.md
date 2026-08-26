@@ -55,6 +55,19 @@ slower per-chunk — acceptable since it turns "memory scales with total chunks 
 stays negligible in absolute terms. Still exact brute-force cosine similarity, not an approximate
 index — same reasoning as the original design in ADR-0015.
 
+### Oversized-line splitting is also lazy, and now overlaps
+
+A real source of the reported blowup: some real-world files (e.g. a frequency-list-style file) are
+effectively one giant line, which hits `_split_oversized_line` rather than the normal line-based
+path. That helper originally built its full list of fixed-size slices via a list comprehension
+before returning — for a large enough single line, this alone measured hundreds of MB to
+multi-GB, materialized in one shot, *before* `chunk_text` (a generator everywhere else) could yield
+even its first chunk back. `_split_oversized_line` is now itself a generator, yielding one slice at
+a time. While fixing it, also gave it the same overlap guarantee normal chunk boundaries already
+had: consecutive slices now overlap by `OVERLAP_CHARS`, so a fact split at one of these fixed
+character cuts still appears whole in at least one slice — previously it didn't, since the slices
+were plain non-overlapping `line[i:i+max_chars]` cuts.
+
 ## Verification
 
 Against an isolated temp SQLite DB (never `chat_db.sqlite`): confirmed `chunk_text` is a generator
@@ -64,3 +77,9 @@ directly — no drops or duplicates across window boundaries. Ran `search()` aga
 and compared its ranking to an independent brute-force reference computed by hand over every
 chunk's embedding — the two-pass streamed result matched the reference top-5 exactly, in the same
 order. Also confirmed `search()` on a space with zero chunks returns `[]` without error.
+
+Measured actual process RSS (via `psutil`) around a synthetic 300MB single line — before the
+`_split_oversized_line` fix, RSS jumped by ~365MB on the very first chunk pulled from `chunk_text`
+(the eager list-comprehension materializing all ~225K overlapping slices at once); after the fix,
+RSS stayed flat through pulling all ~225K slices in windows of 200, confirming the fix actually
+bounds memory rather than just preserving correct output.
