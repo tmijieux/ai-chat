@@ -8,6 +8,7 @@ need overlap since its chunks all get folded back together by an LLM summarizati
 are retrieved and read in isolation from each other.
 """
 from dataclasses import dataclass
+from typing import Iterator
 
 CHARS_PER_TOKEN_ESTIMATE = 4
 TARGET_CHUNK_TOKENS = 400
@@ -44,42 +45,49 @@ def _overlap_tail(lines_so_far: list[str]) -> list[str]:
     return tail
 
 
-def chunk_text(text: str) -> list[Chunk]:
+def chunk_text(text: str) -> Iterator[Chunk]:
     """Split text into overlapping chunks targeting TARGET_CHUNK_TOKENS each (estimated from
     character count), so retrieval granularity stays useful without losing context that straddles
-    a chunk boundary."""
+    a chunk boundary. Yields chunks lazily as lines are scanned, rather than building the whole
+    chunk list up front — a caller processing a very large file (millions of lines) can embed and
+    persist chunks in bounded windows instead of holding all of them in memory at once."""
     lines = text.splitlines()
     if len(lines) == 0:
-        return []
+        return
 
-    chunks: list[Chunk] = []
     current_lines: list[str] = []
     current_chars = 0
     current_start_line = 1
+    next_index = 0
 
-    def flush_current(end_line: int) -> None:
+    def build_chunk(end_line: int) -> Chunk | None:
+        nonlocal next_index
         if len(current_lines) == 0:
-            return
-        chunks.append(Chunk(
-            index=len(chunks), start_line=current_start_line, end_line=end_line,
-            text="\n".join(current_lines),
-        ))
+            return None
+        chunk = Chunk(index=next_index, start_line=current_start_line, end_line=end_line, text="\n".join(current_lines))
+        next_index += 1
+        return chunk
 
     line_number = 0
     for line_number, line in enumerate(lines, start=1):
         line_chars = len(line) + 1
 
         if line_chars > TARGET_CHUNK_CHARS:
-            flush_current(line_number - 1)
+            chunk = build_chunk(line_number - 1)
+            if chunk is not None:
+                yield chunk
             for piece in _split_oversized_line(line, TARGET_CHUNK_CHARS):
-                chunks.append(Chunk(index=len(chunks), start_line=line_number, end_line=line_number, text=piece))
+                yield Chunk(index=next_index, start_line=line_number, end_line=line_number, text=piece)
+                next_index += 1
             current_lines = []
             current_chars = 0
             current_start_line = line_number + 1
             continue
 
         if len(current_lines) > 0 and current_chars + line_chars > TARGET_CHUNK_CHARS:
-            flush_current(line_number - 1)
+            chunk = build_chunk(line_number - 1)
+            if chunk is not None:
+                yield chunk
             tail = _overlap_tail(current_lines)
             current_lines = tail
             current_chars = sum(len(l) + 1 for l in tail)
@@ -88,5 +96,6 @@ def chunk_text(text: str) -> list[Chunk]:
         current_lines.append(line)
         current_chars += line_chars
 
-    flush_current(line_number)
-    return chunks
+    chunk = build_chunk(line_number)
+    if chunk is not None:
+        yield chunk
