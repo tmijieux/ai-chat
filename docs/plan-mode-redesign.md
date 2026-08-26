@@ -182,6 +182,54 @@ forward afterward (same idea as violet→blue), but what feeds *into* the skill 
 necessarily the whole preceding conversation — a skill instance may start from a curated/filtered
 slice of prior context rather than everything said so far.
 
+### Signatures — named arguments for skills/agents/workflows, and richer keyboard-driven entry
+
+Today every slash command (`/plan`, `/rag-search`, a workflow name) and every subagent invocation
+takes exactly one opaque free-text string (`chat-client/.../slash-command-palette.component.ts`'s
+`paramHint`, `ChatService.startAgentRun`/`runRagCommand`). Separately, `AgentDefinition.input_schema`
+(`agent/workflow_loader.py`) already exists as a typed `{name: {type, description}}` convention
+parsed from agent YAMLs' `input:` field — but nothing downstream reads it. `WorkflowDefinition` has
+no equivalent field at all.
+
+Working name for this concept: a **signature** — the named, typed parameters a skill/agent/workflow
+declares it accepts, in the same sense as a function signature. Proposed direction:
+
+- Extend the existing `input_schema` convention onto `WorkflowDefinition` too, so agents, skills, and
+  workflows all declare arguments the same way instead of each having their own ad-hoc single-string
+  convention.
+- Slash-command syntax becomes `name:value` pairs (quoted for spaces), backward-compatible: if a
+  signature has exactly one field, a bare string with no `name:` still maps to it, so existing
+  single-arg commands (`/rag-search foo bar`) keep working unchanged.
+- Fields left unset are not errors — they mean "use default," same as leaving a function argument
+  unpassed.
+
+**Richer input UX**, explicitly keyboard-first (mouse/click-driven interaction — drag-to-reorder,
+right-click, hover-preview panes — is out of scope for now):
+
+- The existing `@`-mention picker (`FileMentionPickerComponent`) and `SlashCommandPalette` are
+  already proof that an overlay-driven, trigger-token → filtered-list → keyboard-select pattern works
+  in this input. Generalize it: once a signature-bearing command is selected, each field can offer
+  its own picker of the same shape, keyed off the field's declared type (a `file`-typed field reuses
+  `FileMentionPickerComponent` directly; an `enum`-typed field gets a small static-list variant;
+  plain `string`/`number` stays inline text).
+- The signature's field hints should render *in* the input bar once a command is selected — not as
+  literal prefilled text the user has to delete/type over, but as visually distinct ghost
+  placeholders layered over the real value, replaced once a field is actually filled.
+- Keyboard navigation between fields: `Tab`/`Shift+Tab` to the next/previous empty field, plus a
+  vimium-style jump — a modifier key reveals a short label on every still-empty field, pressing that
+  label jumps straight there — so filling several named fields never requires reaching for the mouse.
+- Wilder, unresolved: nested composition — a field whose value is itself another command's
+  invocation (e.g. passing `/explore_codebase`'s result as an argument to another command),
+  collapsed to a sub-chip that can be expanded/edited in place. Not designed, flagged only as a
+  direction worth keeping in mind so the field/picker model doesn't accidentally foreclose it.
+
+**Natural-language entry stays a valid alternative, not something the signature/picker idea
+replaces.** Workflows already have a proven pattern of a first LLM-generation stage that parses free
+text into the structured fields a later stage needs. That path should coexist with structured
+field-by-field entry, not be displaced by it — a user who'd rather just type/speak a sentence should
+be able to, with an LLM stage doing the same parsing-into-signature job the picker UI does
+interactively. Same signature, two ways to fill it in.
+
 ### Plan structure
 
 The plan should stop being pure free text. Concretely proposed: `propose_plan`'s task-like
