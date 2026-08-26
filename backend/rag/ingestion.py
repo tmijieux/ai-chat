@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from typing import Callable
 
+import pathspec
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +14,24 @@ from database import AsyncSessionLocal
 from rag.store import add_source_and_chunks, compute_content_hash
 
 logger = logging.getLogger(__name__)
+
+_RAG_IGNORE_FILENAME = ".ragignore"
+
+
+def _load_rag_ignore_spec(workspace: str) -> pathspec.PathSpec:
+    """Build a PathSpec from a workspace's .ragignore, if present — gitignore-syntax patterns for
+    files/directories to exclude from RAG indexing specifically. Kept separate from
+    agent.file_utils.load_ignore_spec (.gitignore) so excluding something here never affects the
+    agent's own file tools or git. The .ragignore file itself is always excluded too — it's
+    indexing config, not content worth embedding."""
+    patterns = [_RAG_IGNORE_FILENAME]
+    ragignore = Path(workspace) / _RAG_IGNORE_FILENAME
+    if ragignore.is_file():
+        try:
+            patterns.extend(ragignore.read_text(encoding="utf-8").splitlines())
+        except OSError:
+            pass
+    return pathspec.PathSpec.from_lines("gitwildmatch", patterns)
 
 # Called with (current index starting at 1, total file count, workspace-relative path) as each
 # file starts processing. Synchronous — the caller (e.g. the ingest websocket) just enqueues an
@@ -45,9 +64,11 @@ async def ingest_workspace_path(
     on_progress: ProgressCallback | None = None,
 ) -> list[db.RagSource]:
     """Ingest a file or directory from a workspace. A directory is walked recursively (same
-    .gitignore/hardcoded-dir filtering the agent's file tools use) and produces one source per
-    matched text file. A file whose content hash matches an existing source at the same
-    (space_id, origin_path) is skipped — makes re-running ingestion on the same path incremental.
+    .gitignore/hardcoded-dir filtering the agent's file tools use, plus an optional .ragignore at
+    the workspace root for excluding files from RAG indexing specifically — see
+    _load_rag_ignore_spec) and produces one source per matched text file. A file whose content hash
+    matches an existing source at the same (space_id, origin_path) is skipped — makes re-running
+    ingestion on the same path incremental.
     Each file is chunked, embedded, and committed through its own short-lived session — closed
     right after, so a large directory never holds more than one file's chunks/embeddings in memory
     at a time, and a crash or cancellation only loses the one file in flight, not the whole run (a
@@ -62,10 +83,12 @@ async def ingest_workspace_path(
         candidate_paths = [target]
     else:
         spec = load_ignore_spec(workspace)
+        rag_ignore_spec = _load_rag_ignore_spec(workspace)
         candidate_paths = [
             path for path in sorted(target.rglob("*"))
             if path.is_file()
             and not is_path_ignored(path, workspace, spec)
+            and not rag_ignore_spec.match_file(path.relative_to(workspace).as_posix())
         ]
 
     total = len(candidate_paths)

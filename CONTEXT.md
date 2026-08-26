@@ -368,6 +368,12 @@ needs redoing later, a re-run just continues where it left off). `/rag-search` s
 "Searching…" banner without progress detail or a cancel option, since a query is fast. The chat
 input stays disabled for the duration of either command, same as during an agent run.
 
+**Excluding files from indexing:** a `.ragignore` file at the workspace root lists paths to exclude
+from `/rag-index` specifically (same pattern syntax as `.gitignore`), for content that shouldn't be
+searchable in a [[RAG Space]] even though it's a normal part of the workspace — e.g. a data file
+that isn't meaningful prose or code. It only affects RAG indexing: excluding something here has no
+effect on the agent's own file tools or git.
+
 **Query phrasing matters:** `/rag-search` works much better with a full natural-language sentence
 describing what the code does (e.g. "launch the myapp C++ simulation as a subprocess") than with a
 keyword list (e.g. "subprocess execute myapp cpp") — confirmed directly through live testing. The
