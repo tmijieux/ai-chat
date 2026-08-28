@@ -9,7 +9,7 @@ description: Recompute and sync measured_delta token counts for agent tools afte
 
 Run from the `backend/` directory:
 ```bash
-cd backend && venv/Scripts/python -m agent.count_tool_tokens
+cd backend && uv run python -m agent.count_tool_tokens
 ```
 
 ## Workflow

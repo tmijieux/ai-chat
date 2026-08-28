@@ -65,6 +65,7 @@ It also help the reading comprehension when small component encapsulate
 small non-leaky well-named abstraction, then you dont have to read them.
 
 # python tools
-When invoking python always use the venv in backend/venv (windows path style venv/Scripts/python)
-for instance
-Bash(cd backend && source venv/Scripts/activate && python yourCommandHere...)
+The backend and whisper are uv projects (`pyproject.toml` + `uv.lock`, env in `.venv`).
+When invoking python always run it through uv from the project directory, for instance
+Bash(cd backend && uv run python yourCommandHere...)
+Add or change dependencies with `uv add` / `uv remove` (never hand-edit `uv.lock`).

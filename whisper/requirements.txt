@@ -1,5 +1,0 @@
-optimum[openvino]
-openvino
-sounddevice
-soundfile
-numpy
