@@ -108,12 +108,15 @@ class WhisperCppBackend(SttBackend):
 
         logger.warning("whisper-server did not respond within 30s — continuing anyway.")
 
-    async def transcribe(self, audio_bytes: bytes, language: str | None) -> str:
+    async def transcribe(self, audio_bytes: bytes, language: str | None, translate: bool = False) -> str:
         wav_bytes = await asyncio.to_thread(_transcode_to_wav, audio_bytes)
 
         form = aiohttp.FormData()
         form.add_field("file", wav_bytes, filename="audio.wav", content_type="audio/wav")
         form.add_field("language", language if language is not None else "auto")
+        if translate == True:
+            # whisper.cpp can only translate *into* English (X -> en); there is no other target.
+            form.add_field("translate", "true")
         form.add_field("response_format", "json")
 
         async with aiohttp.ClientSession() as http:

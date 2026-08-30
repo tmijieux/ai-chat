@@ -57,6 +57,15 @@
         class="w-full resize-none p-3 border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
       ></textarea>
     </div>
+    <button
+      (click)="systemAudioSvc.panelOpen() ? systemAudioSvc.close() : systemAudioSvc.open()"
+      [disabled]="!appStatus.whisperReady()"
+      class="send-button px-4 py-3 rounded-lg transition-all"
+      [class]="systemAudioSvc.panelOpen() ? 'bg-indigo-600 text-white' : appStatus.whisperReady() ? 'bg-gray-200 hover:bg-gray-300 text-gray-700' : 'bg-gray-100 text-gray-400 cursor-not-allowed'"
+      [title]="!appStatus.whisperReady() ? 'Speech recognition loading...' : 'Transcribe system / speaker audio'"
+    >
+      🎧
+    </button>
     @if (busy()) {
       <button
         (click)="stopRequested.emit()"
@@ -91,3 +100,7 @@
     }
   </div>
 </div>
+
+@if (systemAudioSvc.panelOpen()) {
+  <app-system-audio-panel />
+}

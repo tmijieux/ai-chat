@@ -10,6 +10,9 @@ class SttBackend(ABC):
         ...
 
     @abstractmethod
-    async def transcribe(self, audio_bytes: bytes, language: str | None) -> str:
-        """Transcribe raw audio bytes (any format ffmpeg can decode) to text."""
+    async def transcribe(self, audio_bytes: bytes, language: str | None, translate: bool = False) -> str:
+        """Transcribe raw audio bytes (any format ffmpeg can decode) to text.
+
+        When `translate` is True the output is translated to English (Whisper only supports
+        translation into English, regardless of the source language)."""
         ...

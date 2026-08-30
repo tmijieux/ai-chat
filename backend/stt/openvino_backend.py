@@ -19,10 +19,10 @@ class OpenVinoBackend(SttBackend):
         loop = asyncio.get_event_loop()
         self._pipeline = await loop.run_in_executor(None, whisper_pipeline.load_pipeline)
 
-    async def transcribe(self, audio_bytes: bytes, language: str | None) -> str:
+    async def transcribe(self, audio_bytes: bytes, language: str | None, translate: bool = False) -> str:
         if self._pipeline is None:
             raise RuntimeError("OpenVINO Whisper pipeline is not loaded")
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
-            None, whisper_pipeline.transcribe, self._pipeline, audio_bytes, language
+            None, whisper_pipeline.transcribe, self._pipeline, audio_bytes, language, translate
         )

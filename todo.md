@@ -30,5 +30,13 @@
 
 - **Text to speech**: explore adding text-to-speech capability.
 
+- **Per-application audio capture**: System Audio Transcription (ADR-0022) captures a whole output
+  device via WASAPI loopback. Capturing one application's audio needs the Windows process-loopback
+  activation API via hand-rolled ctypes/COM — deferred.
+
+- **Rethink voice/audio UX organisation**: Voice Dictation and System Audio Transcription are now
+  two separate entry points in the chat input. Worth a unified surface for all speech/audio
+  features rather than accreting buttons.
+
 - **RAG GPU-based embedding**: current RAG embedding runs CPU-only (fastembed) to avoid VRAM contention with the chat model — worth exploring a GPU-based embedding provider later if it meaningfully speeds up bulk-indexing a large repo, even at the cost of temporarily stopping the chat llama-server like `generate_image` already does. `EmbeddingProvider` was designed swappable for this.
 

@@ -7,14 +7,16 @@ import { ChatService } from '../../services/chat.service'
 import { ApiService } from '../../services/api.service'
 import { VoiceDictationService } from '../../services/voice-dictation.service'
 import { AppStatusService } from '../../services/app-status.service'
+import { SystemAudioTranscriptionService } from '../../services/system-audio-transcription.service'
 import { ConversationMode, PendingImage, RagCommandName, SlashCommand, Workflow } from '../../types/message-types'
 import { SlashCommandPaletteComponent } from '../slash-command-palette/slash-command-palette.component'
 import { FileMentionPickerComponent } from '../file-mention-picker/file-mention-picker.component'
+import { SystemAudioPanelComponent } from '../system-audio-panel/system-audio-panel.component'
 
 @Component({
   selector: 'app-chat-input',
   standalone: true,
-  imports: [CommonModule, FormsModule, SlashCommandPaletteComponent, FileMentionPickerComponent],
+  imports: [CommonModule, FormsModule, SlashCommandPaletteComponent, FileMentionPickerComponent, SystemAudioPanelComponent],
   templateUrl: './chat-input.component.html',
   styleUrls: ['./chat-input.component.scss'],
 })
@@ -23,6 +25,7 @@ export class ChatInputComponent implements AfterViewInit {
   private api = inject(ApiService)
   readonly voiceSvc = inject(VoiceDictationService)
   readonly appStatus = inject(AppStatusService)
+  readonly systemAudioSvc = inject(SystemAudioTranscriptionService)
 
   @ViewChild('textarea') private _textareaRef!: ElementRef<HTMLTextAreaElement>
   @ViewChild(SlashCommandPaletteComponent) private _palette?: SlashCommandPaletteComponent
@@ -160,6 +163,12 @@ export class ChatInputComponent implements AfterViewInit {
       if (raw) {
         this.currentInput.set((this._startPrefix + ' ' + raw).trim())
       }
+    })
+
+    // "Insert into message" from the system-audio drawer appends its transcript to the input.
+    this.systemAudioSvc.insertRequested$.pipe(takeUntilDestroyed()).subscribe((text) => {
+      this.currentInput.set((this.currentInput() + ' ' + text).trim())
+      this._textareaRef?.nativeElement.focus()
     })
   }
 

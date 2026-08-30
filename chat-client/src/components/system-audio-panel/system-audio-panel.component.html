@@ -1,0 +1,96 @@
+<div class="fixed inset-0 z-40 bg-black-40" (click)="svc.close()"></div>
+
+<aside class="fixed top-0 right-0 h-full w-80 z-50 flex flex-col bg-sidebar border-l">
+  <div class="flex items-center justify-between p-4 border-bottom">
+    <h2 class="font-semibold">🎧 System Audio Transcription</h2>
+    <button class="btn btn-ghost" style="font-size:1.25rem; padding:0.25rem 0.5rem" (click)="svc.close()">×</button>
+  </div>
+
+  <div class="overflow-y-auto flex-grow p-4 flex flex-col bg-sidebar" style="gap:1.25rem">
+
+    <!-- Source -->
+    <section>
+      <h3 class="text-xs font-semibold text-muted uppercase tracking-wide mb-1">Source</h3>
+      <select
+        class="field"
+        [ngModel]="svc.selectedDeviceId()"
+        (ngModelChange)="svc.selectedDeviceId.set($event)"
+        [disabled]="running"
+      >
+        @if (svc.devices().length === 0) {
+          <option [ngValue]="null">Loading devices…</option>
+        }
+        @for (d of svc.devices(); track d.id) {
+          <option [ngValue]="d.id">{{ d.label }}</option>
+        }
+      </select>
+      <p class="text-xs text-muted mt-1">
+        A "System output" source transcribes whatever is playing on that device, from any app.
+      </p>
+    </section>
+
+    <!-- Language -->
+    <section>
+      <h3 class="text-xs font-semibold text-muted uppercase tracking-wide mb-1">Language</h3>
+      <select
+        class="field"
+        [ngModel]="svc.language()"
+        (ngModelChange)="svc.language.set($event)"
+        [disabled]="running"
+      >
+        @for (l of LANGUAGES; track l.code) {
+          <option [ngValue]="l.code">{{ l.label }}</option>
+        }
+      </select>
+      <label class="flex items-center gap-2 mt-2 cursor-pointer text-sm">
+        <input
+          type="checkbox"
+          style="accent-color:#6366f1; width:1rem; height:1rem"
+          [ngModel]="svc.translate()"
+          (ngModelChange)="svc.translate.set($event)"
+          [disabled]="running"
+        />
+        Translate to English
+      </label>
+    </section>
+
+    <!-- Start / stop -->
+    <section>
+      @if (running) {
+        <button class="btn btn-danger w-full" (click)="svc.stop()">■ Stop</button>
+      } @else {
+        <button
+          class="btn btn-primary w-full"
+          [disabled]="svc.selectedDeviceId() === null"
+          (click)="svc.start()"
+        >● Start</button>
+      }
+      <div class="text-xs mt-2" style="min-height:1rem">
+        @switch (svc.state()) {
+          @case ('connecting') { <span class="text-muted">Connecting…</span> }
+          @case ('listening') { <span style="color:#4ade80">● Listening</span> }
+          @case ('transcribing') { <span style="color:#fbbf24">● Transcribing…</span> }
+          @case ('error') { <span class="text-danger">⚠ {{ svc.errorMessage() }}</span> }
+        }
+      </div>
+    </section>
+
+    <!-- Transcript -->
+    <section class="flex flex-col flex-grow min-h-0">
+      <div class="flex items-center justify-between mb-1">
+        <h3 class="text-xs font-semibold text-muted uppercase tracking-wide">Transcript</h3>
+        <div class="flex gap-1">
+          <button class="btn btn-ghost text-xs" (click)="copyTranscript()">{{ copied() ? '✓ Copied' : 'Copy' }}</button>
+          <button class="btn btn-ghost text-xs" (click)="svc.insertIntoMessage()">Insert</button>
+          <button class="btn btn-ghost text-xs" (click)="svc.clearTranscript()">Clear</button>
+        </div>
+      </div>
+      <div
+        #transcript
+        class="field flex-grow overflow-y-auto whitespace-pre-wrap"
+        style="min-height:8rem; max-height:none"
+      >{{ svc.committedText() }}@if (svc.provisionalText().length > 0) {<span class="text-muted italic"> {{ svc.provisionalText() }}</span>}</div>
+    </section>
+
+  </div>
+</aside>

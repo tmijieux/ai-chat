@@ -28,6 +28,8 @@ dependencies = [
     "psutil==7.2.2",              # Finds and terminates the llama-server process for image-gen VRAM handoff
     "numpy==2.4.6",               # RAG chunk-embedding storage/similarity search
     "fastembed==0.8.0",           # CPU (ONNX Runtime) text embeddings for RAG
+    "soundcard>=0.4.6",
+    "webrtcvad-wheels>=2.0.14",
 ]
 
 [dependency-groups]

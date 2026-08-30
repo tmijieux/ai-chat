@@ -145,6 +145,28 @@ Hold-to-record mic button in `ChatInputComponent`. Three visual states: gray (id
 
 **30-second limit (not yet implemented):** Whisper's mel spectrogram window is fixed at 30s — audio beyond that is silently truncated. The mic button should show a progress indicator as recording approaches 30s and auto-stop at 28s with a visual warning.
 
+## System Audio Transcription
+
+Transcribes audio **coming out of the machine** — a video, call, or stream playing in any
+application — as opposed to [[Voice Dictation]], which transcribes the microphone. Opened from a
+headphones button in the chat input, it presents a right-side drawer with:
+
+- **Source picker** — any system output device (transcribes whatever is playing on it, from any
+  app) or any microphone. Per-application selection is not offered.
+- **Language** — auto-detect, or a specific language chosen from a wide list (well beyond the
+  French/English of Voice Dictation — Spanish, Chinese, Japanese, Russian, Arabic, and more).
+- **Translate to English** — optional; produces an English transcript of foreign-language audio
+  (English is the only translation target Whisper supports).
+- **Start / Stop**, a live transcript, and buttons to copy it, insert it into the chat message
+  box, or clear it.
+
+The audio is captured on the backend (the app runs on the same machine), so no browser screen- or
+tab-sharing prompt is involved. Because the audio is continuous and Whisper only hears a fixed
+window at a time, the transcript is built up in segments split at natural pauses in speech, with
+already-finalized text shown solid and the still-forming tail shown dimmed. Runs on the same
+speech-to-text engine and dedicated GPU as Voice Dictation, so it never competes with the chat
+model or image generation for memory. See ADR-0022.
+
 ## Backend Readiness
 
 Both LLM and Whisper backends load in parallel in background threads after API startup — the API accepts requests immediately without waiting for either.

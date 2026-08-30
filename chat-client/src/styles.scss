@@ -453,6 +453,8 @@ textarea.field { resize: vertical; min-height: 8rem; }
 .bg-gray-100 { background-color: #1f2937; }
 .bg-gray-200 { background-color: #374151; }
 .bg-gray-300 { background-color: #4b5563; }
+.bg-gray-600 { background-color: #4b5563; }
+.bg-gray-700 { background-color: #374151; }
 .bg-gray-800 { background-color: #1f2937; }
 .bg-indigo-600 { background-color: #4f46e5; }
 .bg-red-500 { background-color: #ef4444; }
@@ -460,6 +462,7 @@ textarea.field { resize: vertical; min-height: 8rem; }
 
 /* Hover variants */
 .hover\:bg-gray-300:hover   { background-color: #4b5563; }
+.hover\:bg-gray-600:hover   { background-color: #4b5563; }
 .hover\:bg-gray-700:hover   { background-color: #374151; }
 .hover\:bg-indigo-700:hover { background-color: #4338ca; }
 .hover\:bg-red-600:hover    { background-color: #dc2626; }

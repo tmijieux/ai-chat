@@ -169,7 +169,7 @@ def _decode_audio(audio_bytes: bytes) -> np.ndarray:
     return np.frombuffer(result.stdout, dtype=np.float32).copy()
 
 
-def transcribe(pipeline: WhisperPipeline, audio_bytes: bytes, language: str | None = None) -> str:
+def transcribe(pipeline: WhisperPipeline, audio_bytes: bytes, language: str | None = None, translate: bool = False) -> str:
     schema = pipeline.schema
     t0 = time.perf_counter()
 
@@ -190,8 +190,9 @@ def transcribe(pipeline: WhisperPipeline, audio_bytes: bytes, language: str | No
     prefix = [tok.convert_tokens_to_ids("<|startoftranscript|>")]
     if language:
         prefix.append(tok.convert_tokens_to_ids(f"<|{language}|>"))
-    prefix += [tok.convert_tokens_to_ids("<|transcribe|>"), tok.convert_tokens_to_ids("<|notimestamps|>")]
-    logger.info("[whisper] language token: %s", f"<|{language}|>" if language else "none")
+    task_token = "<|translate|>" if translate == True else "<|transcribe|>"
+    prefix += [tok.convert_tokens_to_ids(task_token), tok.convert_tokens_to_ids("<|notimestamps|>")]
+    logger.info("[whisper] language token: %s  task: %s", f"<|{language}|>" if language else "none", task_token)
 
     dec_req = pipeline.dec.create_infer_request()
     if schema.stateful:
