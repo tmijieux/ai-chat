@@ -20,8 +20,8 @@ from llm.base import ToolCallStartEvent, ToolCallArgEvent, TOOL_CALL_BLOCK_RE, p
 from message_types import LLMMessage, AssistantMessage, ToolCall, ToolCallFunction, PreparedMessages
 from tool_result_types import ToolResult, RunShellResult, SearchWebResult, DiffLine
 
-CTX_LIMIT = 2**15
-CTX_COMPRESS_THRESHOLD = int(CTX_LIMIT * 0.55)  # ~18k tokens — compress early to leave headroom for compression LLM calls
+CTX_LIMIT = 2**16
+CTX_COMPRESS_THRESHOLD = int(CTX_LIMIT * 0.55)  # ~36k tokens — compress early to leave headroom for compression LLM calls
 
 logger = logging.getLogger(__name__)
 

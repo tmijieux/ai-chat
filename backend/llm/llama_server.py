@@ -24,7 +24,7 @@ LLAMA_CHAT_URL = f"{LLAMA_BASE_URL}/v1/chat/completions"
 LLAMA_COMPLETION_URL = f"{LLAMA_BASE_URL}/completion"
 LLAMA_TOKENIZE_URL = f"{LLAMA_BASE_URL}/tokenize"
 LLAMA_HEALTH_URL = f"{LLAMA_BASE_URL}/health"
-LLAMA_SERVER_EXE = str(Path.home() / "ai/llama.cpp/build/bin/Release/llama-server.exe")
+LLAMA_SERVER_EXE = str(Path.home() / "ai/llama.cpp-upgrade/build/bin/llama-server.exe")
 
 _MODEL_PATHS = {
     "qwen3.5-9b": {
@@ -42,7 +42,7 @@ ACTIVE_MODEL = "ornith1.5-9b"
 
 GGUF_PATH = _MODEL_PATHS[ACTIVE_MODEL]["gguf"]
 MMPROJ_PATH = _MODEL_PATHS[ACTIVE_MODEL]["mmproj"]
-CTX_LIMIT = 2**15 # 14 -> 16K, 15 -> 32K, 16 -> 65k
+CTX_LIMIT = 2**16 # 14 -> 16K, 15 -> 32K, 16 -> 65k
 
 # Flip to False to instantly revert every tool-enabled turn to the pre-think-gate behavior
 # (_stream_completion_legacy) with no other code change, if the think-gated path misbehaves.
@@ -129,6 +129,9 @@ class LlamaServerBackend(LLMBackend):
                 "--mmproj", MMPROJ_PATH,
                 "-c", str(CTX_LIMIT),
                 "-ngl", "99",
+                "--parallel", "1",
+                "-ctk", "q8_0",
+                "-ctv", "q8_0",
                 "--port", "8080",
                 "--host", "127.0.0.1",
                 # verbosity>9 makes llama-server attach a "__verbose" block (rendered prompt +

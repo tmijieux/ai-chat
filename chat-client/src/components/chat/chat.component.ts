@@ -112,7 +112,7 @@ export class ChatComponent implements OnDestroy {
   private rawModeIds = signal(new Set<string>())
   readonly copiedMsgId = signal<string | null>(null)
 
-  readonly CTX_LIMIT = 2 ** 15
+  readonly CTX_LIMIT = 2 ** 16
 
   isRaw(msgId: string): boolean {
     return this.rawModeIds().has(msgId)

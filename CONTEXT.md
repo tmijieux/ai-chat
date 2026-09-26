@@ -1,7 +1,7 @@
 
 # App Mission
 
-Local AI chat interface backed by llama-server (OpenAI-compatible API, running locally), designed to support agentic coding workflows on low-memory devices with a 32 768-token context window. The central design constraint is that context is scarce — every feature either helps the user *see* where tokens are going or helps the agent *preserve* as many useful tokens as possible.
+Local AI chat interface backed by llama-server (OpenAI-compatible API, running locally), designed to support agentic coding workflows on low-memory devices with a 65 536-token context window. The central design constraint is that context is scarce — every feature either helps the user *see* where tokens are going or helps the agent *preserve* as many useful tokens as possible.
 
 # Domain Glossary
 
@@ -230,7 +230,7 @@ Three sequential passes operate on the delta since the last working memory messa
 None of this applies inside a [[Workflow Run View]] stage's isolated session — see "Context overflow inside a stage" there.
 
 ## Status Bar
-Always-visible top bar in the chat area. Shows token info: `Context Tokens: N / 32,768 (%)`. The value is the last measured token count — always from a real API call, never estimated. On conversation load, the count is refreshed immediately via `GET /api/conversations/{id}/ctx-tokens` so it reflects the current context even without a new inference. Shows 0 on a new chat. When the conversation mode is not Standard, a colored badge showing the active mode name (`PLAN`, `AUTO`, `YOLO`) is displayed next to the token count. The ⚙ button opens the [[Conversation Settings Drawer]]. A 🔍 button logs a per-message token breakdown to the backend console for debugging.
+Always-visible top bar in the chat area. Shows token info: `Context Tokens: N / 65,536 (%)`. The value is the last measured token count — always from a real API call, never estimated. On conversation load, the count is refreshed immediately via `GET /api/conversations/{id}/ctx-tokens` so it reflects the current context even without a new inference. Shows 0 on a new chat. When the conversation mode is not Standard, a colored badge showing the active mode name (`PLAN`, `AUTO`, `YOLO`) is displayed next to the token count. The ⚙ button opens the [[Conversation Settings Drawer]]. A 🔍 button logs a per-message token breakdown to the backend console for debugging.
 
 ## Conversation Turn
 The unit of visual grouping in the chat. One top-level bubble per speaker per iteration:
@@ -287,7 +287,7 @@ The difference between a message's cumulative token count and the closest preced
 
 ## Token Visibility Surfaces
 Six places in the UI where token information is shown — all intentional, all must be preserved:
-1. **Status bar** — always-visible; shows last measured cumulative / 16 384 (%). Shows 0 on new chat.
+1. **Status bar** — always-visible; shows last measured cumulative / 65 536 (%). Shows 0 on new chat.
 2. **Per-message ⓘ tooltip** — cumulative count, %, and delta. Only shown on messages that have a stored `token_count`.
 3. **System prompt bubble** — shows prompt token count and `+ tools (~N tok)` when a prompt is active.
 4. **Settings drawer / tools section** — total token cost of enabled tools + per-tool cost.

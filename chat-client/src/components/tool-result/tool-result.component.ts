@@ -17,7 +17,7 @@ export type ToolResultMessage = Extract<DisplayMessage, { kind: 'tool_result' }>
   styleUrls: ['./tool-result.component.scss'],
 })
 export class ToolResultComponent {
-  readonly CTX_LIMIT = 2 ** 15
+  readonly CTX_LIMIT = 2 ** 16
   readonly msg = input.required<ToolResultMessage>()
 
   // A generated image is worth seeing immediately, unlike other tool output — drives both the
