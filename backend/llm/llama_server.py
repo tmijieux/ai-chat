@@ -53,10 +53,10 @@ _MODEL_PATHS = {
     },
 }
 # Flip to switch which local model llama-server loads.
-#ACTIVE_MODEL = "ornith1.5-9b"
+ACTIVE_MODEL = "ornith1.5-9b"
 #ACTIVE_MODEL = "qwen3.5-9b"
 #ACTIVE_MODEL = "qwen3.6-35b-a3b"
-ACTIVE_MODEL = "ornith1.5-35b-a3b"
+#ACTIVE_MODEL = "ornith1.5-35b-a3b"
 
 GGUF_PATH = _MODEL_PATHS[ACTIVE_MODEL]["gguf"]
 MMPROJ_PATH = _MODEL_PATHS[ACTIVE_MODEL]["mmproj"]
