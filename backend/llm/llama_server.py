@@ -30,18 +30,37 @@ _MODEL_PATHS = {
     "qwen3.5-9b": {
         "gguf": str(Path.home() / "ai/models/unsloth/Qwen3.5-9B-Q4_K_M.gguf"),
         "mmproj": str(Path.home() / "ai/models/unsloth/mmproj-F16.gguf"),
+        "extra_args": [],
     },
     "ornith1.5-9b": {
         "gguf": str(Path.home() / "ai/models/ornith-ai/Ornith-1.5-9B-Q4_K_M.gguf"),
         "mmproj": str(Path.home() / "ai/models/ornith-ai/mmproj-Ornith-1.5-9B-BF16.gguf"),
+        "extra_args": [],
+    },
+    # MoE (35B total, ~3B active, 40 layers): the expert tensors live in system RAM and only the
+    # attention/shared weights + KV cache sit in VRAM. --n-cpu-moe 40 keeps every layer's experts
+    # on the CPU (safe on 8GB); lower it to move some layers' experts onto the GPU while VRAM allows.
+    "qwen3.6-35b-a3b": {
+        "gguf": str(Path.home() / "ai/models/unsloth/Qwen3.6-35B-A3B-UD-IQ4_NL.gguf"),
+        "mmproj": str(Path.home() / "ai/models/unsloth/Qwen3.6-35B-A3B-mmproj-BF16.gguf"),
+        "extra_args": ["--n-cpu-moe", "40"],
+    },
+    # Same MoE layout as qwen3.6-35b-a3b (see comment above); official ornith-ai GGUF repo.
+    "ornith1.5-35b-a3b": {
+        "gguf": str(Path.home() / "ai/models/ornith-ai/Ornith-1.5-35B-Q4_K_M.gguf"),
+        "mmproj": str(Path.home() / "ai/models/ornith-ai/mmproj-Ornith-1.5-35B-BF16.gguf"),
+        "extra_args": ["--n-cpu-moe", "40"],
     },
 }
 # Flip to switch which local model llama-server loads.
-ACTIVE_MODEL = "ornith1.5-9b"
+#ACTIVE_MODEL = "ornith1.5-9b"
 #ACTIVE_MODEL = "qwen3.5-9b"
+#ACTIVE_MODEL = "qwen3.6-35b-a3b"
+ACTIVE_MODEL = "ornith1.5-35b-a3b"
 
 GGUF_PATH = _MODEL_PATHS[ACTIVE_MODEL]["gguf"]
 MMPROJ_PATH = _MODEL_PATHS[ACTIVE_MODEL]["mmproj"]
+EXTRA_ARGS = _MODEL_PATHS[ACTIVE_MODEL]["extra_args"]
 CTX_LIMIT = 2**16 # 14 -> 16K, 15 -> 32K, 16 -> 65k
 
 # Flip to False to instantly revert every tool-enabled turn to the pre-think-gate behavior
@@ -132,6 +151,7 @@ class LlamaServerBackend(LLMBackend):
                 "--parallel", "1",
                 "-ctk", "q8_0",
                 "-ctv", "q8_0",
+                *EXTRA_ARGS,
                 "--port", "8080",
                 "--host", "127.0.0.1",
                 # verbosity>9 makes llama-server attach a "__verbose" block (rendered prompt +
