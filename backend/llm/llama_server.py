@@ -53,8 +53,8 @@ _MODEL_PATHS = {
     },
 }
 # Flip to switch which local model llama-server loads.
-ACTIVE_MODEL = "ornith1.5-9b"
-#ACTIVE_MODEL = "qwen3.5-9b"
+#ACTIVE_MODEL = "ornith1.5-9b"
+ACTIVE_MODEL = "qwen3.5-9b"
 #ACTIVE_MODEL = "qwen3.6-35b-a3b"
 #ACTIVE_MODEL = "ornith1.5-35b-a3b"
 
@@ -126,6 +126,57 @@ def _cast_tool_call_arguments(parsed_calls: list[dict], tools_by_name: dict[str,
                 arguments[param_name] = raw_value
         calls.append((name, arguments))
     return calls
+
+
+# What the rendered prompt (__verbose.prompt) contains where each image was: the Qwen vision
+# delimiters with the image itself already stripped out, no marker and no pad tokens.
+_EMPTY_IMAGE_SLOT = "<|vision_start|><|vision_end|>"
+
+
+def _extract_image_payloads(messages: PreparedMessages) -> list[str]:
+    """Return the raw base64 data of every image in `messages`, in prompt order.
+
+    Only data: URLs are produced by this app (see assemble_message in agent/compress.py), so the
+    "data:<mime>;base64," prefix is simply stripped.
+    """
+    payloads: list[str] = []
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list) == False:
+            continue
+        for part in content:
+            if part.get("type") != "image_url":
+                continue
+            url = part["image_url"]["url"]
+            payloads.append(url.split(",", 1)[1])
+    return payloads
+
+
+async def _build_completion_prompt(http: aiohttp.ClientSession, prompt: str, image_payloads: list[str]) -> str | dict:
+    """Make a rendered chat prompt usable by the raw /completion endpoint with its images intact.
+
+    The prompt llama-server hands back through __verbose has an empty slot where every image was,
+    so replaying it as a plain string silently drops the images and the model hallucinates a
+    description. /completion instead takes the images as `multimodal_data`, and each one needs the
+    server's media marker inside its vision delimiters — a random per-launch string exposed by
+    GET /props, not a fixed constant. Returns the plain prompt unchanged when there are no images.
+    """
+    if len(image_payloads) == 0:
+        return prompt
+
+    slot_count = prompt.count(_EMPTY_IMAGE_SLOT)
+    if slot_count != len(image_payloads):
+        logger.error(
+            "rendered prompt has %d empty image slot(s) but the messages carry %d image(s) — "
+            "images may be mismatched or dropped", slot_count, len(image_payloads),
+        )
+
+    async with http.get(f"{LLAMA_BASE_URL}/props") as response:
+        props = await response.json()
+    marker = props["media_marker"]
+
+    filled_prompt = prompt.replace(_EMPTY_IMAGE_SLOT, f"<|vision_start|>{marker}<|vision_end|>")
+    return {"prompt_string": filled_prompt, "multimodal_data": image_payloads}
 
 
 class LlamaServerBackend(LLMBackend):
@@ -474,8 +525,9 @@ class LlamaServerBackend(LLMBackend):
             ]
 
             # Phase 1: think, with the special <tool_call> token banned outright.
+            image_payloads = _extract_image_payloads(messages)
             phase1_body = {
-                "prompt": prompt,
+                "prompt": await _build_completion_prompt(http, prompt, image_payloads),
                 "grammar": "root ::= !<tool_call>*\n",
                 "stop": ["</think>"],
                 "n_predict": n_predict,
@@ -552,8 +604,11 @@ class LlamaServerBackend(LLMBackend):
         # "stop" strings are excluded from the returned content (confirmed empirically), so
         # the closing tag has to be reattached by hand to keep the replayed prompt accurate.
         phase2_prompt = prompt + thinking_acc + "</think>"
+        # Phase 1's session is closed by now (see above), so the marker lookup gets its own.
+        async with aiohttp.ClientSession() as marker_http:
+            phase2_prompt_field = await _build_completion_prompt(marker_http, phase2_prompt, image_payloads)
         phase2_body = {
-            "prompt": phase2_prompt,
+            "prompt": phase2_prompt_field,
             "grammar": grammar,
             "n_predict": n_predict,
             "temperature": temperature,
@@ -741,7 +796,7 @@ class LlamaServerBackend(LLMBackend):
             grammar = "\n".join(["root ::= think-block? tool-call", _THINK_BLOCK_RULE] + grammar_lines)
 
             completion_body = {
-                "prompt": prompt,
+                "prompt": await _build_completion_prompt(http, prompt, _extract_image_payloads(messages)),
                 "grammar": grammar,
                 "n_predict": n_predict,
                 "temperature": temperature,
